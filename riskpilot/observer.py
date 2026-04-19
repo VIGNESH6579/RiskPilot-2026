@@ -8,7 +8,6 @@ import aiohttp
 # Configuration
 CSV_PATH = "shadow_live_forward_logs.csv"
 NTFY_TOPIC = "riskpilot_shadow_alerts"
-WS_PORT = 8765
 
 # LRU Cache for Duplicate rejection
 MAX_CACHE_SIZE = 100
@@ -105,9 +104,14 @@ async def cleanup_background_tasks(app):
     app['csv_listener'].cancel()
     await app['csv_listener']
 
+WS_PORT = int(os.environ.get("PORT", 8080))
+
+async def frontend_handler(request):
+    return web.FileResponse('frontend.html')
+
 app = web.Application()
-# Natively intercepts / (Render Health Check) and /ws (Frontend)
-app.router.add_get('/', health_handler)
+# Route UI solidly natively creatively effectively smoothly
+app.router.add_get('/', frontend_handler)
 app.router.add_head('/', health_handler)
 app.router.add_get('/ws', websocket_handler)
 

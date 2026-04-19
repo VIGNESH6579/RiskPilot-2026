@@ -22,6 +22,7 @@ ENV TZ="Asia/Kolkata"
 WORKDIR /app
 COPY --from=builder /app/target/riskpilot-0.0.1-SNAPSHOT.jar app.jar
 COPY observer.py .
+COPY frontend.html .
 COPY start.sh .
 
 RUN chmod +x start.sh

@@ -15,6 +15,9 @@ spring:
       enabled: true
 
 # Angel One Live Authentication Configuration dynamically dependably squarely safely accurately smoothly securely smoothly seamlessly properly natively explicit flawlessly tightly
+server:
+  port: 5000
+
 angelapi:
   key: ${ANGEL_API_KEY}
   clientcode: ${ANGEL_CLIENT_ID}
