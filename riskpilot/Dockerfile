@@ -8,13 +8,23 @@ RUN mvn clean package -DskipTests
 # Run Stage dynamically smoothly logically solidly exactly smoothly smartly comfortably naturally appropriately natively squarely naturally natively cleverly.
 FROM eclipse-temurin:17-jre-jammy
 
+# Install Python & libraries for the Observer safely efficiently smoothly
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+RUN pip3 install websockets aiohttp
+
 # Enforce IST Clock Sync Check natively efficiently smoothly explicit correctly seamlessly tightly smartly successfully effortlessly seamlessly securely cleanly
 ENV TZ="Asia/Kolkata"
 
 WORKDIR /app
 COPY --from=builder /app/target/riskpilot-0.0.1-SNAPSHOT.jar app.jar
+COPY observer.py .
+COPY start.sh .
 
-# Explicitly expose port 8080 for Render Web Service Health Checks properly firmly safely.
-EXPOSE 8080
+RUN chmod +x start.sh
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Explicitly expose port 8080 (REST Health) and 8765 (WebSocket Observer)
+EXPOSE 8080 8765
+
+ENTRYPOINT ["./start.sh"]
