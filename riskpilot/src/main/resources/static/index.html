@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RiskPilot Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+</head>
+
+<body>
+
+<h2>📊 RiskPilot Dashboard</h2>
+
+<button onclick="start()">Start Trading</button>
+<button onclick="stop()">Stop Trading</button>
+
+<h3>System Status:</h3>
+<div id="status">Loading...</div>
+
+<h3>Latest Signal:</h3>
+<div id="signal">Waiting...</div>
+
+<script>
+
+    function start() {
+        fetch('/system/start', { method: 'POST' })
+            .then(() => loadStatus());
+    }
+
+    function stop() {
+        fetch('/system/stop', { method: 'POST' })
+            .then(() => loadStatus());
+    }
+
+    function loadStatus() {
+        fetch('/system/status')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById("status").innerHTML =
+                    "Trading Enabled: " + data.tradingEnabled;
+            });
+    }
+
+    // WebSocket connection
+    const socket = new SockJS('/ws');
+    const stomp = Stomp.over(socket);
+
+    stomp.connect({}, function () {
+
+        stomp.subscribe('/topic/signal', function (message) {
+
+            const signal = JSON.parse(message.body);
+
+            document.getElementById("signal").innerHTML =
+                "Symbol: " + signal.symbol + "<br>" +
+                "Direction: " + signal.direction + "<br>" +
+                "Entry: " + signal.entry + "<br>" +
+                "Target: " + signal.target + "<br>" +
+                "SL: " + signal.stopLoss + "<br>" +
+                "Confidence: " + signal.confidence;
+
+        });
+    });
+
+    // initial load
+    loadStatus();
+
+</script>
+
+</body>
+</html>
