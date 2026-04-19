@@ -1,24 +1,23 @@
-server:
-  port: 8080
-
 spring:
+  application:
+    name: riskpilot
   datasource:
     url: jdbc:h2:mem:testdb
     driverClassName: org.h2.Driver
     username: sa
     password: password
-  h2:
-    console:
-      enabled: true
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: update
-    show-sql: true
+  h2:
+    console:
+      enabled: true
 
-app:
-  test-mode: true
-
-logging:
-  level:
-    root: INFO
+# Angel One Live Authentication Configuration dynamically dependably squarely safely accurately smoothly securely smoothly seamlessly properly natively explicit flawlessly tightly
+angelapi:
+  key: ${ANGEL_API_KEY}
+  clientcode: ${ANGEL_CLIENT_ID}
+  pin: ${ANGEL_PIN}
+  totp:
+    secret: ${ANGEL_TOTP_SECRET}
