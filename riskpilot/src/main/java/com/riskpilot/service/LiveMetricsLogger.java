@@ -50,10 +50,12 @@ public class LiveMetricsLogger {
                     signalTime, executionTime,
                     java.time.Duration.between(signalTime, executionTime).getSeconds(),
                     expectedEntryPrice, actualEntryPrice,
-                    (actualEntryPrice - expectedEntryPrice), // slippage explicitly natively tracking precisely natively organically stably safely smoothly.
+                    (actualEntryPrice - expectedEntryPrice), 
                     mfe, mae, isRunner, exitReason, exitTime
             );
-            pw.println(logRow);
+            pw.print(logRow + "\n");
+            pw.flush();
+            fw.flush();
             
         } catch (IOException e) {
             log.error("CRITICAL: FAILED TO WRITE TO PERSISTENT CSV", e);

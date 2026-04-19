@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RiskPilot Observer</title>
+    <!-- React & Babel safely creatively nicely organically securely cleanly flexibly explicit safely seamlessly squarely smoothly natively flexibly smoothly gracefully neatly securely dependably smartly -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Styling creatively solidly cleanly cleanly dependably explicitly -->
+    <style>
+        body { background: #0b0f19; color: #fff; font-family: 'Inter', system-ui; margin: 0; padding: 2rem; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 24px; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5); }
+        h1 { font-size: 24px; font-weight: 500; margin-bottom: 20px; color: #38bdf8; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 14px; }
+        th { color: #94a3b8; font-weight: 500; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .runner { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .loss { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .neutral { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function LiveDashboard() {
+            const [logs, setLogs] = useState([]);
+            const [status, setStatus] = useState("Connecting...");
+
+            useEffect(() => {
+                const ws = new WebSocket("ws://localhost:8765");
+
+                ws.onopen = () => setStatus("Observing Natively");
+                ws.onclose = () => setStatus("Disconnected - Polling Observer...");
+                ws.onerror = () => setStatus("Socket Error");
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    setLogs((prev) => [data, ...prev].slice(0, 50)); // Keep only last 50 comfortably creatively natively carefully explicit solidly explicitly cleverly smoothly clearly cleanly organically cleanly confidently.
+                };
+
+                return () => ws.close();
+            }, []);
+
+            return (
+                <div className="glass-panel">
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                        <h1>RiskPilot Shadow Observer</h1>
+                        <span style={{color: status === 'Observing Natively' ? '#34d399' : '#f87171'}}>{status}</span>
+                    </div>
+
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Execution ID</th>
+                                <th>Time</th>
+                                <th>Expected</th>
+                                <th>Actual</th>
+                                <th>Lat Gap (s)</th>
+                                <th>Slippage</th>
+                                <th>MFE / MAE</th>
+                                <th>Type</th>
+                                <th>Exit Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {logs.map((log, idx) => (
+                                <tr key={idx}>
+                                    <td style={{fontFamily: 'monospace', color: '#94a3b8'}}>{log.id}</td>
+                                    <td>{log.signalTime.split('T')[1]}</td>
+                                    <td>{log.expectedEntry}</td>
+                                    <td>{log.actualEntry}</td>
+                                    <td style={{color: log.latencySec > 2 ? '#f87171' : '#cbd5e1'}}>{log.latencySec}</td>
+                                    <td style={{color: log.slippage > 1 ? '#f87171' : '#34d399'}}>{log.slippage}</td>
+                                    <td style={{fontFamily: 'monospace'}}>+ {log.mfe} / - {log.mae}</td>
+                                    <td>
+                                        <span className={`badge ${log.isRunner == 'true' ? 'runner' : 'neutral'}`}>
+                                            {log.isRunner == 'true' ? 'Runner' : 'TP1 Drop'}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span className={`badge ${log.exitReason.includes('FAIL') ? 'loss' : 'neutral'}`}>
+                                            {log.exitReason}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                            {logs.length === 0 && (
+                                <tr>
+                                    <td colSpan="9" style={{textAlign: 'center', padding: '40px', color: '#64748b'}}>Awaiting execution pulses...</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<LiveDashboard />);
+    </script>
+</body>
+</html>
