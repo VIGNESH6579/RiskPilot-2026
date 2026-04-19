@@ -33,7 +33,7 @@
             const [status, setStatus] = useState("Connecting...");
 
             useEffect(() => {
-                const ws = new WebSocket("ws://localhost:8765");
+                const ws = new WebSocket("ws://localhost:8765/ws");
 
                 ws.onopen = () => setStatus("Observing Natively");
                 ws.onclose = () => setStatus("Disconnected - Polling Observer...");

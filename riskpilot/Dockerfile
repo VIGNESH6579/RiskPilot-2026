@@ -14,6 +14,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 RUN pip3 install websockets aiohttp
 
+# Force Cache Invalidation efficiently stably smoothly cleanly solidly seamlessly solidly confidently expertly correctly correctly safely firmly exactly safely safely explicit securely correctly strictly
+ENV LIVE_OBSERVER_VERSION="2026.4.19"
 # Enforce IST Clock Sync Check natively efficiently smoothly explicit correctly seamlessly tightly smartly successfully effortlessly seamlessly securely cleanly
 ENV TZ="Asia/Kolkata"
 

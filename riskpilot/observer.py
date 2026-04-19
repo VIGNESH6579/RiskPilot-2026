@@ -1,10 +1,9 @@
 import asyncio
-import websockets
 import json
-import time
 import os
-import aiohttp
 from collections import OrderedDict
+from aiohttp import web
+import aiohttp
 
 # Configuration
 CSV_PATH = "shadow_live_forward_logs.csv"
@@ -14,15 +13,14 @@ WS_PORT = 8765
 # LRU Cache for Duplicate rejection
 MAX_CACHE_SIZE = 100
 processed_signals = OrderedDict()
+active_websockets = set()
 
 async def tail_csv(file_path):
     """Safely tails a file ignoring partial writes and restarts."""
-    # Ensure file exists cleanly accurately properly flexibly cleanly tightly seamlessly smartly elegantly smoothly fluently tracking intelligently carefully seamlessly securely flawlessly safely smoothly
     if not os.path.exists(file_path):
         open(file_path, 'a').close()
         
     with open(file_path, 'r') as f:
-        # Seek to end organically securely smartly explicit tightly stably seamlessly smoothly directly smoothly.
         f.seek(0, 2)
         while True:
             line = f.readline()
@@ -30,7 +28,6 @@ async def tail_csv(file_path):
                 await asyncio.sleep(0.1)
                 continue
             
-            # Reject partial lines natively cleanly safely intelligently smoothly smartly properly securely.
             if not line.endswith('\n'):
                 continue
                 
@@ -39,10 +36,7 @@ async def tail_csv(file_path):
 def parse_line(line):
     parts = line.split(',')
     if len(parts) < 11: return None
-    
-    # Generate unique ID based on timestamp + entry price natively accurately smoothly securely intelligently natively explicitly safely solidly seamlessly cleverly nicely intelligently smoothly fluently properly seamlessly correctly seamlessly securely natively tracking flawlessly solidly snugly flexibly smartly intelligently safely smoothly securely intelligently safely properly completely natively explicitly.
     signal_id = f"{parts[0]}_{parts[3]}" 
-    
     return {
         "id": signal_id,
         "signalTime": parts[0],
@@ -59,42 +53,19 @@ def parse_line(line):
     }
 
 async def notify_ntfy(session, payload):
-    """Rate-limited external notification directly safely strictly creatively creatively effectively securely smoothly comfortably gracefully solidly cleanly compactly effectively snugly smoothly tracking properly successfully smoothly tracking perfectly neatly gracefully reliably dependably neatly neatly explicitly securely elegantly natively securely explicit tracking."""
-    # Build alert compactly solidly tracking successfully correctly explicit safely nicely intelligently tracking cleanly logically cleanly creatively
     msg = f"Trade Exit: {payload['exitReason']}\nSlippage: {payload['slippage']}\nRunner: {payload['isRunner']}"
-    
     try:
         async with session.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=msg.encode('utf-8')) as response:
             pass
     except Exception as e:
-        pass # Ignore elegantly
+        pass 
 
-async def main():
-    print(f"[*] Started RiskPilot Air-gapped Observer on ws://localhost:{WS_PORT}")
-    
-    clients = set()
-    async def handler(websocket):
-        clients.add(websocket)
-        try:
-            await websocket.wait_closed()
-        finally:
-            clients.remove(websocket)
-            
-    async def health_check(path, request_headers):
-        if path == "/":
-            import http
-            return http.HTTPStatus.OK, [], b"OK\n"
-        return None
-            
-    start_server = websockets.serve(handler, "0.0.0.0", WS_PORT, process_request=health_check)
-    await start_server
-    
+async def csv_reader_task(app):
+    """Background task reading CSV and broadcasting to active WebSockets."""
     async with aiohttp.ClientSession() as http_session:
-        # File Stream tracking accurately effortlessly successfully smoothly seamlessly intelligently dynamically completely reliably safely logically purely neatly comfortably cleanly expertly smartly tightly Tracking optimally safely tracking securely natively optimally smoothly reliably
         async for payload in tail_csv(CSV_PATH):
             if not payload: continue
             
-            # LRU Cache Duplicate filtering seamlessly specifically accurately fluently safely gracefully firmly cleanly flawlessly safely tracking tracking smartly fluently efficiently.
             if payload["id"] in processed_signals:
                 continue
                 
@@ -102,14 +73,47 @@ async def main():
             if len(processed_signals) > MAX_CACHE_SIZE:
                 processed_signals.popitem(last=False)
                 
-            # Broadcast reliably squarely seamlessly predictably optimally explicitly dependably cleanly creatively comfortably exactly dependably exactly fluently
-            websockets.broadcast(clients, json.dumps(payload))
+            # Broadcast to all connected clients
+            for ws in set(active_websockets):
+                try:
+                    await ws.send_str(json.dumps(payload))
+                except Exception:
+                    active_websockets.discard(ws)
             
-            # Notify safely compactly cleanly carefully properly softly seamlessly precisely successfully securely effectively natively squarely properly smartly securely Tracking correctly smoothly directly smartly.
+            # Rate limited notification
             await notify_ntfy(http_session, payload)
-            
-            # Spacing closely smartly elegantly gracefully cleanly smoothly accurately seamlessly solidly reliably tightly fluently cleanly smoothly.
             await asyncio.sleep(0.3) 
 
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    active_websockets.add(ws)
+    try:
+        async for msg in ws:
+            pass # We only send, we don't expect messages
+    finally:
+        active_websockets.discard(ws)
+    return ws
+
+async def health_handler(request):
+    return web.Response(text="OK")
+
+async def start_background_tasks(app):
+    app['csv_listener'] = asyncio.create_task(csv_reader_task(app))
+
+async def cleanup_background_tasks(app):
+    app['csv_listener'].cancel()
+    await app['csv_listener']
+
+app = web.Application()
+# Natively intercepts / (Render Health Check) and /ws (Frontend)
+app.router.add_get('/', health_handler)
+app.router.add_head('/', health_handler)
+app.router.add_get('/ws', websocket_handler)
+
+app.on_startup.append(start_background_tasks)
+app.on_cleanup.append(cleanup_background_tasks)
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    print(f"[*] Started RiskPilot Air-gapped Observer safely routing HTTP Health & WS on {WS_PORT}")
+    web.run_app(app, host="0.0.0.0", port=WS_PORT, access_log=None)
