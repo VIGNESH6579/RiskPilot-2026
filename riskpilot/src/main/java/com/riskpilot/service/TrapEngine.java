@@ -2,9 +2,11 @@ package com.riskpilot.service;
 
 import com.riskpilot.model.Candle;
 import com.riskpilot.model.Signal;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+@Service
 public class TrapEngine {
 
     public Signal detectTrap(List<Candle> history, double localSupport, double localResistance, double vix) {

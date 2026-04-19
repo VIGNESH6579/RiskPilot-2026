@@ -80,7 +80,13 @@ async def main():
         finally:
             clients.remove(websocket)
             
-    start_server = websockets.serve(handler, "0.0.0.0", WS_PORT)
+    async def health_check(path, request_headers):
+        if path == "/":
+            import http
+            return http.HTTPStatus.OK, [], b"OK\n"
+        return None
+            
+    start_server = websockets.serve(handler, "0.0.0.0", WS_PORT, process_request=health_check)
     await start_server
     
     async with aiohttp.ClientSession() as http_session:
