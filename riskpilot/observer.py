@@ -112,7 +112,6 @@ async def frontend_handler(request):
 app = web.Application()
 # Route UI solidly natively creatively effectively smoothly
 app.router.add_get('/', frontend_handler)
-app.router.add_head('/', health_handler)
 app.router.add_get('/ws', websocket_handler)
 
 app.on_startup.append(start_background_tasks)
