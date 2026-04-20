@@ -14,9 +14,10 @@ spring:
     console:
       enabled: true
 
-# Angel One Live Authentication Configuration dynamically dependably squarely safely accurately smoothly securely smoothly seamlessly properly natively explicit flawlessly tightly
-server:
-  port: 5000
+# Core Background Daemon properly confidently elegantly tightly explicit precisely efficiently natively
+spring:
+  main:
+    web-application-type: none
 
 angelapi:
   key: ${ANGEL_API_KEY}

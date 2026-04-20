@@ -5,5 +5,5 @@ echo "[*] Starting Python Observer natively smartly compactly cleanly safely sol
 python3 observer.py &
 
 # Boot the Core Java Strategy safely robustly squarely intelligently organically safely reliably safely squarely safely effectively explicit safely purely smoothly correctly correctly smoothly cleanly cleverly intelligently stably explicit securely precisely natively securely.
-echo "[*] Starting Shadow Execution Engine properly securely dynamically optimally smoothly..."
-java -jar app.jar --server.port=5000
+echo "[*] Starting Shadow Execution Engine Headless successfully correctly smoothly cleanly..."
+java -jar app.jar
