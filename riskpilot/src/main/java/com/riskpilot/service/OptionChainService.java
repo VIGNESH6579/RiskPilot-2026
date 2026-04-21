@@ -14,6 +14,7 @@ import org.springframework.web.client.RestTemplate;
 import java.io.File;
 import java.io.IOException;
 import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -112,7 +113,11 @@ public class OptionChainService {
 
         } catch (Exception e) {
             log.warn("NSE option-chain fetch failed: {}", e.getMessage());
-            return fromCacheAsPreviousClose();
+            OptionChainSnapshot fallback = fromCacheAsPreviousClose();
+            if (fallback.spot() > 0.0) {
+                return fallback;
+            }
+            return fetchFromYahooFallback(marketOpen);
         }
     }
 
@@ -163,6 +168,51 @@ public class OptionChainService {
             log.warn("Unable to read option-chain cache: {}", e.getMessage());
             return null;
         }
+    }
+
+    private OptionChainSnapshot fetchFromYahooFallback(boolean marketOpen) {
+        String url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=%5ENSEI";
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, HttpEntity.EMPTY, String.class);
+            if (response.getBody() == null) {
+                return lastKnownSnapshot;
+            }
+            JsonNode root = mapper.readTree(response.getBody());
+            JsonNode result = root.path("quoteResponse").path("result");
+            if (!result.isArray() || result.isEmpty()) {
+                return lastKnownSnapshot;
+            }
+            JsonNode q = result.get(0);
+            double live = q.path("regularMarketPrice").asDouble(0.0);
+            double prevClose = q.path("regularMarketPreviousClose").asDouble(live);
+            String expiry = computeNextThursdayExpiry();
+            OptionChainSnapshot snap = new OptionChainSnapshot(
+                0,
+                0,
+                marketOpen ? live : prevClose,
+                expiry,
+                prevClose,
+                marketOpen ? "YAHOO_LIVE_FALLBACK" : "YAHOO_PREV_CLOSE_FALLBACK"
+            );
+            if (snap.spot() > 0.0) {
+                lastKnownSnapshot = snap;
+            }
+            return snap;
+        } catch (Exception ex) {
+            log.warn("Yahoo fallback fetch failed: {}", ex.getMessage());
+            return lastKnownSnapshot;
+        }
+    }
+
+    private String computeNextThursdayExpiry() {
+        LocalDate d = LocalDate.now(IST);
+        while (d.getDayOfWeek() != DayOfWeek.THURSDAY) {
+            d = d.plusDays(1);
+        }
+        if (d.equals(LocalDate.now(IST)) && ZonedDateTime.now(IST).toLocalTime().isAfter(LocalTime.of(15, 30))) {
+            d = d.plusDays(7);
+        }
+        return d.toString();
     }
 
     public record OptionChainSnapshot(

@@ -87,6 +87,16 @@ public class ShadowExecutionEngine {
             double previousRange = previousCandle.high - previousCandle.low;
             double orRange = Math.max(0.0, state.orHigh() - state.orLow());
             ActiveTrade updated = handleCandleClose(state.activeTradeReference(), newestCandle, currentRange, previousRange);
+            if (state.timePhase() == TimePhase.LATE) {
+                TradeExit exit = new TradeExit(
+                    true,
+                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.close) * updated.remainingSize()),
+                    "TIME_CUTOFF_EXIT",
+                    newestCandle.close
+                );
+                closeTrade(updated, exit);
+                return;
+            }
             if (state.timePhase() != TimePhase.EARLY && orRange > 0.0 && currentRange < (orRange * 0.2)) {
                 TradeExit exit = new TradeExit(
                     true,
@@ -117,6 +127,11 @@ public class ShadowExecutionEngine {
         double syntheticVix = 16.0;
         Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, syntheticVix);
         if (signal == null) {
+            return;
+        }
+        double entrySlippageEstimate = Math.abs(newestCandle.close - signal.getEntry());
+        if (entrySlippageEstimate > 2.0) {
+            logReject(state, "SLIPPAGE_TOO_HIGH");
             return;
         }
 
