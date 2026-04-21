@@ -8,6 +8,7 @@ public record ActiveTrade(
     boolean tp1Hit,
     boolean runnerActive,
     boolean stage2Active,
+    boolean tailHalfLocked,
     double positionSize,
     double remainingSize,
     double realizedPnL,

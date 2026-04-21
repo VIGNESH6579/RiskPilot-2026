@@ -54,6 +54,7 @@ public class ShadowExecutionEngine {
             ActiveTrade trade = state.activeTradeReference();
             trade = updateExcursions(trade, currentPrice);
             trade = handleTickTP1(trade, currentPrice);
+            trade = applyTailProtection(trade, currentPrice);
             TradeExit exit = checkStopLoss(trade, currentPrice);
 
             if (exit.triggered()) {
@@ -81,7 +82,21 @@ public class ShadowExecutionEngine {
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (state.tradeActive() && state.activeTradeReference() != null) {
-            ActiveTrade updated = handleCandleClose(state.activeTradeReference(), newestCandle);
+            Candle previousCandle = strictHistory.get(strictHistory.size() - 2);
+            double currentRange = newestCandle.high - newestCandle.low;
+            double previousRange = previousCandle.high - previousCandle.low;
+            double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+            ActiveTrade updated = handleCandleClose(state.activeTradeReference(), newestCandle, currentRange, previousRange);
+            if (state.timePhase() != TimePhase.EARLY && orRange > 0.0 && currentRange < (orRange * 0.2)) {
+                TradeExit exit = new TradeExit(
+                    true,
+                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.close) * updated.remainingSize()),
+                    "VOLATILITY_COLLAPSE_EXIT",
+                    newestCandle.close
+                );
+                closeTrade(updated, exit);
+                return;
+            }
             updateActiveTradeState(updated, state.lastRejectReason());
             broadcastCurrentSessionState();
             return;
@@ -164,7 +179,7 @@ public class ShadowExecutionEngine {
         LocalDateTime now = LocalDateTime.now();
         double size = state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35;
         double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-        double tp1Distance = Math.max(15.0, orRange * 0.12);
+        double tp1Distance = Math.max(15.0, orRange * 0.15);
         double dynamicTp1 = signal.getEntry() - tp1Distance;
         double initialRisk = Math.abs(signal.getStopLoss() - signal.getEntry());
         ActiveTrade trade = new ActiveTrade(
@@ -172,6 +187,7 @@ public class ShadowExecutionEngine {
             signal.getStopLoss(),
             dynamicTp1,
             initialRisk,
+            false,
             false,
             false,
             false,
@@ -297,6 +313,7 @@ public class ShadowExecutionEngine {
             trade.tp1Hit(),
             trade.runnerActive(),
             trade.stage2Active(),
+            trade.tailHalfLocked(),
             trade.positionSize(),
             trade.remainingSize(),
             trade.realizedPnL(),
@@ -316,7 +333,7 @@ public class ShadowExecutionEngine {
             double tp1Size = trade.positionSize() * 0.15;
             double remaining = trade.positionSize() - tp1Size;
             double pnl = (trade.entryPrice() - currentPrice) * tp1Size;
-            double softStop = trade.entryPrice() + (0.25 * trade.initialRisk());
+            double softStop = trade.entryPrice() + (0.4 * trade.initialRisk());
             return new ActiveTrade(
                 trade.entryPrice(),
                 softStop,
@@ -325,6 +342,7 @@ public class ShadowExecutionEngine {
                 true,
                 true,
                 trade.stage2Active(),
+                trade.tailHalfLocked(),
                 trade.positionSize(),
                 remaining,
                 trade.realizedPnL() + pnl,
@@ -338,16 +356,20 @@ public class ShadowExecutionEngine {
         return trade;
     }
 
-    private ActiveTrade handleCandleClose(ActiveTrade trade, Candle candle) {
+    private ActiveTrade handleCandleClose(ActiveTrade trade, Candle candle, double currentRange, double previousRange) {
         if (!trade.runnerActive()) {
             return trade;
         }
 
-        boolean stage2Active = trade.stage2Active() || (trade.initialRisk() > 0.0 && trade.mfe() >= trade.initialRisk());
+        boolean stage2Active = trade.stage2Active() || (trade.initialRisk() > 0.0 && trade.mfe() >= (0.8 * trade.initialRisk()));
         double updatedSL = trade.trailingSL();
         if (stage2Active) {
             double swingBasedSL = candle.high + 10.0;
             updatedSL = Math.min(updatedSL, swingBasedSL);
+        }
+        boolean momentumWeakening = previousRange > 0.0 && currentRange < (previousRange * 0.6);
+        if (momentumWeakening && trade.mfe() > (0.8 * trade.initialRisk())) {
+            updatedSL = Math.min(updatedSL, candle.high + 5.0);
         }
 
         return new ActiveTrade(
@@ -358,6 +380,7 @@ public class ShadowExecutionEngine {
             trade.tp1Hit(),
             trade.runnerActive(),
             stage2Active,
+            trade.tailHalfLocked(),
             trade.positionSize(),
             trade.remainingSize(),
             trade.realizedPnL(),
@@ -382,6 +405,35 @@ public class ShadowExecutionEngine {
             return new TradeExit(true, pnl, reason, currentPrice);
         }
         return TradeExit.noExit();
+    }
+
+    private ActiveTrade applyTailProtection(ActiveTrade trade, double currentPrice) {
+        if (!trade.runnerActive() || trade.initialRisk() <= 0.0) {
+            return trade;
+        }
+        double pullback = trade.mfe() - (trade.entryPrice() - currentPrice);
+        if (!trade.tailHalfLocked() && trade.mfe() >= (1.5 * trade.initialRisk()) && pullback >= (0.4 * trade.initialRisk())) {
+            double lockSize = trade.remainingSize() * 0.5;
+            double pnl = (trade.entryPrice() - currentPrice) * lockSize;
+            return new ActiveTrade(
+                trade.entryPrice(),
+                trade.stopLoss(),
+                trade.tp1Level(),
+                trade.initialRisk(),
+                trade.tp1Hit(),
+                trade.runnerActive(),
+                trade.stage2Active(),
+                true,
+                trade.positionSize(),
+                trade.remainingSize() - lockSize,
+                trade.realizedPnL() + pnl,
+                trade.mfe(),
+                trade.mae(),
+                trade.peakFavorableR(),
+                trade.trailingSL()
+            );
+        }
+        return trade;
     }
 
     private void updateActiveTradeState(ActiveTrade trade, String reason) {
