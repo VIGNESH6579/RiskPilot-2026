@@ -12,7 +12,8 @@ CSV_PATH = os.environ.get("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv")
 NTFY_TOPIC = os.environ.get("RISKPILOT_NTFY_TOPIC", "riskpilot_shadow_alerts")
 ENABLE_NTFY = os.environ.get("RISKPILOT_ENABLE_NTFY", "true").lower() == "true"
 NOTIFY_COOLDOWN_SEC = float(os.environ.get("RISKPILOT_NOTIFY_COOLDOWN_SEC", "10"))
-PORT = int(os.environ.get("PORT", "8080"))
+PORT = int(os.environ.get("OBSERVER_PORT", os.environ.get("PORT", "8765")))
+HOST = os.environ.get("OBSERVER_HOST", "127.0.0.1")
 MAX_CACHE_SIZE = int(os.environ.get("RISKPILOT_MAX_CACHE_SIZE", "500"))
 
 processed_signals = OrderedDict()
@@ -192,4 +193,4 @@ app.on_cleanup.append(cleanup_background_tasks)
 
 if __name__ == "__main__":
     print(f"[*] RiskPilot observer listening on :{PORT}, csv={CSV_PATH}")
-    web.run_app(app, host="0.0.0.0", port=PORT, access_log=None)
+    web.run_app(app, host=HOST, port=PORT, access_log=None)

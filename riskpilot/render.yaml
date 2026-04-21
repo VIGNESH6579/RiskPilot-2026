@@ -8,3 +8,7 @@ services:
     envVars:
       - key: JAVA_TOOL_OPTIONS
         value: -XX:+UseContainerSupport -XX:MaxRAMPercentage=75
+      - key: OBSERVER_PORT
+        value: "8765"
+      - key: OBSERVER_HOST
+        value: "127.0.0.1"
