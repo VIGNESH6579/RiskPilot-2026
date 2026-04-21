@@ -163,14 +163,21 @@ public class ShadowExecutionEngine {
     private void openTrade(Signal signal, TradingSessionSnapshot state) {
         LocalDateTime now = LocalDateTime.now();
         double size = state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35;
+        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        double tp1Distance = Math.max(15.0, orRange * 0.12);
+        double dynamicTp1 = signal.getEntry() - tp1Distance;
+        double initialRisk = Math.abs(signal.getStopLoss() - signal.getEntry());
         ActiveTrade trade = new ActiveTrade(
             signal.getEntry(),
             signal.getStopLoss(),
-            signal.getTarget(),
+            dynamicTp1,
+            initialRisk,
+            false,
             false,
             false,
             size,
             size,
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -286,13 +293,16 @@ public class ShadowExecutionEngine {
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
+            trade.initialRisk(),
             trade.tp1Hit(),
             trade.runnerActive(),
+            trade.stage2Active(),
             trade.positionSize(),
             trade.remainingSize(),
             trade.realizedPnL(),
             mfe,
             mae,
+            trade.peakFavorableR(),
             trade.trailingSL()
         );
     }
@@ -303,21 +313,25 @@ public class ShadowExecutionEngine {
         }
 
         if (currentPrice <= trade.tp1Level()) {
-            double tp1Size = trade.positionSize() * 0.20;
+            double tp1Size = trade.positionSize() * 0.15;
             double remaining = trade.positionSize() - tp1Size;
             double pnl = (trade.entryPrice() - currentPrice) * tp1Size;
+            double softStop = trade.entryPrice() + (0.25 * trade.initialRisk());
             return new ActiveTrade(
                 trade.entryPrice(),
-                trade.entryPrice(),
+                softStop,
                 trade.tp1Level(),
+                trade.initialRisk(),
                 true,
                 true,
+                trade.stage2Active(),
                 trade.positionSize(),
                 remaining,
                 trade.realizedPnL() + pnl,
                 trade.mfe(),
                 trade.mae(),
-                trade.entryPrice()
+                trade.peakFavorableR(),
+                softStop
             );
         }
 
@@ -329,25 +343,38 @@ public class ShadowExecutionEngine {
             return trade;
         }
 
-        double newTrailingSL = candle.high + 10.0;
-        double updatedSL = Math.min(trade.trailingSL(), newTrailingSL);
+        boolean stage2Active = trade.stage2Active() || (trade.initialRisk() > 0.0 && trade.mfe() >= trade.initialRisk());
+        double updatedSL = trade.trailingSL();
+        if (stage2Active) {
+            double swingBasedSL = candle.high + 10.0;
+            updatedSL = Math.min(updatedSL, swingBasedSL);
+        }
+
         return new ActiveTrade(
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
+            trade.initialRisk(),
             trade.tp1Hit(),
             trade.runnerActive(),
+            stage2Active,
             trade.positionSize(),
             trade.remainingSize(),
             trade.realizedPnL(),
             trade.mfe(),
             trade.mae(),
+            trade.peakFavorableR(),
             updatedSL
         );
     }
 
     private TradeExit checkStopLoss(ActiveTrade trade, double currentPrice) {
         double effectiveSL = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
+        double pullback = trade.mfe() - (trade.entryPrice() - currentPrice);
+        if (trade.initialRisk() > 0.0 && trade.mfe() >= (2.0 * trade.initialRisk()) && pullback >= (0.5 * trade.initialRisk())) {
+            double pnl = trade.realizedPnL() + ((trade.entryPrice() - currentPrice) * trade.remainingSize());
+            return new TradeExit(true, pnl, "TAIL_PROTECTION_EXIT", currentPrice);
+        }
         if (currentPrice >= effectiveSL) {
             double exitSize = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
             double pnl = trade.realizedPnL() + ((trade.entryPrice() - currentPrice) * exitSize);
