@@ -58,7 +58,9 @@ public class OptionChainService {
             JsonNode json = mapper.readTree(response.getBody());
             JsonNode records = json.get("records");
             
-            if (records == null || !records.has("data")) return lastKnownSnapshot;
+            if (records == null || !records.has("data")) {
+                return fetchFromYahooFallback(marketOpen);
+            }
 
             JsonNode dataArray = records.get("data");
             String nearestExpiry = "";
@@ -70,6 +72,9 @@ public class OptionChainService {
             double currentSpot = 0.0;
             if (records.has("underlyingValue")) {
                 currentSpot = records.get("underlyingValue").asDouble();
+            }
+            if (currentSpot <= 0.0) {
+                return fetchFromYahooFallback(marketOpen);
             }
 
             double maxCE = 0, maxPE = 0;
