@@ -3,6 +3,7 @@ package com.riskpilot.service;
 import com.riskpilot.model.TradingSessionSnapshot;
 import org.springframework.stereotype.Service;
 
+import java.util.function.UnaryOperator;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Service
@@ -14,10 +15,12 @@ public class SessionStateManager {
         return currentSnapshot.get();
     }
 
-    public synchronized void updateSnapshot(TradingSessionSnapshot newSnapshot) {
-        currentSnapshot.set(newSnapshot);
+    public synchronized TradingSessionSnapshot update(UnaryOperator<TradingSessionSnapshot> updater) {
+        TradingSessionSnapshot updated = updater.apply(currentSnapshot.get());
+        currentSnapshot.set(updated);
+        return updated;
     }
-    
+
     public synchronized void resetDaily() {
         currentSnapshot.set(TradingSessionSnapshot.initial());
     }

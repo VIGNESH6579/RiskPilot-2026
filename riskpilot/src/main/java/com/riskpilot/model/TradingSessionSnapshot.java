@@ -1,32 +1,38 @@
 package com.riskpilot.model;
 
-import java.time.LocalTime;
-
 /**
- * Immutable Snapshot representing the strictly controlled execution state of the Live Shadow Engine.
+ * Immutable source of truth for session risk controls.
  */
 public record TradingSessionSnapshot(
-    boolean isTradeActive,
-    int tradesToday,
+    boolean sessionActive,
+    Regime regime,
+    boolean volatilityQualified,
+    TimePhase timePhase,
+    int tradesTaken,
+    boolean tradeActive,
+    boolean feedStable,
+    boolean heartbeatAlive,
     double orHigh,
     double orLow,
-    String regimeFlag,
     double cumulativeDailyLossR,
-    boolean preMarketStable,
-    SimulationTrade activeTradeReference, // Must treat this reference carefully (should be practically immutable or handled carefully)
-    LocalTime currentPhase
+    ActiveTrade activeTradeReference,
+    String lastRejectReason
 ) {
     public static TradingSessionSnapshot initial() {
         return new TradingSessionSnapshot(
-            false, 
-            0, 
-            Double.MIN_VALUE, 
-            Double.MAX_VALUE, 
-            "DEAD", 
-            0.0, 
-            false, 
-            null, 
-            LocalTime.of(9, 15)
+            false,
+            Regime.UNKNOWN,
+            false,
+            TimePhase.EARLY,
+            0,
+            false,
+            true,
+            true,
+            Double.NEGATIVE_INFINITY,
+            Double.POSITIVE_INFINITY,
+            0.0,
+            null,
+            "INITIALIZED"
         );
     }
 }

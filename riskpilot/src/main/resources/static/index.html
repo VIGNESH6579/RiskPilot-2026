@@ -1,70 +1,97 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>RiskPilot Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RiskPilot Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
+        .grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .card { background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+        .label { color: #94a3b8; font-size: 12px; }
+        .value { font-size: 20px; margin-top: 5px; font-weight: 700; }
+        .panel { margin-top: 14px; background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+        .ok { color: #22c55e; }
+        .bad { color: #ef4444; }
+        .warn { color: #f59e0b; }
+        .mono { font-family: Consolas, monospace; }
+    </style>
 </head>
-
 <body>
+<h2>RiskPilot Monitor (Read-Only)</h2>
+<div id="wsStatus" class="warn">Socket: Connecting...</div>
 
-<h2>📊 RiskPilot Dashboard</h2>
+<div class="grid">
+    <div class="card"><div class="label">Regime</div><div id="regime" class="value">-</div></div>
+    <div class="card"><div class="label">Volatility Gate</div><div id="volatilityQualified" class="value">-</div></div>
+    <div class="card"><div class="label">Time Phase</div><div id="timePhase" class="value">-</div></div>
+    <div class="card"><div class="label">Trade Active</div><div id="tradeActive" class="value">-</div></div>
+    <div class="card"><div class="label">Trades Taken</div><div id="tradesTaken" class="value">-</div></div>
+    <div class="card"><div class="label">Daily Loss (R)</div><div id="dailyLossR" class="value">-</div></div>
+    <div class="card"><div class="label">Feed Stable</div><div id="feedStable" class="value">-</div></div>
+    <div class="card"><div class="label">Heartbeat Alive</div><div id="heartbeatAlive" class="value">-</div></div>
+    <div class="card"><div class="label">Session Active</div><div id="sessionActive" class="value">-</div></div>
+</div>
 
-<button onclick="start()">Start Trading</button>
-<button onclick="stop()">Stop Trading</button>
-
-<h3>System Status:</h3>
-<div id="status">Loading...</div>
-
-<h3>Latest Signal:</h3>
-<div id="signal">Waiting...</div>
+<div class="panel">
+    <div class="label">Last Reject Reason</div>
+    <div id="lastRejectReason" class="value mono" style="font-size:14px;">-</div>
+</div>
 
 <script>
+    const fields = [
+        "regime", "volatilityQualified", "timePhase", "tradeActive", "tradesTaken",
+        "dailyLossR", "feedStable", "heartbeatAlive", "sessionActive", "lastRejectReason"
+    ];
 
-    function start() {
-        fetch('/system/start', { method: 'POST' })
-            .then(() => loadStatus());
-    }
-
-    function stop() {
-        fetch('/system/stop', { method: 'POST' })
-            .then(() => loadStatus());
-    }
-
-    function loadStatus() {
-        fetch('/system/status')
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById("status").innerHTML =
-                    "Trading Enabled: " + data.tradingEnabled;
-            });
-    }
-
-    // WebSocket connection
-    const socket = new SockJS('/ws');
-    const stomp = Stomp.over(socket);
-
-    stomp.connect({}, function () {
-
-        stomp.subscribe('/topic/signal', function (message) {
-
-            const signal = JSON.parse(message.body);
-
-            document.getElementById("signal").innerHTML =
-                "Symbol: " + signal.symbol + "<br>" +
-                "Direction: " + signal.direction + "<br>" +
-                "Entry: " + signal.entry + "<br>" +
-                "Target: " + signal.target + "<br>" +
-                "SL: " + signal.stopLoss + "<br>" +
-                "Confidence: " + signal.confidence;
-
+    function render(state) {
+        fields.forEach((f) => {
+            const el = document.getElementById(f);
+            if (!el) return;
+            const value = state[f];
+            el.textContent = value === null || value === undefined ? "-" : value;
+            el.classList.remove("ok", "bad", "warn");
+            if (value === true) el.classList.add("ok");
+            if (value === false) el.classList.add("bad");
         });
-    });
+        if (typeof state.tradesTaken === "number" && typeof state.maxTradesPerDay === "number") {
+            document.getElementById("tradesTaken").textContent = `${state.tradesTaken} / ${state.maxTradesPerDay}`;
+        }
+    }
 
-    // initial load
-    loadStatus();
+    function refreshState() {
+        fetch("/api/v1/monitor/state")
+            .then((r) => r.json())
+            .then((data) => render(data))
+            .catch(() => {});
+    }
 
+    let stompClient = null;
+    let reconnectTimer = null;
+
+    function connectSocket() {
+        const socket = new SockJS("/ws");
+        stompClient = Stomp.over(socket);
+        stompClient.debug = () => {};
+        stompClient.connect({}, () => {
+            document.getElementById("wsStatus").textContent = "Socket: Connected";
+            document.getElementById("wsStatus").className = "ok";
+            stompClient.subscribe("/topic/session", (message) => {
+                render(JSON.parse(message.body));
+            });
+        }, () => {
+            document.getElementById("wsStatus").textContent = "Socket: Disconnected (retrying)";
+            document.getElementById("wsStatus").className = "bad";
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connectSocket, 2000);
+        });
+    }
+
+    refreshState();
+    connectSocket();
+    setInterval(refreshState, 5000);
 </script>
-
 </body>
 </html>

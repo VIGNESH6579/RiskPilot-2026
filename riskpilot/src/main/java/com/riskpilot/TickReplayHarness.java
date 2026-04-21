@@ -4,9 +4,14 @@ import com.riskpilot.model.Candle;
 import com.riskpilot.service.BacktestEngine;
 import com.riskpilot.service.CandleAggregator;
 import com.riskpilot.service.HeartbeatMonitor;
+import com.riskpilot.service.LiveMetricsLogger;
+import com.riskpilot.service.RiskGateEngine;
 import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
 import com.riskpilot.service.TrapEngine;
+import com.riskpilot.service.WebSocketService;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.messaging.support.ExecutorSubscribableChannel;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -32,7 +37,17 @@ public class TickReplayHarness {
         TrapEngine trapEngine = new TrapEngine();
         CandleAggregator candleAggregator = new CandleAggregator();
         HeartbeatMonitor heartbeatMonitor = new HeartbeatMonitor(stateManager, candleAggregator);
-        ShadowExecutionEngine executionEngine = new ShadowExecutionEngine(stateManager, candleAggregator, trapEngine);
+        RiskGateEngine riskGateEngine = new RiskGateEngine();
+        LiveMetricsLogger liveMetricsLogger = new LiveMetricsLogger();
+        WebSocketService webSocketService = new WebSocketService(new SimpMessagingTemplate(new ExecutorSubscribableChannel()));
+        ShadowExecutionEngine executionEngine = new ShadowExecutionEngine(
+            stateManager,
+            candleAggregator,
+            trapEngine,
+            riskGateEngine,
+            liveMetricsLogger,
+            webSocketService
+        );
         
         System.out.println(">>> INJECTING 5-8 SEC POST-ENTRY LAG CLUSTERS >>>");
         System.out.println("----------------------------------------------------");

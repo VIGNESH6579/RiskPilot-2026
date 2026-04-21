@@ -19,8 +19,9 @@ public class CandleAggregator {
 
     // Triggered externally by the WebSocket Client parsing JSON
     public synchronized void processTick(LocalDateTime tickTime, double price, long volume) {
+        long tickDelayMs = java.time.Duration.between(tickTime, LocalDateTime.now()).toMillis();
+        feedUnstable = tickDelayMs > 1500;
         lastTickTime = tickTime;
-        feedUnstable = false; 
 
         // 5-minute alignment logic securely
         int minute = tickTime.getMinute();

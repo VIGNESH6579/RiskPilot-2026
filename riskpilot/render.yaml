@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: riskpilot-2026
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /api/v1/monitor/state
+    envVars:
+      - key: JAVA_TOOL_OPTIONS
+        value: -XX:+UseContainerSupport -XX:MaxRAMPercentage=75

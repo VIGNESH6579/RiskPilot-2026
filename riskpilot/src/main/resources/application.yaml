@@ -14,11 +14,9 @@ spring:
     console:
       enabled: true
 
-  main:
-    web-application-type: none
 angelapi:
-  key: ${ANGEL_API_KEY}
-  clientcode: ${ANGEL_CLIENT_ID}
-  pin: ${ANGEL_PIN}
+  key: ${ANGEL_API_KEY:}
+  clientcode: ${ANGEL_CLIENT_ID:}
+  pin: ${ANGEL_PIN:}
   totp:
-    secret: ${ANGEL_TOTP_SECRET}
+    secret: ${ANGEL_TOTP_SECRET:}

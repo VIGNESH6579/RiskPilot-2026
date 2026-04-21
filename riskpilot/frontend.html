@@ -1,109 +1,249 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RiskPilot Observer</title>
-    <!-- React & Babel safely creatively nicely organically securely cleanly flexibly explicit safely seamlessly squarely smoothly natively flexibly smoothly gracefully neatly securely dependably smartly -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Styling creatively solidly cleanly cleanly dependably explicitly -->
-    <style>
-        body { background: #0b0f19; color: #fff; font-family: 'Inter', system-ui; margin: 0; padding: 2rem; }
-        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 24px; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5); }
-        h1 { font-size: 24px; font-weight: 500; margin-bottom: 20px; color: #38bdf8; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 14px; }
-        th { color: #94a3b8; font-weight: 500; }
-        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
-        .runner { background: rgba(16, 185, 129, 0.2); color: #34d399; }
-        .loss { background: rgba(239, 68, 68, 0.2); color: #f87171; }
-        .neutral { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RiskPilot Shadow Observer</title>
+  <style>
+    :root {
+      --bg: #0a0f1f;
+      --panel: #121a30;
+      --panel-2: #1a2441;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --good: #34d399;
+      --warn: #f59e0b;
+      --bad: #f87171;
+      --line: #243153;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      font-size: 13px;
+      color: var(--warn);
+    }
+    .status.ok { color: var(--good); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { font-size: 18px; margin-top: 3px; font-weight: 600; }
+    .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead { background: var(--panel-2); }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .empty { padding: 28px; text-align: center; color: var(--muted); }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .table-wrap { overflow-x: auto; }
+    }
+  </style>
 </head>
 <body>
-    <div id="root"></div>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>RiskPilot Shadow Observer</h1>
+        <div class="sub">Air-gapped observer feed from <span class="mono">shadow_live_forward_logs.csv</span></div>
+      </div>
+      <div id="status" class="status">Connecting...</div>
+    </div>
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
+    <div class="grid">
+      <div class="card">
+        <div class="label">Total Events (session)</div>
+        <div id="metric-total" class="value">0</div>
+      </div>
+      <div class="card">
+        <div class="label">Avg Latency (s)</div>
+        <div id="metric-latency" class="value">0.00</div>
+      </div>
+      <div class="card">
+        <div class="label">Avg Slippage</div>
+        <div id="metric-slip" class="value">0.00</div>
+      </div>
+      <div class="card">
+        <div class="label">Last Exit Reason</div>
+        <div id="metric-exit" class="value muted" style="font-size: 14px">-</div>
+      </div>
+    </div>
 
-        function LiveDashboard() {
-            const [logs, setLogs] = useState([]);
-            const [status, setStatus] = useState("Connecting...");
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Signal Time</th>
+            <th>Expected</th>
+            <th>Actual</th>
+            <th>Latency(s)</th>
+            <th>Slippage</th>
+            <th>MFE</th>
+            <th>MAE</th>
+            <th>Runner</th>
+            <th>Exit</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="10" class="empty">Awaiting shadow executions...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 
-            useEffect(() => {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  <script>
+    const MAX_ROWS = 75;
+    const rows = [];
+    let reconnectTimer = null;
 
-                ws.onopen = () => setStatus("Observing Natively");
-                ws.onclose = () => setStatus("Disconnected - Polling Observer...");
-                ws.onerror = () => setStatus("Socket Error");
+    const statusEl = document.getElementById("status");
+    const rowsEl = document.getElementById("rows");
+    const totalEl = document.getElementById("metric-total");
+    const latencyEl = document.getElementById("metric-latency");
+    const slipEl = document.getElementById("metric-slip");
+    const exitEl = document.getElementById("metric-exit");
 
-                ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    setLogs((prev) => [data, ...prev].slice(0, 50)); // Keep only last 50 comfortably creatively natively carefully explicit solidly explicitly cleverly smoothly clearly cleanly organically cleanly confidently.
-                };
+    function formatNum(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+    }
 
-                return () => ws.close();
-            }, []);
+    function updateMetrics() {
+      totalEl.textContent = rows.length.toString();
+      if (rows.length === 0) {
+        latencyEl.textContent = "0.00";
+        slipEl.textContent = "0.00";
+        exitEl.textContent = "-";
+        exitEl.className = "value muted";
+        return;
+      }
+      const avgLatency = rows.reduce((acc, r) => acc + (r.latencySec || 0), 0) / rows.length;
+      const avgSlip = rows.reduce((acc, r) => acc + (r.slippage || 0), 0) / rows.length;
+      latencyEl.textContent = formatNum(avgLatency);
+      slipEl.textContent = formatNum(avgSlip);
+      const lastExit = rows[0].exitReason || "-";
+      exitEl.textContent = lastExit;
+      exitEl.className = "value " + (lastExit.toUpperCase().includes("FAIL") ? "bad" : "muted");
+    }
 
-            return (
-                <div className="glass-panel">
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                        <h1>RiskPilot Shadow Observer</h1>
-                        <span style={{color: status === 'Observing Natively' ? '#34d399' : '#f87171'}}>{status}</span>
-                    </div>
+    function renderTable() {
+      if (rows.length === 0) {
+        rowsEl.innerHTML = '<tr><td colspan="10" class="empty">Awaiting shadow executions...</td></tr>';
+        return;
+      }
+      rowsEl.innerHTML = rows.map((r) => {
+        const latencyClass = (r.latencySec || 0) > 2 ? "bad" : "muted";
+        const slipClass = Math.abs(r.slippage || 0) > 1 ? "bad" : "good";
+        const runner = r.isRunner ? "Yes" : "No";
+        const exitClass = (r.exitReason || "").toUpperCase().includes("FAIL") ? "bad" : "muted";
+        return `
+          <tr>
+            <td class="mono muted">${r.id || "-"}</td>
+            <td>${r.signalTime || "-"}</td>
+            <td>${formatNum(r.expectedEntry)}</td>
+            <td>${formatNum(r.actualEntry)}</td>
+            <td class="${latencyClass}">${formatNum(r.latencySec)}</td>
+            <td class="${slipClass}">${formatNum(r.slippage)}</td>
+            <td>${formatNum(r.mfe)}</td>
+            <td>${formatNum(r.mae)}</td>
+            <td>${runner}</td>
+            <td class="${exitClass}">${r.exitReason || "-"}</td>
+          </tr>`;
+      }).join("");
+    }
 
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Execution ID</th>
-                                <th>Time</th>
-                                <th>Expected</th>
-                                <th>Actual</th>
-                                <th>Lat Gap (s)</th>
-                                <th>Slippage</th>
-                                <th>MFE / MAE</th>
-                                <th>Type</th>
-                                <th>Exit Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {logs.map((log, idx) => (
-                                <tr key={idx}>
-                                    <td style={{fontFamily: 'monospace', color: '#94a3b8'}}>{log.id}</td>
-                                    <td>{log.signalTime.split('T')[1]}</td>
-                                    <td>{log.expectedEntry}</td>
-                                    <td>{log.actualEntry}</td>
-                                    <td style={{color: log.latencySec > 2 ? '#f87171' : '#cbd5e1'}}>{log.latencySec}</td>
-                                    <td style={{color: log.slippage > 1 ? '#f87171' : '#34d399'}}>{log.slippage}</td>
-                                    <td style={{fontFamily: 'monospace'}}>+ {log.mfe} / - {log.mae}</td>
-                                    <td>
-                                        <span className={`badge ${log.isRunner == 'true' ? 'runner' : 'neutral'}`}>
-                                            {log.isRunner == 'true' ? 'Runner' : 'TP1 Drop'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span className={`badge ${log.exitReason.includes('FAIL') ? 'loss' : 'neutral'}`}>
-                                            {log.exitReason}
-                                        </span>
-                                    </td>
-                                </tr>
-                            ))}
-                            {logs.length === 0 && (
-                                <tr>
-                                    <td colSpan="9" style={{textAlign: 'center', padding: '40px', color: '#64748b'}}>Awaiting execution pulses...</td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            );
-        }
+    function onPayload(payload) {
+      rows.unshift(payload);
+      if (rows.length > MAX_ROWS) {
+        rows.pop();
+      }
+      renderTable();
+      updateMetrics();
+    }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<LiveDashboard />);
-    </script>
+    function setStatus(text, ok) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (ok ? " ok" : "");
+    }
+
+    function connect() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${protocol}://${location.host}/ws`);
+
+      ws.onopen = () => setStatus("Connected", true);
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          onPayload(payload);
+        } catch (_) {}
+      };
+      ws.onerror = () => setStatus("Socket error", false);
+      ws.onclose = () => {
+        setStatus("Disconnected, retrying...", false);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 1500);
+      };
+    }
+
+    connect();
+  </script>
 </body>
 </html>

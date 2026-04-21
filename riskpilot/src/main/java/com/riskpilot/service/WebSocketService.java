@@ -4,6 +4,8 @@ import com.riskpilot.model.Signal;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
+
 @Service
 public class WebSocketService {
 
@@ -15,5 +17,9 @@ public class WebSocketService {
 
     public void sendSignal(Signal signal) {
         messagingTemplate.convertAndSend("/topic/signal", signal);
+    }
+
+    public void sendSessionState(Map<String, Object> payload) {
+        messagingTemplate.convertAndSend("/topic/session", (Object) payload);
     }
 }
