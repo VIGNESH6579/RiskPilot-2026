@@ -15,7 +15,7 @@ public class OptionChainService {
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
 
-    private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0);
+    private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "");
 
     public OptionChainService() {
         this.restTemplate = new RestTemplate();
@@ -46,6 +46,11 @@ public class OptionChainService {
             if (records == null || !records.has("data")) return lastKnownSnapshot;
 
             JsonNode dataArray = records.get("data");
+            String nearestExpiry = "";
+            JsonNode expiryDates = records.get("expiryDates");
+            if (expiryDates != null && expiryDates.isArray() && !expiryDates.isEmpty()) {
+                nearestExpiry = expiryDates.get(0).asText("");
+            }
             
             double currentSpot = 0.0;
             if (records.has("underlyingValue")) {
@@ -75,7 +80,7 @@ public class OptionChainService {
                 }
             }
 
-            lastKnownSnapshot = new OptionChainSnapshot(support, resistance, currentSpot);
+            lastKnownSnapshot = new OptionChainSnapshot(support, resistance, currentSpot, nearestExpiry);
             return lastKnownSnapshot;
 
         } catch (Exception e) {
@@ -84,5 +89,5 @@ public class OptionChainService {
         }
     }
 
-    public record OptionChainSnapshot(int support, int resistance, double spot) {}
+    public record OptionChainSnapshot(int support, int resistance, double spot, String expiry) {}
 }

@@ -33,6 +33,9 @@
     <div class="card"><div class="label">Feed Stable</div><div id="feedStable" class="value">-</div></div>
     <div class="card"><div class="label">Heartbeat Alive</div><div id="heartbeatAlive" class="value">-</div></div>
     <div class="card"><div class="label">Session Active</div><div id="sessionActive" class="value">-</div></div>
+    <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">-</div></div>
+    <div class="card"><div class="label">Nearest Expiry</div><div id="expiry" class="value" style="font-size:16px;">-</div></div>
+    <div class="card"><div class="label">Option Chain Health</div><div id="chainHealth" class="value">-</div></div>
 </div>
 
 <div class="panel">
@@ -68,6 +71,28 @@
             .catch(() => {});
     }
 
+    function refreshOptionChain() {
+        fetch("/api/v1/data/option-chain")
+            .then((r) => r.json())
+            .then((data) => {
+                const spotEl = document.getElementById("spot");
+                const expiryEl = document.getElementById("expiry");
+                const healthEl = document.getElementById("chainHealth");
+                spotEl.textContent = typeof data.spot === "number" ? data.spot.toFixed(2) : "-";
+                expiryEl.textContent = data.expiry || "-";
+                const healthy = data.spot && data.spot > 0;
+                healthEl.textContent = healthy ? "LIVE" : "STALE";
+                healthEl.classList.remove("ok", "bad");
+                healthEl.classList.add(healthy ? "ok" : "bad");
+            })
+            .catch(() => {
+                const healthEl = document.getElementById("chainHealth");
+                healthEl.textContent = "DOWN";
+                healthEl.classList.remove("ok");
+                healthEl.classList.add("bad");
+            });
+    }
+
     let stompClient = null;
     let reconnectTimer = null;
 
@@ -90,8 +115,10 @@
     }
 
     refreshState();
+    refreshOptionChain();
     connectSocket();
     setInterval(refreshState, 5000);
+    setInterval(refreshOptionChain, 10000);
 </script>
 </body>
 </html>
