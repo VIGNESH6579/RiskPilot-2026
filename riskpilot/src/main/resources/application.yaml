@@ -14,11 +14,8 @@ spring:
     console:
       enabled: true
 
-# Core Background Daemon properly confidently elegantly tightly explicit precisely efficiently natively
-spring:
   main:
     web-application-type: none
-
 angelapi:
   key: ${ANGEL_API_KEY}
   clientcode: ${ANGEL_CLIENT_ID}
