@@ -36,6 +36,7 @@
     <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">-</div></div>
     <div class="card"><div class="label">Nearest Expiry</div><div id="expiry" class="value" style="font-size:16px;">-</div></div>
     <div class="card"><div class="label">Option Chain Health</div><div id="chainHealth" class="value">-</div></div>
+    <div class="card"><div class="label">Price Source</div><div id="spotSource" class="value" style="font-size:14px;">-</div></div>
 </div>
 
 <div class="panel">
@@ -78,18 +79,27 @@
                 const spotEl = document.getElementById("spot");
                 const expiryEl = document.getElementById("expiry");
                 const healthEl = document.getElementById("chainHealth");
+                const sourceEl = document.getElementById("spotSource");
                 spotEl.textContent = typeof data.spot === "number" ? data.spot.toFixed(2) : "-";
                 expiryEl.textContent = data.expiry || "-";
                 const healthy = data.spot && data.spot > 0;
-                healthEl.textContent = healthy ? "LIVE" : "STALE";
+                const source = data.source || "UNKNOWN";
+                healthEl.textContent = healthy ? (source === "PREV_CLOSE_CACHE" ? "MARKET_CLOSED" : "LIVE") : "STALE";
+                sourceEl.textContent = source;
                 healthEl.classList.remove("ok", "bad");
+                sourceEl.classList.remove("ok", "bad");
                 healthEl.classList.add(healthy ? "ok" : "bad");
+                sourceEl.classList.add(source === "PREV_CLOSE_CACHE" ? "warn" : "ok");
             })
             .catch(() => {
                 const healthEl = document.getElementById("chainHealth");
+                const sourceEl = document.getElementById("spotSource");
                 healthEl.textContent = "DOWN";
+                sourceEl.textContent = "UNAVAILABLE";
                 healthEl.classList.remove("ok");
+                sourceEl.classList.remove("ok");
                 healthEl.classList.add("bad");
+                sourceEl.classList.add("bad");
             });
     }
 

@@ -2,6 +2,8 @@ package com.riskpilot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -9,13 +11,24 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.File;
+import java.io.IOException;
+import java.time.DayOfWeek;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+
 @Service
 public class OptionChainService {
+
+    private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+    private static final String CACHE_FILE = "option_chain_cache.json";
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
 
-    private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "");
+    private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
     public OptionChainService() {
         this.restTemplate = new RestTemplate();
@@ -25,6 +38,7 @@ public class OptionChainService {
     public OptionChainSnapshot fetchNiftyChain() {
 
         String url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY";
+        boolean marketOpen = isMarketOpenNow();
 
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -80,14 +94,83 @@ public class OptionChainService {
                 }
             }
 
-            lastKnownSnapshot = new OptionChainSnapshot(support, resistance, currentSpot, nearestExpiry);
-            return lastKnownSnapshot;
+            if (currentSpot > 0.0) {
+                double previousClose = lastKnownSnapshot.previousClose() > 0.0
+                    ? lastKnownSnapshot.previousClose()
+                    : currentSpot;
+                lastKnownSnapshot = new OptionChainSnapshot(
+                    support,
+                    resistance,
+                    marketOpen ? currentSpot : previousClose,
+                    nearestExpiry,
+                    previousClose,
+                    marketOpen ? "LIVE_MARKET" : "PREV_CLOSE_CACHE"
+                );
+                writeCache(lastKnownSnapshot);
+            }
+            return marketOpen ? lastKnownSnapshot : fromCacheAsPreviousClose();
 
         } catch (Exception e) {
-            System.err.println("⚠️ NSE Options API Fetch Failed. Err: " + e.getMessage());
-            return lastKnownSnapshot;
+            log.warn("NSE option-chain fetch failed: {}", e.getMessage());
+            return fromCacheAsPreviousClose();
         }
     }
 
-    public record OptionChainSnapshot(int support, int resistance, double spot, String expiry) {}
+    private OptionChainSnapshot fromCacheAsPreviousClose() {
+        OptionChainSnapshot cached = readCache();
+        if (cached == null) {
+            return lastKnownSnapshot;
+        }
+        if (isMarketOpenNow()) {
+            return cached;
+        }
+        return new OptionChainSnapshot(
+            cached.support(),
+            cached.resistance(),
+            cached.previousClose() > 0.0 ? cached.previousClose() : cached.spot(),
+            cached.expiry(),
+            cached.previousClose() > 0.0 ? cached.previousClose() : cached.spot(),
+            "PREV_CLOSE_CACHE"
+        );
+    }
+
+    private boolean isMarketOpenNow() {
+        ZonedDateTime now = ZonedDateTime.now(IST);
+        DayOfWeek day = now.getDayOfWeek();
+        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
+            return false;
+        }
+        LocalTime t = now.toLocalTime();
+        return !t.isBefore(LocalTime.of(9, 15)) && !t.isAfter(LocalTime.of(15, 30));
+    }
+
+    private void writeCache(OptionChainSnapshot snapshot) {
+        try {
+            mapper.writeValue(new File(CACHE_FILE), snapshot);
+        } catch (IOException e) {
+            log.warn("Unable to persist option-chain cache: {}", e.getMessage());
+        }
+    }
+
+    private OptionChainSnapshot readCache() {
+        File file = new File(CACHE_FILE);
+        if (!file.exists()) {
+            return null;
+        }
+        try {
+            return mapper.readValue(file, OptionChainSnapshot.class);
+        } catch (IOException e) {
+            log.warn("Unable to read option-chain cache: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public record OptionChainSnapshot(
+        int support,
+        int resistance,
+        double spot,
+        String expiry,
+        double previousClose,
+        String source
+    ) {}
 }
