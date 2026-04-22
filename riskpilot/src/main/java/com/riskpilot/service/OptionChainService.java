@@ -11,6 +11,7 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuil
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -46,12 +47,17 @@ public class OptionChainService {
     private final CookieStore cookieStore;
     private volatile long lastNsePrimeEpochMs = 0L;
     private final AngelOneMarketDataService angelOneMarketDataService;
+    private final DayOfWeek defaultExpiryDay;
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
-    public OptionChainService(AngelOneMarketDataService angelOneMarketDataService) {
+    public OptionChainService(
+        AngelOneMarketDataService angelOneMarketDataService,
+        @Value("${NIFTY_WEEKLY_EXPIRY_DAY:MONDAY}") String expiryDayConfig
+    ) {
         this.cookieStore = new BasicCookieStore();
         this.angelOneMarketDataService = angelOneMarketDataService;
+        this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
         HttpClient httpClient = HttpClients.custom()
             .setDefaultCookieStore(cookieStore)
             .setConnectionManager(
@@ -429,13 +435,22 @@ public class OptionChainService {
 
     private String computeNextThursdayExpiry() {
         LocalDate d = LocalDate.now(IST);
-        while (d.getDayOfWeek() != DayOfWeek.THURSDAY) {
+        while (d.getDayOfWeek() != defaultExpiryDay) {
             d = d.plusDays(1);
         }
         if (d.equals(LocalDate.now(IST)) && ZonedDateTime.now(IST).toLocalTime().isAfter(LocalTime.of(15, 30))) {
             d = d.plusDays(7);
         }
         return d.toString();
+    }
+
+    private DayOfWeek parseExpiryDay(String raw) {
+        if (raw == null || raw.isBlank()) return DayOfWeek.MONDAY;
+        try {
+            return DayOfWeek.valueOf(raw.trim().toUpperCase(Locale.ENGLISH));
+        } catch (IllegalArgumentException ignored) {
+            return DayOfWeek.MONDAY;
+        }
     }
 
     public record OptionChainSnapshot(
