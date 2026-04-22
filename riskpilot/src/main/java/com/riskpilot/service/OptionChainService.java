@@ -425,15 +425,25 @@ public class OptionChainService {
         if (!overridden.isBlank()) {
             return overridden;
         }
+        String computed = computeNextThursdayExpiry();
+        LocalDate today = LocalDate.now(IST);
+
+        // Use cached/snapshot expiry only when it matches configured weekly-expiry weekday.
         String fromSnapshot = lastKnownSnapshot.expiry();
-        if (fromSnapshot != null && !fromSnapshot.isBlank()) {
-            return fromSnapshot;
+        LocalDate snapshotDate = parseExpiryDate(fromSnapshot == null ? "" : fromSnapshot.trim());
+        if (snapshotDate != null && !snapshotDate.isBefore(today) && snapshotDate.getDayOfWeek() == defaultExpiryDay) {
+            return snapshotDate.toString();
         }
+
         OptionChainSnapshot cached = readCache();
         if (cached != null && cached.expiry() != null && !cached.expiry().isBlank()) {
-            return cached.expiry();
+            LocalDate cachedDate = parseExpiryDate(cached.expiry().trim());
+            if (cachedDate != null && !cachedDate.isBefore(today) && cachedDate.getDayOfWeek() == defaultExpiryDay) {
+                return cachedDate.toString();
+            }
         }
-        return computeNextThursdayExpiry();
+
+        return computed;
     }
 
     private String resolveNearestExpiry(JsonNode expiryDates) {
