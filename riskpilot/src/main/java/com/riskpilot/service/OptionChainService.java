@@ -48,16 +48,19 @@ public class OptionChainService {
     private volatile long lastNsePrimeEpochMs = 0L;
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final DayOfWeek defaultExpiryDay;
+    private final String explicitExpiryOverride;
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
-        @Value("${NIFTY_WEEKLY_EXPIRY_DAY:MONDAY}") String expiryDayConfig
+        @Value("${NIFTY_WEEKLY_EXPIRY_DAY:MONDAY}") String expiryDayConfig,
+        @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
         this.cookieStore = new BasicCookieStore();
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
+        this.explicitExpiryOverride = explicitExpiryOverride == null ? "" : explicitExpiryOverride.trim();
         HttpClient httpClient = HttpClients.custom()
             .setDefaultCookieStore(cookieStore)
             .setConnectionManager(
@@ -390,6 +393,10 @@ public class OptionChainService {
     }
 
     private String resolveFallbackExpiry() {
+        String overridden = resolveExplicitExpiryOverride();
+        if (!overridden.isBlank()) {
+            return overridden;
+        }
         String fromSnapshot = lastKnownSnapshot.expiry();
         if (fromSnapshot != null && !fromSnapshot.isBlank()) {
             return fromSnapshot;
@@ -402,6 +409,10 @@ public class OptionChainService {
     }
 
     private String resolveNearestExpiry(JsonNode expiryDates) {
+        String overridden = resolveExplicitExpiryOverride();
+        if (!overridden.isBlank()) {
+            return overridden;
+        }
         if (expiryDates == null || !expiryDates.isArray() || expiryDates.isEmpty()) {
             return "";
         }
@@ -418,6 +429,11 @@ public class OptionChainService {
             }
         }
         return best == null ? "" : best.toString();
+    }
+
+    private String resolveExplicitExpiryOverride() {
+        LocalDate parsed = parseExpiryDate(explicitExpiryOverride);
+        return parsed == null ? "" : parsed.toString();
     }
 
     private LocalDate parseExpiryDate(String raw) {
