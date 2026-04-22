@@ -27,6 +27,9 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Locale;
 
 @Service
 public class OptionChainService {
@@ -35,6 +38,8 @@ public class OptionChainService {
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final String CACHE_FILE = "option_chain_cache.json";
     private static final Duration NSE_PRIME_TTL = Duration.ofMinutes(10);
+    private static final DateTimeFormatter NSE_EXPIRY_FORMAT =
+        DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
@@ -98,11 +103,7 @@ public class OptionChainService {
             }
 
             JsonNode dataArray = records.get("data");
-            String nearestExpiry = "";
-            JsonNode expiryDates = records.get("expiryDates");
-            if (expiryDates != null && expiryDates.isArray() && !expiryDates.isEmpty()) {
-                nearestExpiry = expiryDates.get(0).asText("");
-            }
+            String nearestExpiry = resolveNearestExpiry(records.get("expiryDates"));
             
             double currentSpot = 0.0;
             if (records.has("underlyingValue")) {
@@ -138,7 +139,7 @@ public class OptionChainService {
             if (currentSpot > 0.0) {
                 String resolvedExpiry = nearestExpiry;
                 if (resolvedExpiry == null || resolvedExpiry.isBlank()) {
-                    resolvedExpiry = computeNextThursdayExpiry();
+                    resolvedExpiry = resolveFallbackExpiry();
                 }
 
                 double resolvedSpot = currentSpot;
@@ -287,7 +288,7 @@ public class OptionChainService {
             }
             double ltp = ltpOpt.get();
             double prevClose = lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp;
-            String expiry = computeNextThursdayExpiry();
+            String expiry = resolveFallbackExpiry();
             OptionChainSnapshot snap = new OptionChainSnapshot(
                 0,
                 0,
@@ -321,7 +322,7 @@ public class OptionChainService {
             JsonNode row = data.get(0);
             double last = row.path("last").asDouble(0.0);
             double prevClose = row.path("previousClose").asDouble(last);
-            String expiry = computeNextThursdayExpiry();
+            String expiry = resolveFallbackExpiry();
             return new OptionChainSnapshot(
                 0,
                 0,
@@ -354,7 +355,7 @@ public class OptionChainService {
                 if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
                     double last = row.path("last").asDouble(0.0);
                     double prevClose = row.path("previousClose").asDouble(last);
-                    String expiry = computeNextThursdayExpiry();
+                    String expiry = resolveFallbackExpiry();
                     return new OptionChainSnapshot(
                         0,
                         0,
@@ -380,6 +381,50 @@ public class OptionChainService {
         headers.set("Referer", "https://www.nseindia.com/");
         headers.set("Connection", "keep-alive");
         return headers;
+    }
+
+    private String resolveFallbackExpiry() {
+        String fromSnapshot = lastKnownSnapshot.expiry();
+        if (fromSnapshot != null && !fromSnapshot.isBlank()) {
+            return fromSnapshot;
+        }
+        OptionChainSnapshot cached = readCache();
+        if (cached != null && cached.expiry() != null && !cached.expiry().isBlank()) {
+            return cached.expiry();
+        }
+        return computeNextThursdayExpiry();
+    }
+
+    private String resolveNearestExpiry(JsonNode expiryDates) {
+        if (expiryDates == null || !expiryDates.isArray() || expiryDates.isEmpty()) {
+            return "";
+        }
+        LocalDate today = LocalDate.now(IST);
+        LocalDate best = null;
+        for (JsonNode expiryNode : expiryDates) {
+            String raw = expiryNode.asText("");
+            if (raw == null || raw.isBlank()) continue;
+            LocalDate parsed = parseExpiryDate(raw.trim());
+            if (parsed == null) continue;
+            if (parsed.isBefore(today)) continue;
+            if (best == null || parsed.isBefore(best)) {
+                best = parsed;
+            }
+        }
+        return best == null ? "" : best.toString();
+    }
+
+    private LocalDate parseExpiryDate(String raw) {
+        try {
+            return LocalDate.parse(raw);
+        } catch (DateTimeParseException ignored) {
+            // try NSE style: 24-Apr-2026
+        }
+        try {
+            return LocalDate.parse(raw, NSE_EXPIRY_FORMAT);
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private String computeNextThursdayExpiry() {

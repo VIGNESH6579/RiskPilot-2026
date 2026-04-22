@@ -67,14 +67,14 @@
     }
 
     function refreshState() {
-        fetch("/api/v1/monitor/state")
+        fetch(`/api/v1/monitor/state?ts=${Date.now()}`, { cache: "no-store" })
             .then((r) => r.json())
             .then((data) => render(data))
             .catch(() => {});
     }
 
     function refreshOptionChain() {
-        fetch("/api/v1/data/option-chain")
+        fetch(`/api/v1/data/option-chain?ts=${Date.now()}`, { cache: "no-store" })
             .then((r) => r.json())
             .then((data) => {
                 const spotEl = document.getElementById("spot");
@@ -131,7 +131,7 @@
     refreshOptionChain();
     connectSocket();
     setInterval(refreshState, 5000);
-    setInterval(refreshOptionChain, 10000);
+    setInterval(refreshOptionChain, 3000);
 </script>
 </body>
 </html>
