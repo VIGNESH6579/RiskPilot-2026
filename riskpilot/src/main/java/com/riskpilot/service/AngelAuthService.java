@@ -17,16 +17,16 @@ import java.util.Map;
 @Service
 public class AngelAuthService {
 
-    @Value("${angelapi.key}")
+    @Value("${ANGEL_API_KEY:${angelapi.key:}}")
     private String apiKey;
 
-    @Value("${angelapi.clientcode}")
+    @Value("${ANGEL_CLIENT_ID:${angelapi.clientcode:}}")
     private String clientCode;
 
-    @Value("${angelapi.pin}")
+    @Value("${ANGEL_PIN:${angelapi.pin:}}")
     private String pin;
 
-    @Value("${angelapi.totp.secret}")
+    @Value("${ANGEL_TOTP_SECRET:${angelapi.totp.secret:}}")
     private String totpSecret;
 
     private String currentJwtToken;

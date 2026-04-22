@@ -12,7 +12,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,18 +21,14 @@ public class AngelOneMarketDataService {
 
     private static final Logger log = LoggerFactory.getLogger(AngelOneMarketDataService.class);
     private static final String QUOTE_URL = "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/";
+    private static final String NIFTY_INDEX_TOKEN = "99926000";
 
     private final AngelAuthService authService;
-    private final AngelInstrumentMasterService instrumentMasterService;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public AngelOneMarketDataService(
-        AngelAuthService authService,
-        AngelInstrumentMasterService instrumentMasterService
-    ) {
+    public AngelOneMarketDataService(AngelAuthService authService) {
         this.authService = authService;
-        this.instrumentMasterService = instrumentMasterService;
     }
 
     public Optional<Double> getNiftyLtp() {
@@ -42,12 +37,10 @@ public class AngelOneMarketDataService {
             String jwt = authService.getJwtToken();
             if (jwt == null || jwt.isBlank()) return Optional.empty();
 
-            String token = instrumentMasterService.resolveNiftyIndexToken().orElse("99926000");
-
             HttpHeaders headers = baseHeaders(jwt);
             Map<String, Object> payload = Map.of(
                 "mode", "LTP",
-                "exchangeTokens", Map.of("NSE", List.of(token))
+                "exchangeTokens", Map.of("NSE", List.of(NIFTY_INDEX_TOKEN))
             );
 
             ResponseEntity<String> response =
@@ -68,10 +61,6 @@ public class AngelOneMarketDataService {
             log.warn("AngelOne LTP fetch failed: {}", e.getMessage());
             return Optional.empty();
         }
-    }
-
-    public Optional<LocalDate> getNearestExpiry() {
-        return instrumentMasterService.resolveNearestNiftyWeeklyExpiry();
     }
 
     private void ensureAuth() {

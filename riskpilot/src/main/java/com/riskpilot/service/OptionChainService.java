@@ -138,7 +138,7 @@ public class OptionChainService {
             if (currentSpot > 0.0) {
                 String resolvedExpiry = nearestExpiry;
                 if (resolvedExpiry == null || resolvedExpiry.isBlank()) {
-                    resolvedExpiry = angelOneMarketDataService.getNearestExpiry().map(LocalDate::toString).orElse("");
+                    resolvedExpiry = computeNextThursdayExpiry();
                 }
 
                 double resolvedSpot = currentSpot;
@@ -287,7 +287,7 @@ public class OptionChainService {
             }
             double ltp = ltpOpt.get();
             double prevClose = lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp;
-            String expiry = angelOneMarketDataService.getNearestExpiry().map(LocalDate::toString).orElse("");
+            String expiry = computeNextThursdayExpiry();
             OptionChainSnapshot snap = new OptionChainSnapshot(
                 0,
                 0,
