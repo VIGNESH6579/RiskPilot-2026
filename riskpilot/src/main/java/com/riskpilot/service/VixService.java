@@ -2,6 +2,8 @@ package com.riskpilot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -11,19 +13,27 @@ import org.springframework.web.client.RestTemplate;
 
 @Service
 public class VixService {
+    private static final Logger log = LoggerFactory.getLogger(VixService.class);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
     
     // Cached fallback
     private double lastKnownVix = 15.0;
+    private long lastSuccessfulFetchEpochMs = 0L;
+    private static final long VIX_CACHE_MS = 20_000L;
 
     public VixService() {
         this.restTemplate = new RestTemplate();
         this.mapper = new ObjectMapper();
     }
 
-    public double getIndiaVix() {
+    public synchronized double getIndiaVix() {
+        long now = System.currentTimeMillis();
+        if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
+            return lastKnownVix;
+        }
+
         String url = "https://www.nseindia.com/api/allIndices";
 
         try {
@@ -47,12 +57,13 @@ public class VixService {
                 for (JsonNode obj : data) {
                     if (obj.has("index") && obj.get("index").asText().equalsIgnoreCase("INDIA VIX")) {
                         lastKnownVix = obj.get("last").asDouble();
+                        lastSuccessfulFetchEpochMs = now;
                         return lastKnownVix;
                     }
                 }
             }
         } catch (Exception e) {
-            System.err.println("⚠️ NSE VIX API Fetch Failed. Returning localized fallback cache. Err: " + e.getMessage());
+            log.warn("NSE VIX fetch failed, returning cached value: {}", e.getMessage());
         }
 
         return lastKnownVix;

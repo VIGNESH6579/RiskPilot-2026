@@ -3,6 +3,8 @@ package com.riskpilot.service;
 import dev.samstevens.totp.code.DefaultCodeGenerator;
 import dev.samstevens.totp.code.HashingAlgorithm;
 import dev.samstevens.totp.exceptions.CodeGenerationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -16,6 +18,9 @@ import java.util.Map;
 
 @Service
 public class AngelAuthService {
+    private static final Logger log = LoggerFactory.getLogger(AngelAuthService.class);
+    private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
+    private static final long AUTH_RETRY_GUARD_MS = 5000L;
 
     @Value("${ANGEL_API_KEY:${angelapi.key:}}")
     private String apiKey;
@@ -29,14 +34,22 @@ public class AngelAuthService {
     @Value("${ANGEL_TOTP_SECRET:${angelapi.totp.secret:}}")
     private String totpSecret;
 
+    private final RestTemplate restTemplate = new RestTemplate();
     private String currentJwtToken;
     private String currentFeedToken;
-    private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
+    private long lastAuthAttemptEpochMs = 0L;
 
-    public void authenticate() {
-        System.out.println(">>> Requesting SmartAPI Authentication natively cleanly effectively securely squarely... ");
-        RestTemplate restTemplate = new RestTemplate();
-        
+    public synchronized boolean authenticate() {
+        if (!hasCredentials()) {
+            log.warn("Angel auth skipped: missing credentials");
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAuthAttemptEpochMs < AUTH_RETRY_GUARD_MS) {
+            return currentJwtToken != null && !currentJwtToken.isBlank();
+        }
+        lastAuthAttemptEpochMs = now;
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("Accept", "application/json");
@@ -53,25 +66,29 @@ public class AngelAuthService {
         try {
             body.put("totp", generateTotp());
         } catch (Exception e) {
-            System.err.println("CRITICAL FAILURE GENERATING TOTP safely compactly confidently neatly correctly natively smoothly cleanly firmly");
-            return;
+            log.error("Angel auth failed: unable to generate TOTP: {}", e.getMessage());
+            return false;
         }
 
         HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
         
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(AUTH_URL, request, Map.class);
-            if (response.getBody() != null && (Boolean) response.getBody().get("status")) {
+            if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
                 Map<String, String> data = (Map<String, String>) response.getBody().get("data");
                 currentJwtToken = data.get("jwtToken");
                 currentFeedToken = data.get("feedToken");
-                System.out.println("[+] SmartAPI Authentication Success solidly squarely explicitly intelligently safely softly confidently");
+                log.info("Angel auth success");
+                return true;
             } else {
-                System.err.println("[-] SmartAPI Auth Rejected securely flawlessly nicely smoothly natively confidently precisely: " + response.getBody());
+                log.warn("Angel auth rejected: {}", response.getBody());
             }
         } catch (Exception e) {
-             System.err.println("[-] SmartAPI HTTP Error safely neatly appropriately elegantly cleanly snugly stably dynamically fluently safely");
+            log.warn("Angel auth request failed: {}", e.getMessage());
         }
+        currentJwtToken = null;
+        currentFeedToken = null;
+        return false;
     }
 
     private String generateTotp() throws CodeGenerationException {
@@ -84,4 +101,14 @@ public class AngelAuthService {
     public String getFeedToken() { return currentFeedToken; }
     public String getApiKey() { return apiKey; }
     public String getClientCode() { return clientCode; }
+    public boolean hasCredentials() {
+        return apiKey != null && !apiKey.isBlank()
+            && clientCode != null && !clientCode.isBlank()
+            && pin != null && !pin.isBlank()
+            && totpSecret != null && !totpSecret.isBlank();
+    }
+    public synchronized void invalidateSession() {
+        currentJwtToken = null;
+        currentFeedToken = null;
+    }
 }
