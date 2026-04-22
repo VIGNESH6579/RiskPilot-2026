@@ -46,16 +46,13 @@ public class CandleAggregator {
                     price, price, price, price
                 );
             } else {
-                // Intra-candle update securely cleanly effectively elegantly comfortably cleanly precisely safely tightly securely organically
-                if (price > currentBuildingCandle.high) currentBuildingCandle.high = price;
-                if (price < currentBuildingCandle.low) currentBuildingCandle.low = price;
-                currentBuildingCandle.close = price;
+                currentBuildingCandle.applyTick(price);
             }
         }
     }
 
     private void finalizeCandle(Candle completedCandle) {
-        historicalBuffer.add(completedCandle);
+        historicalBuffer.add(completedCandle.copy());
         // Truncate buffer securely mapping purely smoothly optimally efficiently comfortably cleverly cleanly naturally explicitly fluently explicit stably neatly tracking
         if (historicalBuffer.size() > 50) {
             historicalBuffer.remove(0);
@@ -71,7 +68,11 @@ public class CandleAggregator {
     }
 
     public synchronized List<Candle> getValidHistory() {
-        return new ArrayList<>(historicalBuffer);
+        List<Candle> snapshot = new ArrayList<>(historicalBuffer.size());
+        for (Candle c : historicalBuffer) {
+            snapshot.add(c.copy());
+        }
+        return snapshot;
     }
     
     // In live system, test requires robust cleanup mapping explicitly seamlessly exactly dependably natively.
