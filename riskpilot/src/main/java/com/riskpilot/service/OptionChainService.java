@@ -2,8 +2,16 @@ package com.riskpilot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.hc.client5.http.classic.HttpClient;
+import org.apache.hc.client5.http.config.ConnectionConfig;
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
+import org.apache.hc.client5.http.cookie.CookieStore;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -13,6 +21,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -25,14 +34,35 @@ public class OptionChainService {
     private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final String CACHE_FILE = "option_chain_cache.json";
+    private static final Duration NSE_PRIME_TTL = Duration.ofMinutes(10);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
+    private final CookieStore cookieStore;
+    private volatile long lastNsePrimeEpochMs = 0L;
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
     public OptionChainService() {
-        this.restTemplate = new RestTemplate();
+        this.cookieStore = new BasicCookieStore();
+        HttpClient httpClient = HttpClients.custom()
+            .setDefaultCookieStore(cookieStore)
+            .setConnectionManager(
+                PoolingHttpClientConnectionManagerBuilder.create()
+                    .setDefaultConnectionConfig(
+                        ConnectionConfig.custom()
+                            .setConnectTimeout(Timeout.ofSeconds(6))
+                            .setSocketTimeout(Timeout.ofSeconds(8))
+                            .build()
+                    )
+                    .build()
+            )
+            .evictExpiredConnections()
+            .build();
+
+        HttpComponentsClientHttpRequestFactory requestFactory = new HttpComponentsClientHttpRequestFactory(httpClient);
+
+        this.restTemplate = new RestTemplate(requestFactory);
         this.mapper = new ObjectMapper();
     }
 
@@ -42,10 +72,13 @@ public class OptionChainService {
         boolean marketOpen = isMarketOpenNow();
 
         try {
+            primeNseCookiesIfNeeded();
+
             HttpHeaders headers = new HttpHeaders();
             headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
             headers.set("Accept", "application/json");
             headers.set("Referer", "https://www.nseindia.com/get-quotes/derivatives?symbol=NIFTY");
+            headers.set("Accept-Language", "en-US,en;q=0.9");
             headers.set("Connection", "keep-alive");
 
             HttpEntity<String> entity = new HttpEntity<>(headers);
@@ -59,7 +92,7 @@ public class OptionChainService {
             JsonNode records = json.get("records");
             
             if (records == null || !records.has("data")) {
-                return fetchFromYahooFallback(marketOpen);
+                return fetchFromNseIndexFallback(marketOpen);
             }
 
             JsonNode dataArray = records.get("data");
@@ -74,7 +107,7 @@ public class OptionChainService {
                 currentSpot = records.get("underlyingValue").asDouble();
             }
             if (currentSpot <= 0.0) {
-                return fetchFromYahooFallback(marketOpen);
+                return fetchFromNseIndexFallback(marketOpen);
             }
 
             double maxCE = 0, maxPE = 0;
@@ -122,7 +155,33 @@ public class OptionChainService {
             if (fallback.spot() > 0.0) {
                 return fallback;
             }
-            return fetchFromYahooFallback(marketOpen);
+            return fetchFromNseIndexFallback(marketOpen);
+        }
+    }
+
+    private void primeNseCookiesIfNeeded() {
+        long now = System.currentTimeMillis();
+        if (now - lastNsePrimeEpochMs < NSE_PRIME_TTL.toMillis()) {
+            return;
+        }
+
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            headers.set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            headers.set("Accept-Language", "en-US,en;q=0.9");
+            headers.set("Referer", "https://www.nseindia.com/");
+            headers.set("Connection", "keep-alive");
+
+            restTemplate.exchange(
+                "https://www.nseindia.com/",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                String.class
+            );
+            lastNsePrimeEpochMs = now;
+        } catch (Exception e) {
+            log.warn("NSE cookie prime failed: {}", e.getMessage());
         }
     }
 
@@ -175,38 +234,104 @@ public class OptionChainService {
         }
     }
 
-    private OptionChainSnapshot fetchFromYahooFallback(boolean marketOpen) {
-        String url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=%5ENSEI";
+    private OptionChainSnapshot fetchFromNseIndexFallback(boolean marketOpen) {
         try {
-            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, HttpEntity.EMPTY, String.class);
+            primeNseCookiesIfNeeded();
+
+            OptionChainSnapshot fromEquity = fetchFromNseEquityStockIndices(marketOpen);
+            if (fromEquity.spot() > 0.0) {
+                lastKnownSnapshot = fromEquity;
+                return fromEquity;
+            }
+
+            OptionChainSnapshot fromAll = fetchFromNseAllIndices(marketOpen);
+            if (fromAll.spot() > 0.0) {
+                lastKnownSnapshot = fromAll;
+                return fromAll;
+            }
+
+            return lastKnownSnapshot;
+        } catch (Exception ex) {
+            log.warn("NSE index fallback fetch failed: {}", ex.getMessage());
+            return lastKnownSnapshot;
+        }
+    }
+
+    private OptionChainSnapshot fetchFromNseEquityStockIndices(boolean marketOpen) {
+        String url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050";
+        try {
+            ResponseEntity<String> response =
+                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
             if (response.getBody() == null) {
                 return lastKnownSnapshot;
             }
             JsonNode root = mapper.readTree(response.getBody());
-            JsonNode result = root.path("quoteResponse").path("result");
-            if (!result.isArray() || result.isEmpty()) {
+            JsonNode data = root.path("data");
+            if (!data.isArray() || data.isEmpty()) {
                 return lastKnownSnapshot;
             }
-            JsonNode q = result.get(0);
-            double live = q.path("regularMarketPrice").asDouble(0.0);
-            double prevClose = q.path("regularMarketPreviousClose").asDouble(live);
+            JsonNode row = data.get(0);
+            double last = row.path("last").asDouble(0.0);
+            double prevClose = row.path("previousClose").asDouble(last);
             String expiry = computeNextThursdayExpiry();
-            OptionChainSnapshot snap = new OptionChainSnapshot(
+            return new OptionChainSnapshot(
                 0,
                 0,
-                marketOpen ? live : prevClose,
+                marketOpen ? last : prevClose,
                 expiry,
                 prevClose,
-                marketOpen ? "YAHOO_LIVE_FALLBACK" : "YAHOO_PREV_CLOSE_FALLBACK"
+                marketOpen ? "NSE_INDEX_LIVE_FALLBACK" : "NSE_INDEX_PREV_CLOSE_FALLBACK"
             );
-            if (snap.spot() > 0.0) {
-                lastKnownSnapshot = snap;
-            }
-            return snap;
-        } catch (Exception ex) {
-            log.warn("Yahoo fallback fetch failed: {}", ex.getMessage());
+        } catch (Exception e) {
+            log.warn("NSE equity-stockIndices fallback failed: {}", e.getMessage());
             return lastKnownSnapshot;
         }
+    }
+
+    private OptionChainSnapshot fetchFromNseAllIndices(boolean marketOpen) {
+        String url = "https://www.nseindia.com/api/allIndices";
+        try {
+            ResponseEntity<String> response =
+                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
+            if (response.getBody() == null) {
+                return lastKnownSnapshot;
+            }
+            JsonNode root = mapper.readTree(response.getBody());
+            JsonNode data = root.path("data");
+            if (!data.isArray() || data.isEmpty()) {
+                return lastKnownSnapshot;
+            }
+            for (JsonNode row : data) {
+                String name = row.path("index").asText("");
+                if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
+                    double last = row.path("last").asDouble(0.0);
+                    double prevClose = row.path("previousClose").asDouble(last);
+                    String expiry = computeNextThursdayExpiry();
+                    return new OptionChainSnapshot(
+                        0,
+                        0,
+                        marketOpen ? last : prevClose,
+                        expiry,
+                        prevClose,
+                        marketOpen ? "NSE_ALL_INDICES_LIVE_FALLBACK" : "NSE_ALL_INDICES_PREV_CLOSE_FALLBACK"
+                    );
+                }
+            }
+            return lastKnownSnapshot;
+        } catch (Exception e) {
+            log.warn("NSE allIndices fallback failed: {}", e.getMessage());
+            return lastKnownSnapshot;
+        }
+    }
+
+    private HttpHeaders defaultNseJsonHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        headers.set("Accept", "application/json");
+        headers.set("Accept-Language", "en-US,en;q=0.9");
+        headers.set("Referer", "https://www.nseindia.com/");
+        headers.set("Connection", "keep-alive");
+        return headers;
     }
 
     private String computeNextThursdayExpiry() {
