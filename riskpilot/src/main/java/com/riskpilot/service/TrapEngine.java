@@ -52,7 +52,7 @@ public class TrapEngine {
                 if (distanceToSL > 120.0) return null;
 
                 Signal s = new Signal();
-                s.setSymbol("BANKNIFTY");
+                s.setSymbol("NIFTY");
                 s.setDirection("SHORT");
                 s.setEntry(entry);
                 s.setStopLoss(sl);

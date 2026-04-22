@@ -23,6 +23,7 @@ public class ShadowExecutionEngine {
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
     private final RiskGateEngine riskGateEngine;
+    private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
 
@@ -36,6 +37,7 @@ public class ShadowExecutionEngine {
         CandleAggregator candleAggregator,
         TrapEngine trapEngine,
         RiskGateEngine riskGateEngine,
+        VixService vixService,
         LiveMetricsLogger liveMetricsLogger,
         WebSocketService webSocketService
     ) {
@@ -43,6 +45,7 @@ public class ShadowExecutionEngine {
         this.candleAggregator = candleAggregator;
         this.trapEngine = trapEngine;
         this.riskGateEngine = riskGateEngine;
+        this.vixService = vixService;
         this.liveMetricsLogger = liveMetricsLogger;
         this.webSocketService = webSocketService;
     }
@@ -124,8 +127,8 @@ public class ShadowExecutionEngine {
 
         double localSupport = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.low).min().orElse(newestCandle.low);
         double localResistance = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.high).max().orElse(newestCandle.high);
-        double syntheticVix = 16.0;
-        Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, syntheticVix);
+        double liveVix = vixService.getIndiaVix();
+        Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix);
         if (signal == null) {
             return;
         }

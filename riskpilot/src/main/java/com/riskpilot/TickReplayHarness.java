@@ -9,6 +9,7 @@ import com.riskpilot.service.RiskGateEngine;
 import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
 import com.riskpilot.service.TrapEngine;
+import com.riskpilot.service.VixService;
 import com.riskpilot.service.WebSocketService;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.support.ExecutorSubscribableChannel;
@@ -38,6 +39,7 @@ public class TickReplayHarness {
         CandleAggregator candleAggregator = new CandleAggregator();
         HeartbeatMonitor heartbeatMonitor = new HeartbeatMonitor(stateManager, candleAggregator);
         RiskGateEngine riskGateEngine = new RiskGateEngine();
+        VixService vixService = new VixService();
         LiveMetricsLogger liveMetricsLogger = new LiveMetricsLogger();
         WebSocketService webSocketService = new WebSocketService(new SimpMessagingTemplate(new ExecutorSubscribableChannel()));
         ShadowExecutionEngine executionEngine = new ShadowExecutionEngine(
@@ -45,6 +47,7 @@ public class TickReplayHarness {
             candleAggregator,
             trapEngine,
             riskGateEngine,
+            vixService,
             liveMetricsLogger,
             webSocketService
         );
