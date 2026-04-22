@@ -35,7 +35,7 @@ public class TickReplayHarness {
         List<Candle> historicalCandles = parseCsv("banknifty_5m.csv");
         
         SessionStateManager stateManager = new SessionStateManager();
-        TrapEngine trapEngine = new TrapEngine();
+        TrapEngine trapEngine = new TrapEngine(15.0, 18.0);
         CandleAggregator candleAggregator = new CandleAggregator();
         HeartbeatMonitor heartbeatMonitor = new HeartbeatMonitor(stateManager, candleAggregator);
         RiskGateEngine riskGateEngine = new RiskGateEngine();

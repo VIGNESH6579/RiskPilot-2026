@@ -2,17 +2,28 @@ package com.riskpilot.service;
 
 import com.riskpilot.model.Candle;
 import com.riskpilot.model.Signal;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
 public class TrapEngine {
+    private final double minVix;
+    private final double maxVix;
+
+    public TrapEngine(
+        @Value("${TRAP_MIN_VIX:15}") double minVix,
+        @Value("${TRAP_MAX_VIX:18}") double maxVix
+    ) {
+        this.minVix = minVix;
+        this.maxVix = maxVix;
+    }
 
     public Signal detectTrap(List<Candle> history, double localSupport, double localResistance, double vix) {
         if (history.size() < 7) return null; 
 
-        if (vix < 15 || vix > 18) {
+        if (vix < minVix || vix > maxVix) {
             return null;
         }
 

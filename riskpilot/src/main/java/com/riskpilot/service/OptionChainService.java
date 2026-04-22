@@ -54,7 +54,7 @@ public class OptionChainService {
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
-        @Value("${NIFTY_WEEKLY_EXPIRY_DAY:MONDAY}") String expiryDayConfig,
+        @Value("${NIFTY_WEEKLY_EXPIRY_DAY:TUESDAY}") String expiryDayConfig,
         @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
         this.cookieStore = new BasicCookieStore();
@@ -161,9 +161,9 @@ public class OptionChainService {
                     }
                 }
 
-                double previousClose = lastKnownSnapshot.previousClose() > 0.0
-                    ? lastKnownSnapshot.previousClose()
-                    : currentSpot;
+                double previousClose = fetchNsePreviousClose().orElse(
+                    lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : currentSpot
+                );
                 lastKnownSnapshot = new OptionChainSnapshot(
                     support,
                     resistance,
@@ -296,7 +296,9 @@ public class OptionChainService {
                 return lastKnownSnapshot;
             }
             double ltp = ltpOpt.get();
-            double prevClose = lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp;
+            double prevClose = fetchNsePreviousClose().orElse(
+                lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp
+            );
             String expiry = resolveFallbackExpiry();
             OptionChainSnapshot snap = new OptionChainSnapshot(
                 0,
@@ -392,6 +394,32 @@ public class OptionChainService {
         return headers;
     }
 
+    private java.util.Optional<Double> fetchNsePreviousClose() {
+        String url = "https://www.nseindia.com/api/allIndices";
+        try {
+            ResponseEntity<String> response =
+                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
+            if (response.getBody() == null || response.getBody().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            JsonNode root = mapper.readTree(response.getBody());
+            JsonNode data = root.path("data");
+            if (!data.isArray()) return java.util.Optional.empty();
+            for (JsonNode row : data) {
+                String name = row.path("index").asText("");
+                if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
+                    double prevClose = row.path("previousClose").asDouble(0.0);
+                    if (prevClose > 0.0) {
+                        return java.util.Optional.of(prevClose);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Unable to fetch NSE previous close: {}", e.getMessage());
+        }
+        return java.util.Optional.empty();
+    }
+
     private String resolveFallbackExpiry() {
         String overridden = resolveExplicitExpiryOverride();
         if (!overridden.isBlank()) {
@@ -461,11 +489,11 @@ public class OptionChainService {
     }
 
     private DayOfWeek parseExpiryDay(String raw) {
-        if (raw == null || raw.isBlank()) return DayOfWeek.MONDAY;
+        if (raw == null || raw.isBlank()) return DayOfWeek.TUESDAY;
         try {
             return DayOfWeek.valueOf(raw.trim().toUpperCase(Locale.ENGLISH));
         } catch (IllegalArgumentException ignored) {
-            return DayOfWeek.MONDAY;
+            return DayOfWeek.TUESDAY;
         }
     }
 

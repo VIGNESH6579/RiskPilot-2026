@@ -13,6 +13,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -33,6 +37,12 @@ public class AngelAuthService {
 
     @Value("${ANGEL_TOTP_SECRET:${angelapi.totp.secret:}}")
     private String totpSecret;
+    @Value("${ANGEL_CLIENT_LOCAL_IP:}")
+    private String configuredLocalIp;
+    @Value("${ANGEL_CLIENT_PUBLIC_IP:}")
+    private String configuredPublicIp;
+    @Value("${ANGEL_CLIENT_MAC:}")
+    private String configuredMac;
 
     private final RestTemplate restTemplate = new RestTemplate();
     private String currentJwtToken;
@@ -55,9 +65,9 @@ public class AngelAuthService {
         headers.set("Accept", "application/json");
         headers.set("X-UserType", "USER");
         headers.set("X-SourceID", "WEB");
-        headers.set("X-ClientLocalIP", "192.168.1.1");
-        headers.set("X-ClientPublicIP", "106.193.147.98");
-        headers.set("X-MACAddress", "fe80::216:3eff:fe00:0000");
+        headers.set("X-ClientLocalIP", resolveLocalIp());
+        headers.set("X-ClientPublicIP", resolvePublicIp());
+        headers.set("X-MACAddress", resolveMacAddress());
         headers.set("X-PrivateKey", apiKey);
 
         Map<String, String> body = new HashMap<>();
@@ -110,5 +120,54 @@ public class AngelAuthService {
     public synchronized void invalidateSession() {
         currentJwtToken = null;
         currentFeedToken = null;
+    }
+
+    private String resolveLocalIp() {
+        if (configuredLocalIp != null && !configuredLocalIp.isBlank()) {
+            return configuredLocalIp.trim();
+        }
+        try {
+            return InetAddress.getLocalHost().getHostAddress();
+        } catch (Exception ignored) {
+            return "127.0.0.1";
+        }
+    }
+
+    private String resolvePublicIp() {
+        if (configuredPublicIp != null && !configuredPublicIp.isBlank()) {
+            return configuredPublicIp.trim();
+        }
+        // Best-effort fallback; keep request valid even if lookup fails.
+        try {
+            String ip = restTemplate.getForObject("https://api.ipify.org", String.class);
+            if (ip != null && !ip.isBlank()) {
+                return ip.trim();
+            }
+        } catch (Exception ignored) {
+        }
+        return resolveLocalIp();
+    }
+
+    private String resolveMacAddress() {
+        if (configuredMac != null && !configuredMac.isBlank()) {
+            return configuredMac.trim();
+        }
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (ni.isLoopback() || !ni.isUp()) continue;
+                byte[] mac = ni.getHardwareAddress();
+                if (mac == null || mac.length == 0) continue;
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < mac.length; i++) {
+                    if (i > 0) sb.append(":");
+                    sb.append(String.format("%02X", mac[i]));
+                }
+                return sb.toString();
+            }
+        } catch (SocketException ignored) {
+        }
+        return "00:00:00:00:00:00";
     }
 }

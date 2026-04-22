@@ -8,7 +8,7 @@ import java.util.List;
 public class BacktestRunner {
 
     public static void main(String[] args) {
-        TrapEngine trapEngine = new TrapEngine();
+        TrapEngine trapEngine = new TrapEngine(15.0, 18.0);
         BacktestEngine engine = new BacktestEngine(trapEngine);
         
         System.out.println("====================================================");

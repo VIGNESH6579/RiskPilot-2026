@@ -41,7 +41,11 @@ def parse_line(line: str):
         parts = next(csv.reader([line]))
     except Exception:
         return None
-    if len(parts) < 11:
+    # Expected CSV columns (LiveMetricsLogger):
+    # 0 signalTime, 1 executionTime, 2 latencySec, 3 expectedEntry, 4 actualEntry,
+    # 5 entrySlippage, 6 expectedExit, 7 actualExit, 8 exitSlippage, 9 tp1Hit,
+    # 10 runnerCaptured, 11 mfe, 12 mae, 13 realizedR, ... 19 exitReason, 20 exitTime
+    if len(parts) < 21:
         return None
 
     if parts[0].strip().lower() == "signaltime":
@@ -56,11 +60,12 @@ def parse_line(line: str):
         "expectedEntry": _to_float(parts[3]),
         "actualEntry": _to_float(parts[4]),
         "slippage": _to_float(parts[5]),
-        "mfe": _to_float(parts[6]),
-        "mae": _to_float(parts[7]),
-        "isRunner": str(parts[8]).strip().lower() == "true",
-        "exitReason": parts[9],
-        "exitTime": parts[10],
+        "mfe": _to_float(parts[11]),
+        "mae": _to_float(parts[12]),
+        "realizedR": _to_float(parts[13]),
+        "isRunner": str(parts[10]).strip().lower() == "true",
+        "exitReason": parts[19],
+        "exitTime": parts[20],
         "observerTs": time.time(),
     }
 
