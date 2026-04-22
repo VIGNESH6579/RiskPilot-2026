@@ -40,11 +40,13 @@ public class OptionChainService {
     private final ObjectMapper mapper;
     private final CookieStore cookieStore;
     private volatile long lastNsePrimeEpochMs = 0L;
+    private final AngelOneMarketDataService angelOneMarketDataService;
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
-    public OptionChainService() {
+    public OptionChainService(AngelOneMarketDataService angelOneMarketDataService) {
         this.cookieStore = new BasicCookieStore();
+        this.angelOneMarketDataService = angelOneMarketDataService;
         HttpClient httpClient = HttpClients.custom()
             .setDefaultCookieStore(cookieStore)
             .setConnectionManager(
@@ -92,7 +94,7 @@ public class OptionChainService {
             JsonNode records = json.get("records");
             
             if (records == null || !records.has("data")) {
-                return fetchFromNseIndexFallback(marketOpen);
+                return fetchFromAngelThenNseFallback(marketOpen);
             }
 
             JsonNode dataArray = records.get("data");
@@ -107,7 +109,7 @@ public class OptionChainService {
                 currentSpot = records.get("underlyingValue").asDouble();
             }
             if (currentSpot <= 0.0) {
-                return fetchFromNseIndexFallback(marketOpen);
+                return fetchFromAngelThenNseFallback(marketOpen);
             }
 
             double maxCE = 0, maxPE = 0;
@@ -134,16 +136,31 @@ public class OptionChainService {
             }
 
             if (currentSpot > 0.0) {
+                String resolvedExpiry = nearestExpiry;
+                if (resolvedExpiry == null || resolvedExpiry.isBlank()) {
+                    resolvedExpiry = angelOneMarketDataService.getNearestExpiry().map(LocalDate::toString).orElse("");
+                }
+
+                double resolvedSpot = currentSpot;
+                String resolvedSource = marketOpen ? "LIVE_MARKET" : "PREV_CLOSE_CACHE";
+                if (marketOpen) {
+                    var angelLtp = angelOneMarketDataService.getNiftyLtp();
+                    if (angelLtp.isPresent() && angelLtp.get() > 0.0) {
+                        resolvedSpot = angelLtp.get();
+                        resolvedSource = "ANGELONE_LTP";
+                    }
+                }
+
                 double previousClose = lastKnownSnapshot.previousClose() > 0.0
                     ? lastKnownSnapshot.previousClose()
                     : currentSpot;
                 lastKnownSnapshot = new OptionChainSnapshot(
                     support,
                     resistance,
-                    marketOpen ? currentSpot : previousClose,
-                    nearestExpiry,
+                    marketOpen ? resolvedSpot : previousClose,
+                    resolvedExpiry,
                     previousClose,
-                    marketOpen ? "LIVE_MARKET" : "PREV_CLOSE_CACHE"
+                    resolvedSource
                 );
                 writeCache(lastKnownSnapshot);
             }
@@ -155,7 +172,7 @@ public class OptionChainService {
             if (fallback.spot() > 0.0) {
                 return fallback;
             }
-            return fetchFromNseIndexFallback(marketOpen);
+            return fetchFromAngelThenNseFallback(marketOpen);
         }
     }
 
@@ -234,8 +251,13 @@ public class OptionChainService {
         }
     }
 
-    private OptionChainSnapshot fetchFromNseIndexFallback(boolean marketOpen) {
+    private OptionChainSnapshot fetchFromAngelThenNseFallback(boolean marketOpen) {
         try {
+            OptionChainSnapshot angel = fetchFromAngelFallback(marketOpen);
+            if (angel.spot() > 0.0) {
+                return angel;
+            }
+
             primeNseCookiesIfNeeded();
 
             OptionChainSnapshot fromEquity = fetchFromNseEquityStockIndices(marketOpen);
@@ -253,6 +275,32 @@ public class OptionChainService {
             return lastKnownSnapshot;
         } catch (Exception ex) {
             log.warn("NSE index fallback fetch failed: {}", ex.getMessage());
+            return lastKnownSnapshot;
+        }
+    }
+
+    private OptionChainSnapshot fetchFromAngelFallback(boolean marketOpen) {
+        try {
+            var ltpOpt = angelOneMarketDataService.getNiftyLtp();
+            if (ltpOpt.isEmpty() || ltpOpt.get() <= 0.0) {
+                return lastKnownSnapshot;
+            }
+            double ltp = ltpOpt.get();
+            double prevClose = lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp;
+            String expiry = angelOneMarketDataService.getNearestExpiry().map(LocalDate::toString).orElse("");
+            OptionChainSnapshot snap = new OptionChainSnapshot(
+                0,
+                0,
+                marketOpen ? ltp : prevClose,
+                expiry,
+                prevClose,
+                marketOpen ? "ANGELONE_LTP" : "ANGELONE_PREV_CLOSE_CACHE"
+            );
+            lastKnownSnapshot = snap;
+            writeCache(snap);
+            return snap;
+        } catch (Exception e) {
+            log.warn("Angel fallback failed: {}", e.getMessage());
             return lastKnownSnapshot;
         }
     }
