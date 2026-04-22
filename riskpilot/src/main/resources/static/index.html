@@ -8,11 +8,16 @@
     <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
+        .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
         .grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .card { background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
         .label { color: #94a3b8; font-size: 12px; }
         .value { font-size: 20px; margin-top: 5px; font-weight: 700; }
         .panel { margin-top: 14px; background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+        .clock { font-size: 14px; color: #93c5fd; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+        th, td { padding: 8px; border-bottom: 1px solid #334155; text-align: left; }
+        th { color: #94a3b8; font-weight: 600; }
         .ok { color: #22c55e; }
         .bad { color: #ef4444; }
         .warn { color: #f59e0b; }
@@ -20,7 +25,10 @@
     </style>
 </head>
 <body>
-<h2>RiskPilot Monitor (Read-Only)</h2>
+<div class="topbar">
+    <h2>RiskPilot Monitor (Read-Only)</h2>
+    <div id="clock" class="clock">IST: -</div>
+</div>
 <div id="wsStatus" class="warn">Socket: Connecting...</div>
 
 <div class="grid">
@@ -43,6 +51,26 @@
 <div class="panel">
     <div class="label">Last Reject Reason</div>
     <div id="lastRejectReason" class="value mono" style="font-size:14px;">-</div>
+</div>
+
+<div class="panel">
+    <div class="label">Recent Trade History</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Signal Time</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>R</th>
+                <th>MFE</th>
+                <th>MAE</th>
+                <th>Reason</th>
+            </tr>
+        </thead>
+        <tbody id="tradeHistoryRows">
+            <tr><td colspan="7" class="mono">No trades yet</td></tr>
+        </tbody>
+    </table>
 </div>
 
 <script>
@@ -106,6 +134,42 @@
             });
     }
 
+    function refreshClock() {
+        const now = new Date();
+        const formatted = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
+        document.getElementById("clock").textContent = `IST: ${formatted}`;
+    }
+
+    function refreshTradeHistory() {
+        fetch(`/api/v1/data/trade-history?limit=20&ts=${Date.now()}`, { cache: "no-store" })
+            .then((r) => r.json())
+            .then((rows) => {
+                const tbody = document.getElementById("tradeHistoryRows");
+                if (!Array.isArray(rows) || rows.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="mono">No trades yet</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rows.map((t) => {
+                    const entry = typeof t.actualEntry === "number" ? t.actualEntry.toFixed(2) : "-";
+                    const exit = typeof t.actualExit === "number" ? t.actualExit.toFixed(2) : "-";
+                    const rr = typeof t.realizedR === "number" ? t.realizedR.toFixed(2) : "-";
+                    const mfe = typeof t.mfe === "number" ? t.mfe.toFixed(2) : "-";
+                    const mae = typeof t.mae === "number" ? t.mae.toFixed(2) : "-";
+                    const reason = t.exitReason || t.rejectReason || "-";
+                    return `<tr>
+                        <td>${t.signalTime || "-"}</td>
+                        <td>${entry}</td>
+                        <td>${exit}</td>
+                        <td>${rr}</td>
+                        <td>${mfe}</td>
+                        <td>${mae}</td>
+                        <td>${reason}</td>
+                    </tr>`;
+                }).join("");
+            })
+            .catch(() => {});
+    }
+
     let stompClient = null;
     let reconnectTimer = null;
 
@@ -129,9 +193,13 @@
 
     refreshState();
     refreshOptionChain();
+    refreshTradeHistory();
+    refreshClock();
     connectSocket();
     setInterval(refreshState, 5000);
     setInterval(refreshOptionChain, 3000);
+    setInterval(refreshTradeHistory, 5000);
+    setInterval(refreshClock, 1000);
 </script>
 </body>
 </html>

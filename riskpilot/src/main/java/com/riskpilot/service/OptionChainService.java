@@ -220,13 +220,15 @@ public class OptionChainService {
         if (isMarketOpenNow()) {
             return cached;
         }
+        double marketCloseSpot = fetchNseLastValue().orElse(cached.spot());
+        double prevClose = cached.previousClose() > 0.0 ? cached.previousClose() : marketCloseSpot;
         return new OptionChainSnapshot(
             cached.support(),
             cached.resistance(),
-            cached.previousClose() > 0.0 ? cached.previousClose() : cached.spot(),
+            marketCloseSpot,
             cached.expiry(),
-            cached.previousClose() > 0.0 ? cached.previousClose() : cached.spot(),
-            "PREV_CLOSE_CACHE"
+            prevClose,
+            "MARKET_CLOSED_LAST_SPOT"
         );
     }
 
@@ -299,14 +301,15 @@ public class OptionChainService {
             double prevClose = fetchNsePreviousClose().orElse(
                 lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp
             );
+            double marketClosedSpot = fetchNseLastValue().orElse(ltp);
             String expiry = resolveFallbackExpiry();
             OptionChainSnapshot snap = new OptionChainSnapshot(
                 0,
                 0,
-                marketOpen ? ltp : prevClose,
+                marketOpen ? ltp : marketClosedSpot,
                 expiry,
                 prevClose,
-                marketOpen ? "ANGELONE_LTP" : "ANGELONE_PREV_CLOSE_CACHE"
+                marketOpen ? "ANGELONE_LTP" : "MARKET_CLOSED_LAST_SPOT"
             );
             lastKnownSnapshot = snap;
             writeCache(snap);
@@ -416,6 +419,32 @@ public class OptionChainService {
             }
         } catch (Exception e) {
             log.debug("Unable to fetch NSE previous close: {}", e.getMessage());
+        }
+        return java.util.Optional.empty();
+    }
+
+    private java.util.Optional<Double> fetchNseLastValue() {
+        String url = "https://www.nseindia.com/api/allIndices";
+        try {
+            ResponseEntity<String> response =
+                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
+            if (response.getBody() == null || response.getBody().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            JsonNode root = mapper.readTree(response.getBody());
+            JsonNode data = root.path("data");
+            if (!data.isArray()) return java.util.Optional.empty();
+            for (JsonNode row : data) {
+                String name = row.path("index").asText("");
+                if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
+                    double last = row.path("last").asDouble(0.0);
+                    if (last > 0.0) {
+                        return java.util.Optional.of(last);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Unable to fetch NSE last value: {}", e.getMessage());
         }
         return java.util.Optional.empty();
     }
