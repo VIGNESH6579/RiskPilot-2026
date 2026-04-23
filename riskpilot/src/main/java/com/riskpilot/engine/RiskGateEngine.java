@@ -16,6 +16,8 @@ public class RiskGateEngine {
 
     private final RiskPilotProperties config;
     private final KillSwitchEngine killSwitchEngine;
+    private final RegimeFilter regimeFilter;
+    private final RealTimeEdgeTracker edgeTracker;
 
     @PostConstruct
     public void validate() {
@@ -58,6 +60,26 @@ public class RiskGateEngine {
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.error("🚫 KILL_SWITCH_HALTED: System disabled by kill-switch");
             return reject("KILL_SWITCH_HALTED");
+        }
+
+        // -------------------------
+        // 🔴 REGIME FILTER (PRE-TRADE BLOCK)
+        // -------------------------
+        if (!regimeFilter.isTradingAllowed()) {
+            RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
+            log.error("🚫 REGIME_BLOCKED: Score={}, Reasons={}", 
+                    regime.getRegimeScore(), String.join(", ", regime.getBlockingReasons()));
+            return reject("REGIME_WEAK");
+        }
+
+        // -------------------------
+        // 🔴 EDGE HEALTH CHECK
+        // -------------------------
+        if (!edgeTracker.isEdgeHealthy()) {
+            RealTimeEdgeTracker.EdgeMetrics metrics = edgeTracker.getCurrentMetrics();
+            log.error("🚫 EDGE_UNHEALTHY: DecayScore={}, Expectancy={:.3f}", 
+                    metrics.getDecayScore(), metrics.getExpectancy());
+            return reject("EDGE_DECAY");
         }
 
         // -------------------------

@@ -26,6 +26,9 @@ public class ShadowExecutionEngine {
     private final RiskPilotProperties config;
     private final RiskGateEngine riskGateEngine;
     private final KillSwitchEngine killSwitchEngine;
+    private final RegimeFilter regimeFilter;
+    private final RealTimeEdgeTracker edgeTracker;
+    private final VolatilityNormalizer volatilityNormalizer;
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
@@ -85,6 +88,54 @@ public class ShadowExecutionEngine {
             updateActiveTradeState(trade, state.lastRejectReason());
             broadcastCurrentSessionState();
         }
+    }
+
+    public synchronized void evaluateCandle(Candle candle) {
+        TradingSessionSnapshot state = stateManager.getSnapshot();
+        
+        // 🔒 STEP 1: Update candle aggregator
+        candleAggregator.addCandle(candle);
+        
+        // 🔒 STEP 2: Update regime filter with new candle data
+        updateRegimeFilter(candle);
+        
+        // 🔒 STEP 3: Update volatility normalizer with opening range
+        volatilityNormalizer.updateOpeningRange(candle.high(), candle.low(), candle.timestamp());
+        
+        // 🔒 STEP 4: Process exit logic if trade active
+        if (state.tradeActive() && state.activeTradeReference() != null) {
+            ActiveTradeExecution trade = state.activeTradeReference();
+            
+            // Candle close logic
+            trade = ActiveTradeExecution.fromCandleClose(trade, candle);
+            
+            // Check for late session forced exit
+            TradeExit forcedExit = checkForcedSessionExit(trade, candle);
+            if (forcedExit.triggered()) {
+                closeTrade(trade, forcedExit);
+                return;
+            }
+            
+            updateActiveTradeState(trade, state.lastRejectReason());
+            broadcastCurrentSessionState();
+            return;
+        }
+        
+        // 🔒 STEP 5: Check for new signal
+        if (shouldEvaluateSignal(candle)) {
+            evaluateSignal(candle, state);
+        }
+    }
+
+    private void updateRegimeFilter(Candle candle) {
+        // Calculate ATR (simplified - you may want to use proper ATR calculation)
+        double atr = Math.abs(candle.high() - candle.low());
+        
+        // Update regime filter
+        regimeFilter.processCandle(
+            candle.open(), candle.high(), candle.low(), candle.close(),
+            candle.volume(), candle.timestamp(), atr
+        );
     }
 
     public synchronized void evaluateCandleClose() {
@@ -278,6 +329,17 @@ public class ShadowExecutionEngine {
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double riskPts = Math.abs(trade.stopLoss() - trade.entryPrice());
         double realizedR = riskPts == 0.0 ? 0.0 : exit.pnlPoints() / riskPts;
+
+        // 🔴 Update real-time edge tracker with trade result
+        double entrySlippage = Math.abs(trade.entryPrice() - activeExpectedEntry);
+        double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - expectedExit) : 0.0;
+        edgeTracker.addTradeResult(
+            realizedR, 
+            trade.tp1Hit(), 
+            trade.runnerActive(),
+            entrySlippage,
+            runnerSlippage
+        );
 
         liveMetricsLogger.logShadowExecution(
             activeSignalTime,
