@@ -1,0 +1,204 @@
+spring:
+  application:
+    name: riskpilot
+  profiles:
+    active: prod
+
+  # 🔴 HARD REMOVE DB / JPA (NO SHARED STATE)
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+  # 🔴 STRICT JSON TIME CONTROL
+  jackson:
+    time-zone: Asia/Kolkata
+    date-format: yyyy-MM-dd HH:mm:ss
+    serialization:
+      write-dates-as-timestamps: false
+
+# =========================================================
+# 🔒 RISKPILOT DOCTRINE-ENFORCED CONFIG
+# =========================================================
+
+riskpilot:
+
+  # -------------------------------
+  # 🔴 MODE CONTROL (NO ACCIDENTS)
+  # -------------------------------
+  mode: SHADOW        # SHADOW | LIVE | REPLAY
+  strict-mode: true   # ANY violation = HARD REJECT
+
+  # -------------------------------
+  # ⏱ SESSION CONTROL
+  # -------------------------------
+  session:
+    timezone: Asia/Kolkata
+    start: "09:15"
+    end: "15:30"
+    opening-range-end: "09:45"
+
+  # -------------------------------
+  # 📊 MARKET FILTERS (LAYER 1)
+  # -------------------------------
+  filters:
+    regime-required: TREND_ONLY
+    min-or-range: 120        # volatility gate (absolute)
+    max-spread: 2.0          # optional microstructure sanity
+
+  # -------------------------------
+  # ⏳ TIME PHASE CONTROL
+  # -------------------------------
+  time-phase:
+    early:
+      start: "09:15"
+      end: "12:00"
+      position-scale: 1.0
+
+    mid:
+      start: "12:00"
+      end: "13:30"
+      position-scale: 0.35
+
+    late:
+      start: "13:30"
+      end: "15:30"
+      allow-new-trades: false
+      force-exit: true
+
+  # -------------------------------
+  # ⚠️ RISK LIMITS (NON-NEGOTIABLE)
+  # -------------------------------
+  risk:
+    max-trades-per-day: 2
+    one-trade-at-a-time: true
+    max-daily-loss-r: 1.5
+    max-consecutive-losses: 3
+
+  # -------------------------------
+  # 🎯 EXECUTION / SLIPPAGE MODEL
+  # -------------------------------
+  execution:
+
+    slippage:
+      entry-max: 2.0
+      tp1-max: 3.0
+      runner-max: 6.0
+      panic-exit-max: 8.0
+
+    latency:
+      soft-block-ms: 500
+      hard-block-ms: 1500
+      panic-ms: 5000
+
+    reject-on-high-slippage: true
+    reject-on-latency-breach: true
+
+  # -------------------------------
+  # 📈 TP1 + RUNNER MODEL
+  # -------------------------------
+  extraction:
+
+    tp1:
+      enabled: true
+      position-size: 0.15
+      min-points: 15
+      volatility-factor: 0.12
+
+    runner:
+      position-size: 0.85
+      stage2-activation-r: 0.8
+      tail-protection:
+        activate-r: 2.0
+        pullback-r: 0.5
+      momentum-decay:
+        enabled: true
+        threshold: 0.6
+      soft-stop:
+        enabled: true
+        shift-r: 0.25
+
+  # -------------------------------
+  # 🔌 INFRA SAFETY (LAYER 0)
+  # -------------------------------
+  infra:
+
+    feed:
+      require-stable: true
+      max-missing-ticks: 3
+      instability-timeout-sec: 15
+
+    heartbeat:
+      enabled: true
+      panic-exit-on-failure: true
+      timeout-sec: 30
+
+  # -------------------------------
+  # 🧾 LOGGING (AUDIT GRADE)
+  # -------------------------------
+  logging:
+
+    csv:
+      enabled: true
+      path: shadow_live_forward_logs.csv
+
+    decision-log:
+      enabled: true
+      path: decision_log.csv
+
+    reject-log:
+      enabled: true
+      path: reject_log.csv
+
+    include:
+      - regime
+      - volatility
+      - gateDecision
+      - rejectReason
+      - slippage
+      - latency
+      - mfe
+      - mae
+      - realizedR
+      - timePhase
+      - feedStable
+
+# =========================================================
+# 🔐 ANGEL ONE CONFIG (NO DEFAULTS)
+# =========================================================
+
+angelone:
+  api-key: ${ANGELONE_API_KEY}
+  client-code: ${ANGELONE_CLIENT_CODE}
+  password: ${ANGELONE_PASSWORD}
+  totp-secret: ${ANGELONE_TOTP_SECRET}
+  base-url: https://apiconnect.angelbroking.com
+
+# =========================================================
+# 📄 LOGGING (STRUCTURED, NOT VERBOSE)
+# =========================================================
+
+logging:
+  level:
+    com.riskpilot: INFO
+    org.springframework: WARN
+
+  file:
+    name: logs/riskpilot.log
+    max-size: 10MB
+    max-history: 14
+
+# =========================================================
+# 🔍 HEALTH ONLY (NO NOISE)
+# =========================================================
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      base-path: /actuator
+
+  endpoint:
+    health:
+      show-details: never

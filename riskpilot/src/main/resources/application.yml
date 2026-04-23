@@ -1,0 +1,115 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: riskpilot
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  
+  # Database Configuration
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:mem:riskpilot}
+    driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD:password}
+  
+  h2:
+    console:
+      enabled: ${H2_CONSOLE_ENABLED:false}
+      path: /h2-console
+  
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:create-drop}
+    show-sql: ${JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
+  
+  # WebSocket Configuration
+  websocket:
+    message-broker:
+      application-prefix: /app
+      user-prefix: /user
+  
+  # Jackson Configuration
+  jackson:
+    time-zone: Asia/Kolkata
+    date-format: yyyy-MM-dd HH:mm:ss
+    serialization:
+      write-dates-as-timestamps: false
+
+# RiskPilot Specific Configuration
+riskpilot:
+  # Trading Configuration
+  trading:
+    symbol: ${TRADING_SYMBOL:BANKNIFTY}
+    timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
+    session-start: ${SESSION_START:09:15}
+    session-end: ${SESSION_END:15:30}
+    opening-range-end: ${OPENING_RANGE_END:09:45}
+    
+    # Risk Parameters
+    max-trades-per-day: ${MAX_TRADES_PER_DAY:3}
+    max-position-size: ${MAX_POSITION_SIZE:75}
+    default-stop-loss: ${DEFAULT_STOP_LOSS:85}
+    default-take-profit: ${DEFAULT_TAKE_PROFIT:120}
+    
+    # Execution Parameters
+    slippage-entry: ${SLIPPAGE_ENTRY:5.0}
+    slippage-exit: ${SLIPPAGE_EXIT:5.0}
+    latency-threshold: ${LATENCY_THRESHOLD:2.0}
+    
+  # Angel One API Configuration
+  angelone:
+    api-key: ${ANGELONE_API_KEY:}
+    client-code: ${ANGELONE_CLIENT_CODE:}
+    password: ${ANGELONE_PASSWORD:}
+    totp-secret: ${ANGELONE_TOTP_SECRET:}
+    base-url: ${ANGELONE_BASE_URL:https://apiconnect.angelbroking.com}
+    
+  # Observer Configuration
+  observer:
+    enabled: ${OBSERVER_ENABLED:true}
+    csv-path: ${OBSERVER_CSV_PATH:shadow_live_forward_logs.csv}
+    websocket-port: ${OBSERVER_WEBSOCKET_PORT:8765}
+    max-cache-size: ${OBSERVER_MAX_CACHE_SIZE:500}
+    
+  # Notification Configuration
+  notification:
+    ntfy-enabled: ${NTFY_ENABLED:false}
+    ntfy-topic: ${NTFY_TOPIC:riskpilot_shadow_alerts}
+    ntfy-cooldown-sec: ${NTFY_COOLDOWN_SEC:10}
+
+# Logging Configuration
+logging:
+  level:
+    com.riskpilot: ${LOG_LEVEL:INFO}
+    org.springframework.web: ${WEB_LOG_LEVEL:WARN}
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:WARN}
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: ${LOG_FILE:logs/riskpilot.log}
+    max-size: 10MB
+    max-history: 30
+
+# Management & Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true

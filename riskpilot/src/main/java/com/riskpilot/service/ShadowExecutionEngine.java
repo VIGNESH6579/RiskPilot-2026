@@ -1,12 +1,14 @@
 package com.riskpilot.service;
 
-import com.riskpilot.model.ActiveTrade;
-import com.riskpilot.model.Candle;
-import com.riskpilot.model.Regime;
-import com.riskpilot.model.Signal;
-import com.riskpilot.model.TimePhase;
+import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.engine.RiskGateEngine;
+import com.riskpilot.model.ActiveTradeExecution;
+import com.riskpilot.model.CandleEntity;
+import com.riskpilot.model.GateDecision;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -16,13 +18,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class ShadowExecutionEngine {
 
+    private final RiskPilotProperties config;
+    private final RiskGateEngine riskGateEngine;
+    private final KillSwitchEngine killSwitchEngine;
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
-    private final RiskGateEngine riskGateEngine;
     private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
@@ -51,32 +57,44 @@ public class ShadowExecutionEngine {
     }
 
     public synchronized void evaluateTick(double currentPrice) {
+        // 🔴 KILL-SWITCH CHECK (EVERY TICK)
+        if (killSwitchEngine.isKillSwitchTriggered()) {
+            log.error("🚫 KILL SWITCH ACTIVE - Ignoring tick processing");
+            return;
+        }
+
         TradingSessionSnapshot state = stateManager.getSnapshot();
 
         if (state.tradeActive() && state.activeTradeReference() != null) {
-            ActiveTrade trade = state.activeTradeReference();
-            trade = updateExcursions(trade, currentPrice);
-            trade = handleTickTP1(trade, currentPrice);
-            trade = applyTailProtection(trade, currentPrice);
-            TradeExit exit = checkStopLoss(trade, currentPrice);
+            ActiveTradeExecution trade = state.activeTradeReference();
+            
+            // 🔒 STEP 1: Update MFE/MAE (mandatory, every tick)
+            trade = ActiveTradeExecution.updateExcursions(trade, currentPrice);
 
+            // 🔒 STEP 2: Handle TP1 (tick-level, immediate)
+            trade = ActiveTradeExecution.fromTickTP1(trade, currentPrice);
+
+            // 🔒 STEP 3: Check Stop Loss (tick-level, immediate)
+            TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
+            
             if (exit.triggered()) {
                 closeTrade(trade, exit);
                 return;
             }
+            
             updateActiveTradeState(trade, state.lastRejectReason());
             broadcastCurrentSessionState();
         }
     }
 
     public synchronized void evaluateCandleClose() {
-        List<Candle> strictHistory = candleAggregator.getValidHistory();
+        List<CandleEntity> strictHistory = candleAggregator.getValidHistory();
         if (strictHistory.size() < 10) {
             return;
         }
 
-        Candle newestCandle = strictHistory.get(strictHistory.size() - 1);
-        updateSessionStateFromTime(LocalTime.parse(newestCandle.time));
+        CandleEntity newestCandle = strictHistory.get(strictHistory.size() - 1);
+        updateSessionStateFromTime(LocalTime.parse(newestCandle.getTimestamp().toLocalTime().toString()));
 
         if (dayBlockedByFirstTradeFailure) {
             logReject(stateManager.getSnapshot(), "FIRST_TRADE_FAILURE_DAY_BLOCK");
@@ -84,28 +102,37 @@ public class ShadowExecutionEngine {
         }
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
-        if (state.tradeActive() && state.activeTradeReference() != null) {
-            Candle previousCandle = strictHistory.get(strictHistory.size() - 2);
-            double currentRange = newestCandle.high - newestCandle.low;
-            double previousRange = previousCandle.high - previousCandle.low;
-            double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-            ActiveTrade updated = handleCandleClose(state.activeTradeReference(), newestCandle, currentRange, previousRange);
-            if (state.timePhase() == TimePhase.LATE) {
+        
+        // 🔒 STEP 4: FORCE LATE SESSION EXIT (CONFIG-DRIVEN)
+        if (riskGateEngine.shouldForceLateSessionExit(state)) {
+            log.warn("🚫 LATE SESSION FORCE EXIT: Time cutoff reached");
+            if (state.tradeActive() && state.activeTradeReference() != null) {
+                ActiveTradeExecution trade = state.activeTradeReference();
+                ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(trade, newestCandle);
                 TradeExit exit = new TradeExit(
                     true,
-                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.close) * updated.remainingSize()),
+                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.getClosePrice()) * updated.remainingSize()),
                     "TIME_CUTOFF_EXIT",
-                    newestCandle.close
+                    newestCandle.getClosePrice()
                 );
                 closeTrade(updated, exit);
-                return;
             }
+            return;
+        }
+
+        if (state.tradeActive() && state.activeTradeReference() != null) {
+            CandleEntity previousCandle = strictHistory.get(strictHistory.size() - 2);
+            double currentRange = newestCandle.getHighPrice() - newestCandle.getLowPrice();
+            double previousRange = previousCandle.getHighPrice() - previousCandle.getLowPrice();
+            double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+            ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), newestCandle);
+            
             if (state.timePhase() != TimePhase.EARLY && orRange > 0.0 && currentRange < (orRange * 0.2)) {
                 TradeExit exit = new TradeExit(
                     true,
-                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.close) * updated.remainingSize()),
+                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.getClosePrice()) * updated.remainingSize()),
                     "VOLATILITY_COLLAPSE_EXIT",
-                    newestCandle.close
+                    newestCandle.getClosePrice()
                 );
                 closeTrade(updated, exit);
                 return;
@@ -119,22 +146,27 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        GateDecision decision = riskGateEngine.evaluateEntry(state);
-        if (!decision.allowed()) {
-            logReject(state, decision.reason());
-            return;
-        }
-
+        // 🔒 STEP 1: Calculate metrics for gate evaluation
         double localSupport = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.low).min().orElse(newestCandle.low);
         double localResistance = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.high).max().orElse(newestCandle.high);
         double liveVix = vixService.getIndiaVix();
-        Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix);
-        if (signal == null) {
+        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        double entrySlippageEstimate = Math.abs(newestCandle.close - trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix).getEntry());
+
+        // 🔒 STEP 2: HARD GATE EVALUATION (NO BYPASS)
+        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, entrySlippageEstimate, 0L);
+        
+        // 🔒 STEP 3: MANDATORY DECISION LOGGING
+        riskGateEngine.logDecision(state, orRange, 0L, entrySlippageEstimate, decision);
+        
+        if (!decision.allowed()) {
+            log.warn("🚫 GATE REJECTION: {}", decision.reason());
             return;
         }
-        double entrySlippageEstimate = Math.abs(newestCandle.close - signal.getEntry());
-        if (entrySlippageEstimate > 2.0) {
-            logReject(state, "SLIPPAGE_TOO_HIGH");
+
+        // 🔒 STEP 4: Only proceed if ALL gates passed
+        Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix);
+        if (signal == null) {
             return;
         }
 

@@ -1,23 +1,113 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import sys
+from datetime import datetime
 
 CSV_PATH = Path("shadow_live_forward_logs.csv")
+KILL_FLAG_FILE = Path("KILL_SWITCH.flag")
+KILL_LOG_FILE = Path("kill_log.csv")
 
+# 🔴 KILL-SWITCH THRESHOLDS (NO DEBATE)
 EXPECTANCY_GO = 0.07
 EXPECTANCY_MIN = 0.04
+EXPECTANCY_CRITICAL = 0.00  # Negative = immediate kill
 TP1_PASS = 0.65
 TP1_FAIL = 0.60
+TP1_CRITICAL = 0.55  # Below this = kill
 RUNNER_PASS = 0.20
 RUNNER_FAIL = 0.15
+RUNNER_CRITICAL = 0.10  # Below this = kill
 MAX_ENTRY_SLIPPAGE = 2.0
 MAX_TP1_SLIPPAGE = 3.0
 MAX_RUNNER_SLIPPAGE = 6.0
+CRITICAL_ENTRY_SLIPPAGE = 3.0  # Above this = kill
+CRITICAL_RUNNER_SLIPPAGE = 7.0  # Above this = kill
+MAX_LOSS_STREAK = 7  # Above this = kill
+MAX_HEARTBEAT_PANICS = 1  # Above this = kill
+MAX_FEED_FAILURES = 3  # Above this = kill
 TAIL_TOP_N = 2
 
 
 def _bool_series(series: pd.Series) -> pd.Series:
     return series.astype(str).str.lower().isin({"true", "1", "yes", "y"})
+
+
+def evaluate_kill_switch_metrics(total_trades, expectancy, tp1_rate, runner_rate, 
+                               avg_entry_slip, tp1_slip, runner_slip, max_loss_streak,
+                               heartbeat_panics, feed_failures) -> list:
+    """🔴 KILL-SWITCH EVALUATION - NO DEBATE, NO WARNINGS"""
+    reasons = []
+
+    # EDGE COLLAPSE (PRIMARY TRIGGER)
+    if expectancy < EXPECTANCY_CRITICAL:
+        reasons.append("EXPECTANCY_NEGATIVE")
+    elif expectancy < EXPECTANCY_MIN:
+        reasons.append("EXPECTANCY_BREAKDOWN")
+
+    # EXECUTION FAILURE
+    if avg_entry_slip > CRITICAL_ENTRY_SLIPPAGE:
+        reasons.append("ENTRY_SLIPPAGE_CRITICAL")
+    elif avg_entry_slip > MAX_ENTRY_SLIPPAGE:
+        reasons.append("ENTRY_SLIPPAGE_HIGH")
+
+    if tp1_slip > MAX_TP1_SLIPPAGE:
+        reasons.append("TP1_SLIPPAGE_HIGH")
+
+    if runner_slip > CRITICAL_RUNNER_SLIPPAGE:
+        reasons.append("RUNNER_SLIPPAGE_CRITICAL")
+
+    # STRUCTURAL FAILURE
+    if tp1_rate < TP1_CRITICAL:
+        reasons.append("TP1_VALIDATION_FAIL")
+    elif tp1_rate < TP1_FAIL:
+        reasons.append("TP1_WEAK")
+
+    if runner_rate < RUNNER_CRITICAL:
+        reasons.append("RUNNER_EDGE_LOSS")
+    elif runner_rate < RUNNER_FAIL:
+        reasons.append("RUNNER_WEAK")
+
+    # RISK BREACH
+    if max_loss_streak >= MAX_LOSS_STREAK:
+        reasons.append("LOSS_STREAK_CRITICAL")
+
+    # INFRA FAILURE
+    if heartbeat_panics > MAX_HEARTBEAT_PANICS:
+        reasons.append("HEARTBEAT_FAILURE")
+
+    if feed_failures > MAX_FEED_FAILURES:
+        reasons.append("FEED_UNSTABLE")
+
+    return reasons
+
+
+def write_kill_switch(reasons: list) -> None:
+    """🔴 HARD KILL SWITCH - SYSTEM SHUTDOWN"""
+    print("\n🚨 KILL SWITCH ACTIVATED 🚨")
+    print("Reasons:", reasons)
+    
+    # Write kill flag file (Java will read this)
+    try:
+        KILL_FLAG_FILE.write_text("\n".join(reasons))
+        print(f"🔴 KILL FLAG WRITTEN: {KILL_FLAG_FILE}")
+    except Exception as e:
+        print(f"ERROR: Failed to write kill flag: {e}")
+        sys.exit(1)  # Still exit even if write fails
+
+    # Append to kill log
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"{timestamp},{'|'.join(reasons)}\n"
+        with open(KILL_LOG_FILE, "a") as f:
+            f.write(log_entry)
+        print(f"📝 KILL LOG UPDATED: {KILL_LOG_FILE}")
+    except Exception as e:
+        print(f"ERROR: Failed to write kill log: {e}")
+
+    # HARD EXIT - NO RECOVERY
+    print("🔴 SYSTEM SHUTTING DOWN - INVESTIGATE BEFORE RESTART")
+    sys.exit(1)
 
 
 def main() -> None:
@@ -118,6 +208,18 @@ def main() -> None:
     print("\n==============================")
     print(f"FINAL VERDICT: {verdict}")
     print("==============================\n")
+
+    # 🔴 KILL-SWITCH EVALUATION (FINAL AUTHORITY)
+    kill_reasons = evaluate_kill_switch_metrics(
+        total_trades, expectancy, tp1_rate, runner_rate,
+        avg_entry_slip, tp1_slip, runner_slip, max_loss_streak,
+        heartbeat_panics, feed_failures
+    )
+
+    if kill_reasons:
+        write_kill_switch(kill_reasons)
+    else:
+        print("✅ KILL SWITCH: PASSED - System can continue")
 
 
 if __name__ == "__main__":

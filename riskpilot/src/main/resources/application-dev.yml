@@ -1,0 +1,41 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:riskpilot-dev
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: password
+  
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.H2Dialect
+
+logging:
+  level:
+    com.riskpilot: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+
+riskpilot:
+  trading:
+    symbol: BANKNIFTY
+    max-trades-per-day: 5
+    slippage-entry: 2.0
+    slippage-exit: 2.0
+    latency-threshold: 1.0
+  
+  observer:
+    enabled: true
+    csv-path: shadow_live_forward_logs_dev.csv
+  
+  notification:
+    ntfy-enabled: false

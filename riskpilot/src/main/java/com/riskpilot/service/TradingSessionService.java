@@ -1,0 +1,177 @@
+package com.riskpilot.service;
+
+import com.riskpilot.model.Trade;
+import com.riskpilot.model.TradingSignal;
+import com.riskpilot.model.TradingSession;
+import com.riskpilot.repository.TradeRepository;
+import com.riskpilot.repository.TradingSignalRepository;
+import com.riskpilot.repository.TradingSessionRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class TradingSessionService {
+
+    private final TradingSessionRepository sessionRepository;
+    private final TradeRepository tradeRepository;
+    private final TradingSignalRepository signalRepository;
+
+    public TradingSession getCurrentSession(String symbol) {
+        Optional<TradingSession> session = sessionRepository.findActiveSession(symbol);
+        if (session.isEmpty()) {
+            return createNewSession(symbol);
+        }
+        return session.get();
+    }
+
+    @Transactional
+    public TradingSession createNewSession(String symbol) {
+        TradingSession session = TradingSession.builder()
+                .sessionDate(LocalDate.now())
+                .symbol(symbol)
+                .sessionStart(LocalDateTime.now())
+                .build();
+        
+        session = sessionRepository.save(session);
+        log.info("Created new trading session for symbol: {} on date: {}", symbol, LocalDate.now());
+        return session;
+    }
+
+    public List<Trade> getActiveTrades(String symbol) {
+        return tradeRepository.findActiveTradesBySymbol(symbol);
+    }
+
+    public List<TradingSignal> getRecentSignals(String symbol, int limit) {
+        LocalDateTime since = LocalDateTime.now().minusHours(24);
+        List<TradingSignal> signals = signalRepository.findExecutableSignalsSince(symbol, since);
+        return signals.stream().limit(limit).toList();
+    }
+
+    public List<Trade> getTradeHistory(String symbol, LocalDateTime startDate, LocalDateTime endDate) {
+        return tradeRepository.findBySymbolAndEntryTimeBetween(symbol, startDate, endDate);
+    }
+
+    @Transactional
+    public void processManualSignal(TradingSignal signal) {
+        signal.setStatus("MANUAL");
+        signal.setExecutionTime(LocalDateTime.now());
+        signalRepository.save(signal);
+        
+        log.info("Processed manual signal: {} for symbol: {}", signal.getId(), signal.getSymbol());
+    }
+
+    @Transactional
+    public void closeTrade(Long tradeId, String reason) {
+        Optional<Trade> tradeOpt = tradeRepository.findById(tradeId);
+        if (tradeOpt.isEmpty()) {
+            throw new RuntimeException("Trade not found with ID: " + tradeId);
+        }
+        
+        Trade trade = tradeOpt.get();
+        trade.setStatus("CLOSED");
+        trade.setExitTime(LocalDateTime.now());
+        trade.setExitReason(reason != null ? reason : "MANUAL_CLOSE");
+        
+        tradeRepository.save(trade);
+        
+        // Update session metrics
+        updateSessionMetrics(trade.getSymbol());
+        
+        log.info("Closed trade {} with reason: {}", tradeId, reason);
+    }
+
+    public Map<String, Object> getPerformanceMetrics(String symbol, int days) {
+        LocalDateTime startDate = LocalDateTime.now().minusDays(days);
+        
+        List<Trade> trades = tradeRepository.findBySymbolAndEntryTimeBetween(symbol, startDate, LocalDateTime.now());
+        
+        if (trades.isEmpty()) {
+            return Map.of(
+                "totalTrades", 0,
+                "totalPnL", BigDecimal.ZERO,
+                "winRate", 0.0,
+                "avgTrade", BigDecimal.ZERO
+            );
+        }
+        
+        int totalTrades = trades.size();
+        BigDecimal totalPnL = trades.stream()
+                .map(Trade::getTotalPnL)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        
+        long winningTrades = trades.stream()
+                .mapToLong(t -> t.getTotalPnL().compareTo(BigDecimal.ZERO) > 0 ? 1 : 0)
+                .sum();
+        
+        double winRate = (double) winningTrades / totalTrades * 100;
+        BigDecimal avgTrade = totalPnL.divide(BigDecimal.valueOf(totalTrades), 2, RoundingMode.HALF_UP);
+        
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("totalTrades", totalTrades);
+        metrics.put("totalPnL", totalPnL);
+        metrics.put("winRate", winRate);
+        metrics.put("avgTrade", avgTrade);
+        metrics.put("winningTrades", winningTrades);
+        metrics.put("losingTrades", totalTrades - winningTrades);
+        metrics.put("period", days + " days");
+        metrics.put("symbol", symbol);
+        
+        return metrics;
+    }
+
+    @Transactional
+    private void updateSessionMetrics(String symbol) {
+        Optional<TradingSession> sessionOpt = sessionRepository.findActiveSession(symbol);
+        if (sessionOpt.isEmpty()) {
+            return;
+        }
+        
+        TradingSession session = sessionOpt.get();
+        BigDecimal todayPnL = tradeRepository.getTodayPnL(symbol);
+        
+        if (todayPnL != null) {
+            session.setTotalPnL(todayPnL);
+            
+            // Update max profit/drawdown
+            if (todayPnL.compareTo(session.getMaxProfit()) > 0) {
+                session.setMaxProfit(todayPnL);
+            }
+            
+            BigDecimal drawdown = BigDecimal.ZERO.subtract(todayPnL);
+            if (drawdown.compareTo(session.getMaxDrawdown()) > 0) {
+                session.setMaxDrawdown(drawdown);
+            }
+        }
+        
+        sessionRepository.save(session);
+    }
+
+    @Transactional
+    public void endSession(String symbol) {
+        Optional<TradingSession> sessionOpt = sessionRepository.findActiveSession(symbol);
+        if (sessionOpt.isEmpty()) {
+            return;
+        }
+        
+        TradingSession session = sessionOpt.get();
+        session.setSessionActive(false);
+        session.setSessionEnd(LocalDateTime.now());
+        session.setStatus("CLOSED");
+        
+        sessionRepository.save(session);
+        log.info("Ended trading session for symbol: {}", symbol);
+    }
+}
