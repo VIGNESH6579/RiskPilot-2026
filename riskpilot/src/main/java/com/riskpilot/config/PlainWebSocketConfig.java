@@ -48,7 +48,13 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
             
             String message;
             try {
-                message = tradeData.toString();
+                // Convert to JSON string properly
+                if (tradeData instanceof Map) {
+                    // Simple JSON conversion for Map objects
+                    message = mapToJson((Map<String, Object>) tradeData);
+                } else {
+                    message = tradeData.toString();
+                }
             } catch (Exception e) {
                 message = "{\"error\":\"Failed to serialize trade data\"}";
             }
@@ -64,6 +70,26 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
                 }
                 return true;
             });
+        }
+
+        private static String mapToJson(Map<String, Object> map) {
+            StringBuilder json = new StringBuilder("{");
+            boolean first = true;
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                if (!first) json.append(",");
+                json.append("\"").append(entry.getKey()).append("\":");
+                Object value = entry.getValue();
+                if (value instanceof String) {
+                    json.append("\"").append(value).append("\"");
+                } else if (value instanceof Boolean) {
+                    json.append(value);
+                } else {
+                    json.append(value);
+                }
+                first = false;
+            }
+            json.append("}");
+            return json.toString();
         }
     }
 }

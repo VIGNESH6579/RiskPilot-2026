@@ -224,26 +224,54 @@
       statusEl.className = "status" + (ok ? " ok" : "");
     }
 
+    async function fetchInitialData() {
+      try {
+        const response = await fetch('/api/initial-data');
+        const data = await response.json();
+        console.log('Initial data loaded:', data);
+        return data;
+      } catch (error) {
+        console.error('Failed to fetch initial data:', error);
+        setStatus('API connection failed', false);
+      }
+    }
+
     function connect() {
       const protocol = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${protocol}://${location.host}/ws`);
 
-      ws.onopen = () => setStatus("Connected", true);
+      ws.onopen = () => {
+        setStatus("Connected", true);
+        console.log('WebSocket connected successfully');
+      };
+      
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
+          console.log('Received payload:', payload);
           onPayload(payload);
-        } catch (_) {}
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error, 'Data:', event.data);
+        }
       };
-      ws.onerror = () => setStatus("Socket error", false);
-      ws.onclose = () => {
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setStatus("Socket error", false);
+      };
+      
+      ws.onclose = (event) => {
+        console.log('WebSocket closed:', event);
         setStatus("Disconnected, retrying...", false);
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(connect, 1500);
       };
     }
 
-    connect();
+    // Initialize connections
+    fetchInitialData().then(() => {
+      connect();
+    });
   </script>
 </body>
 </html>
