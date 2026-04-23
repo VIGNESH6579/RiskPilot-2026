@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
+import java.util.ArrayList;
 
 @Slf4j
 @Component
@@ -16,6 +17,7 @@ public class RiskGateEngine {
 
     private final RiskPilotProperties config;
     private final KillSwitchEngine killSwitchEngine;
+    private final RegimeConfidenceEngine regimeConfidenceEngine;
     private final RegimeFilter regimeFilter;
     private final RealTimeEdgeTracker edgeTracker;
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
@@ -64,12 +66,34 @@ public class RiskGateEngine {
         }
 
         // -------------------------
-        // 🔴 ADAPTIVE REGIME FILTER (PRE-TRADE BLOCK)
+        // 🔴 REGIME CONFIDENCE SCORE (PRE-TRADE HARD BLOCK)
+        // -------------------------
+        // This sits ABOVE all other logic - if score < 55, NO TRADING AT ALL
+        List<RegimeConfidenceEngine.CandleData> candleData = convertToCandleData(state);
+        RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(state, candleData);
+        
+        if (!regimeScore.tradingAllowed()) {
+            log.error("🚫 REGIME_CONFIDENCE_BLOCKED: Score={}, Reason={}", 
+                    regimeScore.getTotalScore(), regimeScore.getReason());
+            return reject("LOW_CONFIDENCE_DAY");
+        }
+
+        // -------------------------
+        // 🔴 REDUCED MODE LIMIT (1 trade max)
+        // -------------------------
+        if (regimeScore.reducedMode() && state.tradesTaken() >= 1) {
+            log.error("🚫 REDUCED_MODE_LIMIT: Score={}, TradesTaken={}", 
+                    regimeScore.getTotalScore(), state.tradesTaken());
+            return reject("REDUCED_MODE_LIMIT");
+        }
+
+        // -------------------------
+        // 🔴 ADAPTIVE REGIME FILTER (SECONDARY FILTER)
         // -------------------------
         AdaptiveRegimeEngine.AdaptiveConfig adaptiveConfig = adaptiveRegimeEngine.getCurrentConfig();
         RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
         
-        // Check adaptive thresholds first
+        // Check adaptive thresholds
         if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
             log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}", 
                     regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(), 
@@ -216,18 +240,33 @@ public class RiskGateEngine {
                s.isTradeActive();
     }
 
-    public void logDecision(TradingSessionSnapshot s, double orRange, long latencyMs, 
-                        double entrySlippage, GateDecision decision) {
+    /**
+     * Convert session state to candle data for regime confidence evaluation
+     * Note: In practice, this should be passed from ShadowExecutionEngine
+     * For now, we'll use a simplified approach with conservative defaults
+     */
+    private List<RegimeConfidenceEngine.CandleData> convertToCandleData(TradingSessionSnapshot state) {
+        // Create minimal candle data based on session state
+        List<RegimeConfidenceEngine.CandleData> candles = new ArrayList<>();
         
-        log.info("🔍 DECISION LOG: Timestamp={}, Regime={}, OR={}, Latency={}ms, " +
-                "Slippage={}, Allowed={}, Reason={}", 
-                java.time.LocalDateTime.now(),
-                s.getRegime(),
-                orRange,
-                latencyMs,
-                entrySlippage,
-                decision.allowed(),
-                decision.reason());
+        // Add opening range candle
+        if (state.orHigh() > 0 && state.orLow() < Double.MAX_VALUE) {
+            double orMid = (state.orHigh() + state.orLow()) / 2.0;
+            double orRange = state.orHigh() - state.orLow();
+            
+            candles.add(new RegimeConfidenceEngine.CandleData(
+                orMid, state.orHigh(), state.orLow(), orMid, 
+                java.time.LocalDateTime.now().with(java.time.LocalTime.of(9, 30))
+            ));
+        }
+        
+        return candles;
+    }
+
+    public void logDecision(TradingSessionSnapshot state, double orRange, long latencyMs, 
+                           double entrySlippage, GateDecision decision) {
+        log.info("� GATE_DECISION: OR={:.1f}, Latency={}ms, Slippage={:.2f} → {}", 
+                orRange, latencyMs, entrySlippage, decision.reason());
     }
 
     private GateDecision reject(String reason) {

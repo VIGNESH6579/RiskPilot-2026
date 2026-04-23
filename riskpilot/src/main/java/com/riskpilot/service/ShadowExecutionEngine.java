@@ -1,7 +1,9 @@
 package com.riskpilot.service;
 
 import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
+import com.riskpilot.engine.RegimeConfidenceEngine;
 import com.riskpilot.engine.RiskGateEngine;
 import com.riskpilot.engine.RegimeFilter;
 import com.riskpilot.engine.RealTimeEdgeTracker;
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +46,9 @@ public class ShadowExecutionEngine {
     private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
+
+    // Store candle data for regime confidence evaluation
+    private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
@@ -88,13 +94,16 @@ public class ShadowExecutionEngine {
         // 🔒 STEP 1: Update candle aggregator
         candleAggregator.addCandle(candle);
         
-        // 🔒 STEP 2: Update regime filter with new candle data
+        // 🔒 STEP 2: Store candle data for regime confidence evaluation
+        storeCandleData(candle);
+        
+        // 🔒 STEP 3: Update regime filter with new candle data
         updateRegimeFilter(candle);
         
-        // 🔒 STEP 3: Update volatility normalizer with opening range
+        // 🔒 STEP 4: Update volatility normalizer with opening range
         volatilityNormalizer.updateOpeningRange(candle.high(), candle.low(), candle.timestamp());
         
-        // 🔒 STEP 4: Process exit logic if trade active
+        // 🔒 STEP 5: Process exit logic if trade active
         if (state.tradeActive() && state.activeTradeReference() != null) {
             ActiveTradeExecution trade = state.activeTradeReference();
             
@@ -113,9 +122,22 @@ public class ShadowExecutionEngine {
             return;
         }
         
-        // 🔒 STEP 5: Check for new signal
+        // 🔒 STEP 6: Check for new signal
         if (shouldEvaluateSignal(candle)) {
             evaluateSignal(candle, state);
+        }
+    }
+
+    private void storeCandleData(Candle candle) {
+        RegimeConfidenceEngine.CandleData candleData = new RegimeConfidenceEngine.CandleData(
+            candle.open(), candle.high(), candle.low(), candle.close(), candle.timestamp()
+        );
+        
+        candleHistory.add(candleData);
+        
+        // Keep only last 50 candles for regime confidence evaluation
+        if (candleHistory.size() > 50) {
+            candleHistory.remove(0);
         }
     }
 
@@ -222,6 +244,7 @@ public class ShadowExecutionEngine {
     public void executeDailyHardReset() {
         stateManager.resetDaily();
         candleAggregator.clearHistory();
+        candleHistory.clear(); // Reset regime confidence candle data
         lastTriggeredCandleTime = "";
         activeSignalTime = null;
         dayBlockedByFirstTradeFailure = false;
