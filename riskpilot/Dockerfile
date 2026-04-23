@@ -1,9 +1,15 @@
-# Build Stage securely neatly gracefully effectively stably cleanly accurately explicit smartly explicitly
+# Build Stage optimized for Render free tier
 FROM maven:3.9.6-eclipse-temurin-17 AS builder
 WORKDIR /app
+
+# Set Maven memory limits for free tier
+ENV MAVEN_OPTS="-Xms256m -Xmx512m"
+
 COPY pom.xml .
 COPY src ./src
-RUN mvn clean package -DskipTests
+
+# Build with optimized settings for free tier
+RUN mvn clean package -DskipTests -Dmaven.test.skip=true -Dspring-boot.repack.skip=false
 
 # Run Stage dynamically smoothly logically solidly exactly smoothly smartly comfortably naturally appropriately natively squarely naturally natively cleverly.
 FROM eclipse-temurin:17-jre-jammy
