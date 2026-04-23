@@ -1,10 +1,17 @@
 package com.riskpilot.service;
 
 import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.engine.KillSwitchEngine;
 import com.riskpilot.engine.RiskGateEngine;
+import com.riskpilot.engine.RegimeFilter;
+import com.riskpilot.engine.RealTimeEdgeTracker;
+import com.riskpilot.engine.VolatilityNormalizer;
 import com.riskpilot.model.ActiveTradeExecution;
+import com.riskpilot.model.Candle;
 import com.riskpilot.model.CandleEntity;
 import com.riskpilot.model.GateDecision;
+import com.riskpilot.model.Signal;
+import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +36,7 @@ public class ShadowExecutionEngine {
     private final RegimeFilter regimeFilter;
     private final RealTimeEdgeTracker edgeTracker;
     private final VolatilityNormalizer volatilityNormalizer;
+    private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
@@ -41,23 +49,7 @@ public class ShadowExecutionEngine {
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
 
-    public ShadowExecutionEngine(
-        SessionStateManager stateManager,
-        CandleAggregator candleAggregator,
-        TrapEngine trapEngine,
-        RiskGateEngine riskGateEngine,
-        VixService vixService,
-        LiveMetricsLogger liveMetricsLogger,
-        WebSocketService webSocketService
-    ) {
-        this.stateManager = stateManager;
-        this.candleAggregator = candleAggregator;
-        this.trapEngine = trapEngine;
-        this.riskGateEngine = riskGateEngine;
-        this.vixService = vixService;
-        this.liveMetricsLogger = liveMetricsLogger;
-        this.webSocketService = webSocketService;
-    }
+    // Constructor removed - using @RequiredArgsConstructor for dependency injection
 
     public synchronized void evaluateTick(double currentPrice) {
         // 🔴 KILL-SWITCH CHECK (EVERY TICK)
@@ -245,12 +237,12 @@ public class ShadowExecutionEngine {
             double orHigh = current.orHigh();
             double orLow = current.orLow();
 
-            List<Candle> history = candleAggregator.getValidHistory();
+            List<CandleEntity> history = candleAggregator.getValidHistory();
             if (!history.isEmpty()) {
-                Candle last = history.get(history.size() - 1);
+                CandleEntity last = history.get(history.size() - 1);
                 if (now.isBefore(LocalTime.of(10, 15))) {
-                    orHigh = Math.max(orHigh, last.high);
-                    orLow = Math.min(orLow, last.low);
+                    orHigh = Math.max(orHigh, last.getHighPrice());
+                    orLow = Math.min(orLow, last.getLowPrice());
                 }
             }
 
@@ -280,10 +272,11 @@ public class ShadowExecutionEngine {
         LocalDateTime now = LocalDateTime.now();
         double size = state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35;
         double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-        double tp1Distance = Math.max(15.0, orRange * 0.15);
+        double tp1Distance = volatilityNormalizer.getCurrentTP1(); // Use normalized TP1
         double dynamicTp1 = signal.getEntry() - tp1Distance;
         double initialRisk = Math.abs(signal.getStopLoss() - signal.getEntry());
-        ActiveTrade trade = new ActiveTrade(
+        
+        ActiveTradeExecution trade = new ActiveTradeExecution(
             signal.getEntry(),
             signal.getStopLoss(),
             dynamicTp1,
@@ -321,7 +314,7 @@ public class ShadowExecutionEngine {
         broadcastCurrentSessionState();
     }
 
-    private void closeTrade(ActiveTrade trade, TradeExit exit) {
+    private void closeTrade(ActiveTradeExecution trade, TradeExit exit) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (state.activeTradeReference() == null || activeSignalTime == null) {
             return;
@@ -330,15 +323,34 @@ public class ShadowExecutionEngine {
         double riskPts = Math.abs(trade.stopLoss() - trade.entryPrice());
         double realizedR = riskPts == 0.0 ? 0.0 : exit.pnlPoints() / riskPts;
 
-        // 🔴 Update real-time edge tracker with trade result
+        // Update real-time edge tracker with trade result
         double entrySlippage = Math.abs(trade.entryPrice() - activeExpectedEntry);
-        double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - expectedExit) : 0.0;
+        double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - activeExpectedEntry) : 0.0;
         edgeTracker.addTradeResult(
             realizedR, 
             trade.tp1Hit(), 
             trade.runnerActive(),
             entrySlippage,
             runnerSlippage
+        );
+
+        // Feed adaptive regime engine with trade results
+        RegimeFilter.RegimeMetrics currentRegime = regimeFilter.getCurrentRegime();
+        AdaptiveRegimeEngine.SessionFeatures sessionFeatures = new AdaptiveRegimeEngine.SessionFeatures(
+            currentRegime.getOrRange(),
+            currentRegime.getAtrRatio(),
+            currentRegime.getTrendEfficiency(),
+            currentRegime.getBreakoutHoldRate(),
+            currentRegime.getRegimeScore()
+        );
+        
+        adaptiveRegimeEngine.addTradeResult(
+            realizedR,
+            trade.tp1Hit(),
+            trade.runnerActive(),
+            entrySlippage,
+            runnerSlippage,
+            sessionFeatures
         );
 
         liveMetricsLogger.logShadowExecution(
@@ -412,159 +424,7 @@ public class ShadowExecutionEngine {
         );
     }
 
-    private ActiveTrade updateExcursions(ActiveTrade trade, double currentPrice) {
-        double favorable = trade.entryPrice() - currentPrice;
-        double adverse = currentPrice - trade.entryPrice();
-        double mfe = Math.max(trade.mfe(), favorable);
-        double mae = Math.max(trade.mae(), adverse);
-        return new ActiveTrade(
-            trade.entryPrice(),
-            trade.stopLoss(),
-            trade.tp1Level(),
-            trade.initialRisk(),
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            trade.stage2Active(),
-            trade.tailHalfLocked(),
-            trade.positionSize(),
-            trade.remainingSize(),
-            trade.realizedPnL(),
-            mfe,
-            mae,
-            trade.peakFavorableR(),
-            trade.trailingSL()
-        );
-    }
-
-    private ActiveTrade handleTickTP1(ActiveTrade trade, double currentPrice) {
-        if (trade.tp1Hit()) {
-            return trade;
-        }
-
-        if (currentPrice <= trade.tp1Level()) {
-            double tp1Size = trade.positionSize() * 0.15;
-            double remaining = trade.positionSize() - tp1Size;
-            double pnl = (trade.entryPrice() - currentPrice) * tp1Size;
-            double softStop = trade.entryPrice() + (0.4 * trade.initialRisk());
-            return new ActiveTrade(
-                trade.entryPrice(),
-                softStop,
-                trade.tp1Level(),
-                trade.initialRisk(),
-                true,
-                true,
-                trade.stage2Active(),
-                trade.tailHalfLocked(),
-                trade.positionSize(),
-                remaining,
-                trade.realizedPnL() + pnl,
-                trade.mfe(),
-                trade.mae(),
-                trade.peakFavorableR(),
-                softStop
-            );
-        }
-
-        return trade;
-    }
-
-    private ActiveTrade handleCandleClose(ActiveTrade trade, Candle candle, double currentRange, double previousRange) {
-        if (!trade.runnerActive()) {
-            return trade;
-        }
-
-        boolean stage2Active = trade.stage2Active() || (trade.initialRisk() > 0.0 && trade.mfe() >= (0.8 * trade.initialRisk()));
-        double updatedSL = trade.trailingSL();
-        if (stage2Active) {
-            double swingBasedSL = candle.high + 10.0;
-            updatedSL = Math.min(updatedSL, swingBasedSL);
-        }
-        boolean momentumWeakening = previousRange > 0.0 && currentRange < (previousRange * 0.6);
-        if (momentumWeakening && trade.mfe() > (0.8 * trade.initialRisk())) {
-            updatedSL = Math.min(updatedSL, candle.high + 5.0);
-        }
-
-        return new ActiveTrade(
-            trade.entryPrice(),
-            trade.stopLoss(),
-            trade.tp1Level(),
-            trade.initialRisk(),
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            stage2Active,
-            trade.tailHalfLocked(),
-            trade.positionSize(),
-            trade.remainingSize(),
-            trade.realizedPnL(),
-            trade.mfe(),
-            trade.mae(),
-            trade.peakFavorableR(),
-            updatedSL
-        );
-    }
-
-    private TradeExit checkStopLoss(ActiveTrade trade, double currentPrice) {
-        double effectiveSL = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
-        double pullback = trade.mfe() - (trade.entryPrice() - currentPrice);
-        if (trade.initialRisk() > 0.0 && trade.mfe() >= (2.0 * trade.initialRisk()) && pullback >= (0.5 * trade.initialRisk())) {
-            double pnl = trade.realizedPnL() + ((trade.entryPrice() - currentPrice) * trade.remainingSize());
-            return new TradeExit(true, pnl, "TAIL_PROTECTION_EXIT", currentPrice);
-        }
-        if (currentPrice >= effectiveSL) {
-            double exitSize = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
-            double pnl = trade.realizedPnL() + ((trade.entryPrice() - currentPrice) * exitSize);
-            String reason = trade.tp1Hit() ? "RUNNER_TRAIL_EXIT" : "STRUCTURAL_SL";
-            return new TradeExit(true, pnl, reason, currentPrice);
-        }
-        return TradeExit.noExit();
-    }
-
-    private ActiveTrade applyTailProtection(ActiveTrade trade, double currentPrice) {
-        if (!trade.runnerActive() || trade.initialRisk() <= 0.0) {
-            return trade;
-        }
-        double pullback = trade.mfe() - (trade.entryPrice() - currentPrice);
-        if (!trade.tailHalfLocked() && trade.mfe() >= (1.5 * trade.initialRisk()) && pullback >= (0.4 * trade.initialRisk())) {
-            double lockSize = trade.remainingSize() * 0.5;
-            double pnl = (trade.entryPrice() - currentPrice) * lockSize;
-            return new ActiveTrade(
-                trade.entryPrice(),
-                trade.stopLoss(),
-                trade.tp1Level(),
-                trade.initialRisk(),
-                trade.tp1Hit(),
-                trade.runnerActive(),
-                trade.stage2Active(),
-                true,
-                trade.positionSize(),
-                trade.remainingSize() - lockSize,
-                trade.realizedPnL() + pnl,
-                trade.mfe(),
-                trade.mae(),
-                trade.peakFavorableR(),
-                trade.trailingSL()
-            );
-        }
-        return trade;
-    }
-
-    private void updateActiveTradeState(ActiveTrade trade, String reason) {
-        stateManager.update(current -> new TradingSessionSnapshot(
-            current.sessionActive(),
-            current.regime(),
-            current.volatilityQualified(),
-            current.timePhase(),
-            current.tradesTaken(),
-            true,
-            current.feedStable(),
-            current.heartbeatAlive(),
-            current.orHigh(),
-            current.orLow(),
-            current.cumulativeDailyLossR(),
-            trade,
-            reason
-        ));
-    }
+    // Trade execution methods moved to ActiveTradeExecution model
 
     private void broadcastCurrentSessionState() {
         TradingSessionSnapshot state = stateManager.getSnapshot();

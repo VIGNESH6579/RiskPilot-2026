@@ -22,6 +22,7 @@ public class RiskPilotApplication {
 
     private final StrictValidationService strictValidationService;
     private final KillSwitchEngine killSwitchEngine;
+    private final AdaptiveRegimeEngine adaptiveRegimeEngine;
 
     public static void main(String[] args) {
         SpringApplication.run(RiskPilotApplication.class, args);
@@ -32,6 +33,10 @@ public class RiskPilotApplication {
     public void run() throws Exception {
         log.info("🔒 ENABLING STRICT VALIDATION");
         strictValidationService.validateSystem();
+        
+        log.info("🔄 INITIALIZING ADAPTIVE REGIME ENGINE");
+        adaptiveRegimeEngine.initialize();
+        
         log.info("✅ RISKPILOT SYSTEM READY - SHADOW MODE ACTIVE");
     }
 

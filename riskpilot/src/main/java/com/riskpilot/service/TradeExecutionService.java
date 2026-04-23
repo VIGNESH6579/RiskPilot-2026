@@ -5,11 +5,13 @@ import com.riskpilot.exception.TradingException;
 import com.riskpilot.model.ActiveTradeExecution;
 import com.riskpilot.model.CandleEntity;
 import com.riskpilot.model.TradeExit;
+import com.riskpilot.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 @Slf4j
 @Service

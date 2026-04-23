@@ -18,6 +18,7 @@ public class RiskGateEngine {
     private final KillSwitchEngine killSwitchEngine;
     private final RegimeFilter regimeFilter;
     private final RealTimeEdgeTracker edgeTracker;
+    private final AdaptiveRegimeEngine adaptiveRegimeEngine;
 
     @PostConstruct
     public void validate() {
@@ -63,13 +64,41 @@ public class RiskGateEngine {
         }
 
         // -------------------------
-        // 🔴 REGIME FILTER (PRE-TRADE BLOCK)
+        // 🔴 ADAPTIVE REGIME FILTER (PRE-TRADE BLOCK)
         // -------------------------
-        if (!regimeFilter.isTradingAllowed()) {
-            RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
-            log.error("🚫 REGIME_BLOCKED: Score={}, Reasons={}", 
-                    regime.getRegimeScore(), String.join(", ", regime.getBlockingReasons()));
-            return reject("REGIME_WEAK");
+        AdaptiveRegimeEngine.AdaptiveConfig adaptiveConfig = adaptiveRegimeEngine.getCurrentConfig();
+        RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
+        
+        // Check adaptive thresholds first
+        if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
+            log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}", 
+                    regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(), 
+                    String.join(", ", regime.getBlockingReasons()));
+            return reject("ADAPTIVE_REGIME_WEAK");
+        }
+        
+        if (regime.getOrRange() < adaptiveConfig.getMinORRange()) {
+            log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={:.1f} < {:.1f}", 
+                    regime.getOrRange(), adaptiveConfig.getMinORRange());
+            return reject("ADAPTIVE_OR_TOO_SMALL");
+        }
+        
+        if (regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
+            log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={:.2f} < {:.2f}", 
+                    regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
+            return reject("ADAPTIVE_ATR_WEAK");
+        }
+        
+        if (regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
+            log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={:.2f} < {:.2f}", 
+                    regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
+            return reject("ADAPTIVE_CHOPPY");
+        }
+        
+        if (regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
+            log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={:.2f} < {:.2f}", 
+                    regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
+            return reject("ADAPTIVE_BREAKOUT_WEAK");
         }
 
         // -------------------------
