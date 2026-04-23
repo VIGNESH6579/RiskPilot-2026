@@ -1,6 +1,7 @@
 package com.riskpilot;
 
 import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
 import com.riskpilot.service.StrictValidationService;
 import lombok.RequiredArgsConstructor;
