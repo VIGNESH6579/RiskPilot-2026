@@ -21,17 +21,53 @@ public class StrictValidationService {
     private volatile double dailyLossR = 0.0;
     private volatile LocalDateTime lastTradeDate;
 
+    @PostConstruct
+    public void validate() {
+        log.info("🔒 STRICT VALIDATION STARTUP");
+        
+        if (properties.getRisk().getMaxTradesPerDay() > 2) {
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
+        }
+
+        if (properties.getExecution().getSlippage().getEntryMax() > 3.0) {
+            throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high");
+        }
+
+        if (!properties.isStrictMode()) {
+            throw new IllegalStateException("STRICT_MODE_REQUIRED: Strict mode must be enabled");
+        }
+        
+        // 🔴 REAL-TIME DATA VALIDATION
+        if (!properties.getInfra().getFeed().isRealTimeOnly()) {
+            throw new IllegalStateException("REAL_TIME_REQUIRED: System must use real-time data only");
+        }
+        
+        if (!"angelone-live".equals(properties.getInfra().getFeed().getDataSource())) {
+            throw new IllegalStateException("LIVE_FEED_REQUIRED: Only Angel One live feed allowed");
+        }
+        
+        if (!properties.getInfra().getMarketData().isFallbackDisabled()) {
+            throw new IllegalStateException("FALLBACKS_DISABLED: Fallback data sources must be disabled");
+        }
+        
+        if (!properties.getInfra().getMarketData().isMockDisabled()) {
+            throw new IllegalStateException("MOCKS_DISABLED: Mock data sources must be disabled");
+        }
+        
+        log.info("✅ STRICT VALIDATION PASSED - REAL-TIME ONLY MODE");
+    }
+
     public void validateTradingParameters() {
         log.info("🔒 STRICT MODE: Validating trading parameters against doctrine");
         
         // Trade count validation
-        if (properties.getRisk().getMaxTradesPerDay() > 2) {
+        if (config.getRisk().getMaxTradesPerDay() > 2) {
             throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 2. Current: " + 
-                properties.getRisk().getMaxTradesPerDay());
+                config.getRisk().getMaxTradesPerDay());
         }
         
         // Slippage validation
-        var slippage = properties.getExecution().getSlippage();
+        var slippage = config.getExecution().getSlippage();
         if (slippage.getEntryMax() > 2.0) {
             throw new TradingException("STRICT_MODE_VIOLATION: entry-max slippage cannot exceed 2.0. Current: " + 
                 slippage.getEntryMax());

@@ -102,12 +102,15 @@ public class RiskPilotProperties {
     public static class Infra {
         private Feed feed = new Feed();
         private Heartbeat heartbeat = new Heartbeat();
+        private MarketData marketData = new MarketData();
 
         @Data
         public static class Feed {
             private boolean requireStable = true;
             private int maxMissingTicks = 3;
             private int instabilityTimeoutSec = 15;
+            private boolean realTimeOnly = true;  // NO CSV, NO MOCKS, NO REPLAY
+            private String dataSource = "angelone-live";  // ONLY Angel One live feed
         }
 
         @Data
@@ -115,6 +118,14 @@ public class RiskPilotProperties {
             private boolean enabled = true;
             private boolean panicExitOnFailure = true;
             private int timeoutSec = 30;
+        }
+
+        @Data
+        public static class MarketData {
+            private long cacheTtlSeconds = 5;
+            private long refreshIntervalSeconds = 2;
+            private boolean fallbackDisabled = true;  // NO FALLBACKS
+            private boolean mockDisabled = true;     // NO MOCKS
         }
     }
 }

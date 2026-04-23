@@ -119,7 +119,7 @@ riskpilot:
         shift-r: 0.25
 
   # -------------------------------
-  # 🔌 INFRA SAFETY (LAYER 0)
+  # � INFRA SAFETY (LAYER 0) - REAL-TIME ONLY
   # -------------------------------
   infra:
 
@@ -127,11 +127,19 @@ riskpilot:
       require-stable: true
       max-missing-ticks: 3
       instability-timeout-sec: 15
+      real-time-only: true  # NO CSV, NO MOCKS, NO REPLAY
+      data-source: "angelone-live"  # ONLY Angel One live feed
 
     heartbeat:
       enabled: true
       panic-exit-on-failure: true
       timeout-sec: 30
+
+    market-data:
+      cache-ttl-seconds: 5
+      refresh-interval-seconds: 2
+      fallback-disabled: true  # NO FALLBACKS
+      mock-disabled: true     # NO MOCKS
 
   # -------------------------------
   # 🧾 LOGGING (AUDIT GRADE)
