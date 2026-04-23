@@ -22,6 +22,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.time.Duration;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -97,7 +98,7 @@ public class OptionChainService {
             headers.set("Accept", "application/json");
 
             ResponseEntity<String> response =
-                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), String.class);
+                restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(headers), String.class);
 
             if (response.getBody() == null) return fetchFromAngelThenNseFallback(marketOpen);
 
@@ -319,7 +320,7 @@ public class OptionChainService {
         try {
             HttpHeaders h = new HttpHeaders();
             h.set("User-Agent", "Mozilla/5.0"); h.set("Accept", "application/json");
-            ResponseEntity<String> resp = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(h), String.class);
+            ResponseEntity<String> resp = restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(h), String.class);
             if (resp.getBody() == null) return java.util.Optional.empty();
             double pc = mapper.readTree(resp.getBody())
                 .path("chart").path("result").path(0).path("meta")
@@ -337,7 +338,7 @@ public class OptionChainService {
         try {
             HttpHeaders h = new HttpHeaders();
             h.set("User-Agent", "Mozilla/5.0"); h.set("Accept", "application/json");
-            ResponseEntity<String> resp = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(h), String.class);
+            ResponseEntity<String> resp = restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(h), String.class);
             if (resp.getBody() == null) return java.util.Optional.empty();
             double lv = mapper.readTree(resp.getBody())
                 .path("chart").path("result").path(0).path("meta")
