@@ -22,4 +22,8 @@ public class WebSocketService {
     public void sendSessionState(Map<String, Object> payload) {
         messagingTemplate.convertAndSend("/topic/session", (Object) payload);
     }
+
+    public void sendTradeExecution(Map<String, Object> tradeData) {
+        messagingTemplate.convertAndSend("/topic/trade", tradeData);
+    }
 }

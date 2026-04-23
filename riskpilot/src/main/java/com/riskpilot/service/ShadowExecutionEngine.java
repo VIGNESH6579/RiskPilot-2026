@@ -17,6 +17,7 @@ import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.config.PlainWebSocketConfig;
 import com.riskpilot.service.LiveMetricsLogger;
 import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.TrapEngine;
@@ -403,6 +404,9 @@ public class ShadowExecutionEngine {
             LocalDateTime.now()
         );
 
+        // Broadcast trade data to frontend WebSocket
+        broadcastTradeData(activeSignalTime, trade, exit, realizedR);
+
         boolean isFirstTradeFailure = state.tradesTaken() == 1 && !trade.tp1Hit() && trade.mae() > 80.0 && realizedR <= -1.0;
         if (isFirstTradeFailure) {
             dayBlockedByFirstTradeFailure = true;
@@ -472,5 +476,34 @@ public class ShadowExecutionEngine {
         payload.put("orHigh", state.orHigh());
         payload.put("orLow", state.orLow());
         webSocketService.sendSessionState(payload);
+    }
+
+    private void broadcastTradeData(LocalDateTime signalTime, ActiveTradeExecution trade, TradeExit exit, double realizedR) {
+        try {
+            // Create trade data payload matching frontend expectations
+            Map<String, Object> tradeData = new LinkedHashMap<>();
+            tradeData.put("id", signalTime.toString() + "_" + trade.entryPrice());
+            tradeData.put("signalTime", signalTime.toString());
+            tradeData.put("executeTime", LocalDateTime.now().toString());
+            tradeData.put("latencySec", java.time.Duration.between(signalTime, LocalDateTime.now()).toMillis() / 1000.0);
+            tradeData.put("expectedEntry", activeExpectedEntry);
+            tradeData.put("actualEntry", trade.entryPrice());
+            tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
+            tradeData.put("mfe", trade.mfe());
+            tradeData.put("mae", trade.mae());
+            tradeData.put("realizedR", realizedR);
+            tradeData.put("isRunner", trade.runnerActive());
+            tradeData.put("exitReason", exit.reason());
+            tradeData.put("exitTime", LocalDateTime.now().toString());
+
+            // Broadcast to plain WebSocket clients
+            PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastTradeData(tradeData);
+            
+            // Also broadcast via STOMP for compatibility
+            webSocketService.sendTradeExecution(tradeData);
+            
+        } catch (Exception e) {
+            log.error("Failed to broadcast trade data: {}", e.getMessage(), e);
+        }
     }
 }
