@@ -53,6 +53,11 @@ public class OptionChainService {
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
+    // Yahoo Finance result cache — prevents hitting Yahoo every 2 s
+    private volatile OptionChainSnapshot yahooCachedSnapshot = null;
+    private volatile long yahooCacheEpochMs = 0L;
+    private static final long YAHOO_CACHE_TTL_MS = 30_000L; // 30 seconds
+
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
         @Value("${NIFTY_WEEKLY_EXPIRY_DAY:TUESDAY}") String expiryDayConfig,
@@ -91,28 +96,41 @@ public class OptionChainService {
     }
 
     private OptionChainSnapshot fetchFromYahooFinance(boolean marketOpen) {
-        String url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1d";
+        // Return cached result if fresh (avoids hammering Yahoo Finance every 2 s)
+        long now = System.currentTimeMillis();
+        if (yahooCachedSnapshot != null && (now - yahooCacheEpochMs) < YAHOO_CACHE_TTL_MS) {
+            return yahooCachedSnapshot;
+        }
+
+        // Use UriComponentsBuilder with build(true) to avoid double-encoding %5E -> %255E
+        String rawUrl = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=5d";
+        URI uri = org.springframework.web.util.UriComponentsBuilder
+            .fromUriString(rawUrl).build(true).toUri();
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             headers.set("Accept", "application/json");
 
             ResponseEntity<String> response =
-                restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(headers), String.class);
+                restTemplate.exchange(uri, HttpMethod.GET, new HttpEntity<>(headers), String.class);
 
             if (response.getBody() == null) return fetchFromAngelThenNseFallback(marketOpen);
 
             JsonNode meta = mapper.readTree(response.getBody())
                 .path("chart").path("result").path(0).path("meta");
 
-            double live     = meta.path("regularMarketPrice").asDouble(0.0);
+            // regularMarketPrice = live price during hours, OR today's close after hours
+            // chartPreviousClose = previous trading day's close (use only for prevClose field)
+            double live      = meta.path("regularMarketPrice").asDouble(0.0);
             double prevClose = meta.path("chartPreviousClose").asDouble(live);
 
             if (live <= 0.0) return fetchFromAngelThenNseFallback(marketOpen);
 
-            // Prefer Angel One LTP during market hours for tighter accuracy
-            double spot   = marketOpen ? live : prevClose;
-            String source = marketOpen ? "YAHOO_LIVE" : "YAHOO_PREV_CLOSE";
+            // Always use regularMarketPrice as spot (live or today's close, never yesterday)
+            double spot   = live;
+            String source = marketOpen ? "YAHOO_LIVE" : "YAHOO_TODAY_CLOSE";
+
+            // During market hours, prefer Angel One LTP for tick-level accuracy
             if (marketOpen) {
                 var angelLtp = angelOneMarketDataService.getNiftyLtp();
                 if (angelLtp.isPresent() && angelLtp.get() > 0.0) {
@@ -121,7 +139,7 @@ public class OptionChainService {
                 }
             }
 
-            // S/R: nearest 50-point structural levels (no OI from cloud IPs)
+            // S/R: nearest 50-point structural levels
             int support    = (int)(Math.floor(spot / 50.0) * 50);
             int resistance = (int)(Math.ceil (spot / 50.0) * 50);
             if (resistance == support) resistance += 50;
@@ -129,7 +147,13 @@ public class OptionChainService {
             String expiry = resolveFallbackExpiry();
             lastKnownSnapshot = new OptionChainSnapshot(support, resistance, spot, expiry, prevClose, source);
             writeCache(lastKnownSnapshot);
-            log.info("Nifty chain via Yahoo: spot={} support={} resistance={} source={}", spot, support, resistance, source);
+
+            // Update Yahoo cache
+            yahooCachedSnapshot = lastKnownSnapshot;
+            yahooCacheEpochMs   = now;
+
+            log.info("Nifty spot via Yahoo: spot={} prevClose={} support={} resistance={} source={}",
+                spot, prevClose, support, resistance, source);
             return lastKnownSnapshot;
 
         } catch (Exception e) {
