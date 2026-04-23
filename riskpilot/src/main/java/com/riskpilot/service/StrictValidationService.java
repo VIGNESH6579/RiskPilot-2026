@@ -243,17 +243,17 @@ public class StrictValidationService {
         }
     }
 
-    private boolean isInEarlyPhase(LocalTime time, RiskPilotProperties.TimePhaseConfig config) {
+    private boolean isInEarlyPhase(LocalTime time, RiskPilotProperties.TimePhase config) {
         return !time.isBefore(LocalTime.parse(config.getEarly().getStart())) && 
                time.isBefore(LocalTime.parse(config.getEarly().getEnd()));
     }
 
-    private boolean isInMidPhase(LocalTime time, RiskPilotProperties.TimePhaseConfig config) {
+    private boolean isInMidPhase(LocalTime time, RiskPilotProperties.TimePhase config) {
         return !time.isBefore(LocalTime.parse(config.getMid().getStart())) && 
                time.isBefore(LocalTime.parse(config.getMid().getEnd()));
     }
 
-    private boolean isInLatePhase(LocalTime time, RiskPilotProperties.TimePhaseConfig config) {
+    private boolean isInLatePhase(LocalTime time, RiskPilotProperties.TimePhase config) {
         return !time.isBefore(LocalTime.parse(config.getLate().getStart())) && 
                time.isBefore(LocalTime.parse(config.getLate().getEnd()));
     }
