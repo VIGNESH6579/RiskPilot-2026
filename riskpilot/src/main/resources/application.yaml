@@ -1,22 +1,24 @@
-spring:
-  application:
-    name: riskpilot
-  datasource:
-    url: jdbc:h2:mem:testdb
-    driverClassName: org.h2.Driver
-    username: sa
-    password: password
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: update
-  h2:
-    console:
-      enabled: true
-
-angelapi:
-  key: ${ANGEL_API_KEY:}
-  clientcode: ${ANGEL_CLIENT_ID:}
-  pin: ${ANGEL_PIN:}
-  totp:
-    secret: ${ANGEL_TOTP_SECRET:}
+services:
+  - type: web
+    name: riskpilot-2026
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /api/v1/monitor/state
+    envVars:
+      - key: JAVA_TOOL_OPTIONS
+        value: -XX:+UseContainerSupport -XX:MaxRAMPercentage=75
+      - key: OBSERVER_PORT
+        value: "8765"
+      - key: OBSERVER_HOST
+        value: "127.0.0.1"
+      - key: ANGEL_API_KEY
+        value: "${ANGEL_API_KEY}"
+      - key: ANGEL_CLIENT_ID
+        value: "${ANGEL_CLIENT_ID}"
+      - key: ANGEL_PIN
+        value: "${ANGEL_PIN}"
+      - key: ANGEL_TOTP_SECRET
+        value: "${ANGEL_TOTP_SECRET}"
+      - key: RISKPILOT_NTFY_TOPIC
+        value: "riskpilot-live-signals"
