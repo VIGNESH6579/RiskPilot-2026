@@ -22,6 +22,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.time.Duration;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -51,6 +52,11 @@ public class OptionChainService {
     private final String explicitExpiryOverride;
 
     private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
+
+    // Yahoo Finance result cache — prevents hitting Yahoo every 2 s
+    private volatile OptionChainSnapshot yahooCachedSnapshot = null;
+    private volatile long yahooCacheEpochMs = 0L;
+    private static final long YAHOO_CACHE_TTL_MS = 30_000L; // 30 seconds
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
@@ -83,134 +89,82 @@ public class OptionChainService {
     }
 
     public OptionChainSnapshot fetchNiftyChain() {
-
-        String url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY";
+        // NSE India permanently blocked from cloud IPs (Akamai WAF — 403/timeout).
+        // Primary: Yahoo Finance ^NSEI  |  Fallback: Angel One LTP  |  Last: cache.
         boolean marketOpen = isMarketOpenNow();
+        return fetchFromYahooFinance(marketOpen);
+    }
 
+    private OptionChainSnapshot fetchFromYahooFinance(boolean marketOpen) {
+        // Return cached result if fresh (avoids hammering Yahoo Finance every 2 s)
+        long now = System.currentTimeMillis();
+        if (yahooCachedSnapshot != null && (now - yahooCacheEpochMs) < YAHOO_CACHE_TTL_MS) {
+            return yahooCachedSnapshot;
+        }
+
+        // Use UriComponentsBuilder with build(true) to avoid double-encoding %5E -> %255E
+        String rawUrl = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=5d";
+        URI uri = org.springframework.web.util.UriComponentsBuilder
+            .fromUriString(rawUrl).build(true).toUri();
         try {
-            primeNseCookiesIfNeeded();
-
             HttpHeaders headers = new HttpHeaders();
-            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             headers.set("Accept", "application/json");
-            headers.set("Referer", "https://www.nseindia.com/get-quotes/derivatives?symbol=NIFTY");
-            headers.set("Accept-Language", "en-US,en;q=0.9");
-            headers.set("Connection", "keep-alive");
-
-            HttpEntity<String> entity = new HttpEntity<>(headers);
 
             ResponseEntity<String> response =
-                    restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+                restTemplate.exchange(uri, HttpMethod.GET, new HttpEntity<>(headers), String.class);
 
-            if (response.getBody() == null) return lastKnownSnapshot;
+            if (response.getBody() == null) return fetchFromAngelThenNseFallback(marketOpen);
 
-            JsonNode json = mapper.readTree(response.getBody());
-            JsonNode records = json.get("records");
-            
-            if (records == null || !records.has("data")) {
-                return fetchFromAngelThenNseFallback(marketOpen);
-            }
+            JsonNode meta = mapper.readTree(response.getBody())
+                .path("chart").path("result").path(0).path("meta");
 
-            JsonNode dataArray = records.get("data");
-            String nearestExpiry = resolveNearestExpiry(records.get("expiryDates"));
-            
-            double currentSpot = 0.0;
-            if (records.has("underlyingValue")) {
-                currentSpot = records.get("underlyingValue").asDouble();
-            }
-            if (currentSpot <= 0.0) {
-                return fetchFromAngelThenNseFallback(marketOpen);
-            }
+            // regularMarketPrice = live price during hours, OR today's close after hours
+            // chartPreviousClose = previous trading day's close (use only for prevClose field)
+            double live      = meta.path("regularMarketPrice").asDouble(0.0);
+            double prevClose = meta.path("chartPreviousClose").asDouble(live);
 
-            double maxCE = 0, maxPE = 0;
-            int resistance = 0, support = 0;
+            if (live <= 0.0) return fetchFromAngelThenNseFallback(marketOpen);
 
-            for (JsonNode strike : dataArray) {
-                int strikePrice = strike.get("strikePrice").asInt();
+            // Always use regularMarketPrice as spot (live or today's close, never yesterday)
+            double spot   = live;
+            String source = marketOpen ? "YAHOO_LIVE" : "YAHOO_TODAY_CLOSE";
 
-                if (strike.has("CE")) {
-                    double ceOI = strike.get("CE").has("openInterest") ? strike.get("CE").get("openInterest").asDouble() : 0;
-                    if (ceOI > maxCE) {
-                        maxCE = ceOI;
-                        resistance = strikePrice;
-                    }
-                }
-
-                if (strike.has("PE")) {
-                    double peOI = strike.get("PE").has("openInterest") ? strike.get("PE").get("openInterest").asDouble() : 0;
-                    if (peOI > maxPE) {
-                        maxPE = peOI;
-                        support = strikePrice;
-                    }
+            // During market hours, prefer Angel One LTP for tick-level accuracy
+            if (marketOpen) {
+                var angelLtp = angelOneMarketDataService.getNiftyLtp();
+                if (angelLtp.isPresent() && angelLtp.get() > 0.0) {
+                    spot   = angelLtp.get();
+                    source = "ANGELONE_LTP";
                 }
             }
 
-            if (currentSpot > 0.0) {
-                String resolvedExpiry = nearestExpiry;
-                if (resolvedExpiry == null || resolvedExpiry.isBlank()) {
-                    resolvedExpiry = resolveFallbackExpiry();
-                }
+            // S/R: nearest 50-point structural levels
+            int support    = (int)(Math.floor(spot / 50.0) * 50);
+            int resistance = (int)(Math.ceil (spot / 50.0) * 50);
+            if (resistance == support) resistance += 50;
 
-                double resolvedSpot = currentSpot;
-                String resolvedSource = marketOpen ? "LIVE_MARKET" : "PREV_CLOSE_CACHE";
-                if (marketOpen) {
-                    var angelLtp = angelOneMarketDataService.getNiftyLtp();
-                    if (angelLtp.isPresent() && angelLtp.get() > 0.0) {
-                        resolvedSpot = angelLtp.get();
-                        resolvedSource = "ANGELONE_LTP";
-                    }
-                }
+            String expiry = resolveFallbackExpiry();
+            lastKnownSnapshot = new OptionChainSnapshot(support, resistance, spot, expiry, prevClose, source);
+            writeCache(lastKnownSnapshot);
 
-                double previousClose = fetchNsePreviousClose().orElse(
-                    lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : currentSpot
-                );
-                lastKnownSnapshot = new OptionChainSnapshot(
-                    support,
-                    resistance,
-                    marketOpen ? resolvedSpot : previousClose,
-                    resolvedExpiry,
-                    previousClose,
-                    resolvedSource
-                );
-                writeCache(lastKnownSnapshot);
-            }
-            return marketOpen ? lastKnownSnapshot : fromCacheAsPreviousClose();
+            // Update Yahoo cache
+            yahooCachedSnapshot = lastKnownSnapshot;
+            yahooCacheEpochMs   = now;
+
+            log.info("Nifty spot via Yahoo: spot={} prevClose={} support={} resistance={} source={}",
+                spot, prevClose, support, resistance, source);
+            return lastKnownSnapshot;
 
         } catch (Exception e) {
-            log.warn("NSE option-chain fetch failed: {}", e.getMessage());
-            OptionChainSnapshot fallback = fromCacheAsPreviousClose();
-            if (fallback.spot() > 0.0) {
-                return fallback;
-            }
+            log.warn("Yahoo Finance fetch failed, trying Angel fallback: {}", e.getMessage());
             return fetchFromAngelThenNseFallback(marketOpen);
         }
     }
 
-    private void primeNseCookiesIfNeeded() {
-        long now = System.currentTimeMillis();
-        if (now - lastNsePrimeEpochMs < NSE_PRIME_TTL.toMillis()) {
-            return;
-        }
-
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-            headers.set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            headers.set("Accept-Language", "en-US,en;q=0.9");
-            headers.set("Referer", "https://www.nseindia.com/");
-            headers.set("Connection", "keep-alive");
-
-            restTemplate.exchange(
-                "https://www.nseindia.com/",
-                HttpMethod.GET,
-                new HttpEntity<>(headers),
-                String.class
-            );
-            lastNsePrimeEpochMs = now;
-        } catch (Exception e) {
-            log.warn("NSE cookie prime failed: {}", e.getMessage());
-        }
-    }
+    // NSE cookie priming removed — NSE is blocked from cloud IPs.
+    @SuppressWarnings("unused")
+    private void primeNseCookiesIfNeeded() { /* no-op: NSE blocked */ }
 
     private OptionChainSnapshot fromCacheAsPreviousClose() {
         OptionChainSnapshot cached = readCache();
@@ -220,7 +174,8 @@ public class OptionChainService {
         if (isMarketOpenNow()) {
             return cached;
         }
-        double marketCloseSpot = fetchNseLastValue().orElse(cached.spot());
+        // Use cached spot directly — NSE last-value call is blocked from cloud IPs
+        double marketCloseSpot = cached.spot() > 0.0 ? cached.spot() : lastKnownSnapshot.spot();
         double prevClose = cached.previousClose() > 0.0 ? cached.previousClose() : marketCloseSpot;
         return new OptionChainSnapshot(
             cached.support(),
@@ -228,7 +183,7 @@ public class OptionChainService {
             marketCloseSpot,
             cached.expiry(),
             prevClose,
-            "MARKET_CLOSED_LAST_SPOT"
+            "MARKET_CLOSED_CACHE"
         );
     }
 
@@ -269,24 +224,11 @@ public class OptionChainService {
             if (angel.spot() > 0.0) {
                 return angel;
             }
-
-            primeNseCookiesIfNeeded();
-
-            OptionChainSnapshot fromEquity = fetchFromNseEquityStockIndices(marketOpen);
-            if (fromEquity.spot() > 0.0) {
-                lastKnownSnapshot = fromEquity;
-                return fromEquity;
-            }
-
-            OptionChainSnapshot fromAll = fetchFromNseAllIndices(marketOpen);
-            if (fromAll.spot() > 0.0) {
-                lastKnownSnapshot = fromAll;
-                return fromAll;
-            }
-
+            // All NSE endpoints blocked from cloud — return last known snapshot
+            log.warn("All data sources exhausted. Using last known snapshot: spot={}", lastKnownSnapshot.spot());
             return lastKnownSnapshot;
         } catch (Exception ex) {
-            log.warn("NSE index fallback fetch failed: {}", ex.getMessage());
+            log.warn("Angel fallback failed: {}", ex.getMessage());
             return lastKnownSnapshot;
         }
     }
@@ -298,18 +240,17 @@ public class OptionChainService {
                 return lastKnownSnapshot;
             }
             double ltp = ltpOpt.get();
-            double prevClose = fetchNsePreviousClose().orElse(
-                lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp
-            );
-            double marketClosedSpot = fetchNseLastValue().orElse(ltp);
+            // Use cached prevClose — NSE allIndices is blocked from cloud IPs
+            double prevClose = lastKnownSnapshot.previousClose() > 0.0 ? lastKnownSnapshot.previousClose() : ltp;
             String expiry = resolveFallbackExpiry();
+            int support    = (int)(Math.floor(ltp / 50.0) * 50);
+            int resistance = (int)(Math.ceil (ltp / 50.0) * 50);
+            if (resistance == support) resistance += 50;
             OptionChainSnapshot snap = new OptionChainSnapshot(
-                0,
-                0,
-                marketOpen ? ltp : marketClosedSpot,
-                expiry,
-                prevClose,
-                marketOpen ? "ANGELONE_LTP" : "MARKET_CLOSED_LAST_SPOT"
+                support, resistance,
+                marketOpen ? ltp : prevClose,
+                expiry, prevClose,
+                marketOpen ? "ANGELONE_LTP" : "ANGELONE_PREV_CLOSE"
             );
             lastKnownSnapshot = snap;
             writeCache(snap);
@@ -397,56 +338,40 @@ public class OptionChainService {
         return headers;
     }
 
+    // fetchNsePreviousClose: replaced with Yahoo Finance — NSE allIndices blocked from cloud
     private java.util.Optional<Double> fetchNsePreviousClose() {
-        String url = "https://www.nseindia.com/api/allIndices";
+        String url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1d";
         try {
-            ResponseEntity<String> response =
-                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
-            if (response.getBody() == null || response.getBody().isBlank()) {
-                return java.util.Optional.empty();
-            }
-            JsonNode root = mapper.readTree(response.getBody());
-            JsonNode data = root.path("data");
-            if (!data.isArray()) return java.util.Optional.empty();
-            for (JsonNode row : data) {
-                String name = row.path("index").asText("");
-                if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
-                    double prevClose = row.path("previousClose").asDouble(0.0);
-                    if (prevClose > 0.0) {
-                        return java.util.Optional.of(prevClose);
-                    }
-                }
-            }
+            HttpHeaders h = new HttpHeaders();
+            h.set("User-Agent", "Mozilla/5.0"); h.set("Accept", "application/json");
+            ResponseEntity<String> resp = restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(h), String.class);
+            if (resp.getBody() == null) return java.util.Optional.empty();
+            double pc = mapper.readTree(resp.getBody())
+                .path("chart").path("result").path(0).path("meta")
+                .path("chartPreviousClose").asDouble(0.0);
+            return pc > 0.0 ? java.util.Optional.of(pc) : java.util.Optional.empty();
         } catch (Exception e) {
-            log.debug("Unable to fetch NSE previous close: {}", e.getMessage());
+            log.debug("Yahoo prevClose fetch failed: {}", e.getMessage());
+            return java.util.Optional.empty();
         }
-        return java.util.Optional.empty();
     }
 
+    // fetchNseLastValue: replaced with Yahoo Finance — NSE allIndices blocked from cloud
     private java.util.Optional<Double> fetchNseLastValue() {
-        String url = "https://www.nseindia.com/api/allIndices";
+        String url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1d";
         try {
-            ResponseEntity<String> response =
-                restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(defaultNseJsonHeaders()), String.class);
-            if (response.getBody() == null || response.getBody().isBlank()) {
-                return java.util.Optional.empty();
-            }
-            JsonNode root = mapper.readTree(response.getBody());
-            JsonNode data = root.path("data");
-            if (!data.isArray()) return java.util.Optional.empty();
-            for (JsonNode row : data) {
-                String name = row.path("index").asText("");
-                if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(name)) {
-                    double last = row.path("last").asDouble(0.0);
-                    if (last > 0.0) {
-                        return java.util.Optional.of(last);
-                    }
-                }
-            }
+            HttpHeaders h = new HttpHeaders();
+            h.set("User-Agent", "Mozilla/5.0"); h.set("Accept", "application/json");
+            ResponseEntity<String> resp = restTemplate.exchange(URI.create(url), HttpMethod.GET, new HttpEntity<>(h), String.class);
+            if (resp.getBody() == null) return java.util.Optional.empty();
+            double lv = mapper.readTree(resp.getBody())
+                .path("chart").path("result").path(0).path("meta")
+                .path("regularMarketPrice").asDouble(0.0);
+            return lv > 0.0 ? java.util.Optional.of(lv) : java.util.Optional.empty();
         } catch (Exception e) {
-            log.debug("Unable to fetch NSE last value: {}", e.getMessage());
+            log.debug("Yahoo lastValue fetch failed: {}", e.getMessage());
+            return java.util.Optional.empty();
         }
-        return java.util.Optional.empty();
     }
 
     private String resolveFallbackExpiry() {

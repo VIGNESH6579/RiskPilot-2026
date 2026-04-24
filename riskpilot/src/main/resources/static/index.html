@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
@@ -201,5 +201,324 @@
     setInterval(refreshTradeHistory, 5000);
     setInterval(refreshClock, 1000);
 </script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RiskPilot - Live Trading Monitor</title>
+  <style>
+    :root {
+      --bg: #0a0f1f;
+      --panel: #121a30;
+      --panel-2: #1a2441;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --good: #34d399;
+      --warn: #f59e0b;
+      --bad: #f87171;
+      --line: #243153;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0; font-size: 22px; font-weight: 700; }
+    .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .status { padding: 8px 12px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; }
+    .status.ok { color: var(--good); }
+    .status.error { color: var(--bad); }
+    
+    .market-data {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { font-size: 18px; margin-top: 3px; font-weight: 600; }
+    .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead { background: var(--panel-2); }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    .mono { font-family: ui-monospace, monospace; }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .empty { padding: 28px; text-align: center; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>🎯 RiskPilot Live Monitor</h1>
+        <div class="sub">Real-time NIFTY Options Trading System</div>
+      </div>
+      <div style="text-align: right;">
+        <div id="clock" style="font-size: 18px; font-weight: 600;">--:--:--</div>
+        <div id="status" class="status error">Connecting...</div>
+      </div>
+    </div>
+
+    <!-- MARKET DATA PANEL -->
+    <div class="market-data">
+      <div class="card">
+        <div class="label">NIFTY Spot</div>
+        <div id="spot" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">India VIX</div>
+        <div id="vix" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Weekly Expiry</div>
+        <div id="expiry" class="value muted" style="font-size: 14px;">--</div>
+      </div>
+      <div class="card">
+        <div class="label">OR High</div>
+        <div id="orHigh" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">OR Low</div>
+        <div id="orLow" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Regime</div>
+        <div id="regime" class="value muted" style="font-size: 14px;">--</div>
+      </div>
+    </div>
+
+    <!-- ENGINE STATUS -->
+    <div class="market-data">
+      <div class="card">
+        <div class="label">Session Active</div>
+        <div id="sessionActive" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Trades Today</div>
+        <div id="tradesTaken" class="value">0</div>
+      </div>
+      <div class="card">
+        <div class="label">Feed Health</div>
+        <div id="feedHealth" class="value good">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Daily Loss</div>
+        <div id="dailyLoss" class="value">0.0R</div>
+      </div>
+      <div class="card">
+        <div class="label">Candles</div>
+        <div id="candleCount" class="value">0</div>
+      </div>
+      <div class="card">
+        <div class="label">Last Update</div>
+        <div id="lastUpdate" class="value muted" style="font-size: 12px;">--</div>
+      </div>
+    </div>
+
+    <!-- TRADES TABLE -->
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Direction</th>
+            <th>Expected</th>
+            <th>Actual</th>
+            <th>Latency(s)</th>
+            <th>Slippage</th>
+            <th>MFE</th>
+            <th>MAE</th>
+            <th>TP1</th>
+            <th>Runner</th>
+            <th>P&L</th>
+            <th>Exit Reason</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="12" class="empty">Awaiting trades...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const MAX_ROWS = 50;
+    const rows = [];
+    let reconnectTimer = null;
+    let ws = null;
+
+    const statusEl = document.getElementById("status");
+    const rowsEl = document.getElementById("rows");
+    const clockEl = document.getElementById("clock");
+
+    // Market data elements
+    const spotEl = document.getElementById("spot");
+    const vixEl = document.getElementById("vix");
+    const expiryEl = document.getElementById("expiry");
+    const orHighEl = document.getElementById("orHigh");
+    const orLowEl = document.getElementById("orLow");
+    const regimeEl = document.getElementById("regime");
+    
+    // Engine status
+    const sessionActiveEl = document.getElementById("sessionActive");
+    const tradesEl = document.getElementById("tradesTaken");
+    const feedEl = document.getElementById("feedHealth");
+    const lossEl = document.getElementById("dailyLoss");
+    const candleEl = document.getElementById("candleCount");
+    const lastUpdateEl = document.getElementById("lastUpdate");
+
+    // Live clock
+    function updateClock() {
+      const now = new Date();
+      clockEl.textContent = now.toLocaleTimeString('en-IN');
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Fetch market data
+    function fetchMarketData() {
+      fetch('/api/v1/data/health')
+        .then(r => r.json())
+        .then(data => {
+          if (data.spot) spotEl.textContent = data.spot.toFixed(2);
+          if (data.expiry) expiryEl.textContent = data.expiry;
+        })
+        .catch(e => console.error('Market data fetch error', e));
+
+      fetch('/api/v1/data/vix')
+        .then(r => r.text())
+        .then(vix => {
+          vixEl.textContent = parseFloat(vix).toFixed(2);
+        })
+        .catch(e => console.error('VIX fetch error', e));
+
+      fetch('/api/v1/engine/state')
+        .then(r => r.json())
+        .then(state => {
+          sessionActiveEl.textContent = state.sessionActive ? '✅ Yes' : '❌ No';
+          feedEl.textContent = state.feedHealthy ? '✅ Healthy' : '⚠️ Unstable';
+          feedEl.className = 'value ' + (state.feedHealthy ? 'good' : 'bad');
+          if (state.regime) regimeEl.textContent = state.regime;
+          if (state.orHigh) orHighEl.textContent = state.orHigh.toFixed(0);
+          if (state.orLow) orLowEl.textContent = state.orLow.toFixed(0);
+          lastUpdateEl.textContent = new Date().toLocaleTimeString();
+        })
+        .catch(e => console.error('Engine state fetch error', e));
+
+      fetch('/api/v1/engine/candle-history')
+        .then(r => r.json())
+        .then(data => {
+          candleEl.textContent = data.candleHistorySize || 0;
+        })
+        .catch(e => console.error('Candle history fetch error', e));
+    }
+
+    // WebSocket connection
+    function connect() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${protocol}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        setStatus("Connected", true);
+        fetchMarketData();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          rows.unshift(payload);
+          if (rows.length > MAX_ROWS) rows.pop();
+          renderTable();
+          updateEngineMetrics();
+        } catch (e) {}
+      };
+
+      ws.onerror = () => setStatus("Socket error", false);
+      ws.onclose = () => {
+        setStatus("Disconnected, retrying...", false);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 1500);
+      };
+    }
+
+    function setStatus(text, ok) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (ok ? " ok" : " error");
+    }
+
+    function formatNum(v, d = 2) {
+      return typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "-";
+    }
+
+    function renderTable() {
+      if (rows.length === 0) {
+        rowsEl.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades...</td></tr>';
+        return;
+      }
+      rowsEl.innerHTML = rows.map((r, i) => `
+        <tr>
+          <td>${r.signalTime || "-"}</td>
+          <td>${r.direction || "-"}</td>
+          <td>${formatNum(r.expectedEntry)}</td>
+          <td>${formatNum(r.actualEntry)}</td>
+          <td class="${(r.latencySec || 0) > 2 ? "bad" : "muted"}">${formatNum(r.latencySec)}</td>
+          <td class="${Math.abs(r.slippage || 0) > 1 ? "bad" : "good"}">${formatNum(r.slippage)}</td>
+          <td>${formatNum(r.mfe)}</td>
+          <td>${formatNum(r.mae)}</td>
+          <td>${r.tp1Hit ? "✅" : "❌"}</td>
+          <td>${r.runnerCaptured ? "✅" : "❌"}</td>
+          <td class="${(r.realizedR || 0) > 0 ? "good" : "bad"}">${formatNum(r.realizedR)}R</td>
+          <td class="${(r.exitReason || "").includes("FAIL") ? "bad" : "muted"}">${r.exitReason || "-"}</td>
+        </tr>
+      `).join("");
+    }
+
+    function updateEngineMetrics() {
+      tradesEl.textContent = rows.length;
+      if (rows.length > 0) {
+        const totalR = rows.reduce((acc, r) => acc + (r.realizedR || 0), 0);
+        lossEl.textContent = totalR.toFixed(2) + 'R';
+        lossEl.className = 'value ' + (totalR > 0 ? 'good' : 'bad');
+      }
+    }
+
+    connect();
+    setInterval(fetchMarketData, 5000); // Refresh every 5 seconds
+  </script>
 </body>
 </html>
