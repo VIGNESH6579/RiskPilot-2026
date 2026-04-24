@@ -1,12 +1,20 @@
 import asyncio
 import csv
 import json
+import logging
 import os
 import time
 from collections import OrderedDict
 
 import aiohttp
 from aiohttp import web
+
+# Add logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 CSV_PATH = os.environ.get("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv")
 NTFY_TOPIC = os.environ.get("RISKPILOT_NTFY_TOPIC", "riskpilot_shadow_alerts")
@@ -94,24 +102,31 @@ async def notify_ntfy(session: aiohttp.ClientSession, payload: dict):
         return
 
     message = (
-        f"RiskPilot Shadow Exit\n"
-        f"Reason: {payload.get('exitReason')}\n"
-        f"Slippage: {payload.get('slippage')}\n"
+        f"RiskPilot Alert\n"
+        f"Exit: {payload.get('exitReason')}\n"
+        f"Slippage: ₹{payload.get('slippage')}\n"
         f"Runner: {payload.get('isRunner')}\n"
-        f"Latency(s): {payload.get('latencySec')}"
+        f"Latency: {payload.get('latencySec')}s"
     )
     headers = {
-        "Title": "RiskPilot Shadow Alert",
-        "Priority": "default",
-        "Tags": "chart_with_upwards_trend,warning",
+        "Title": "RiskPilot Trade",
+        "Priority": "high",
+        "Tags": "chart_with_upwards_trend",
     }
     try:
         async with session.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}", data=message.encode("utf-8"), headers=headers
-        ):
-            last_notify_ts = now
-    except Exception:
-        pass
+            f"https://ntfy.sh/{NTFY_TOPIC}", 
+            data=message.encode("utf-8"), 
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as resp:
+            if resp.status == 200:
+                logger.info(f"Notification sent: {payload.get('exitReason')}")
+                last_notify_ts = now
+            else:
+                logger.warning(f"ntfy failed: {resp.status}")
+    except Exception as e:
+        logger.error(f"ntfy error: {str(e)}")
 
 
 async def broadcast_payload(payload: dict):

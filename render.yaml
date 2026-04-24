@@ -1,0 +1,34 @@
+services:
+  # Production Web Service
+  - type: web
+    name: riskpilot-2026
+    env: docker
+    plan: free
+    dockerfilePath: ./riskpilot/Dockerfile
+    dockerContext: ./riskpilot
+    autoDeploy: true
+    
+    # Environment variables for free tier optimization
+    envVars:
+      - key: JAVA_OPTS
+        value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
+      - key: MAVEN_OPTS
+        value: "-Xms256m -Xmx512m"
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+    
+    # Health check configuration
+    healthCheckPath: /actuator/health
+    healthCheckTimeout: 30
+    healthCheckInterval: 60
+    
+    # Build optimization
+    buildCommand: "cd riskpilot && mvn clean package -DskipTests -Dmaven.test.skip=true"
+    
+    # Start command optimization
+    startCommand: "./start.sh"
+    
+    # Resource limits for free tier
+    resourceLimits:
+      memory: 512Mi
+      cpu: 0.5

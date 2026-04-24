@@ -1,22 +1,29 @@
 spring:
   application:
     name: riskpilot
-  datasource:
-    url: jdbc:h2:mem:testdb
-    driverClassName: org.h2.Driver
-    username: sa
-    password: password
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update
-  h2:
-    console:
-      enabled: true
+      ddl-auto: validate
 
-angelapi:
-  key: ${ANGEL_API_KEY:}
-  clientcode: ${ANGEL_CLIENT_ID:}
-  pin: ${ANGEL_PIN:}
-  totp:
-    secret: ${ANGEL_TOTP_SECRET:}
+server:
+  port: 8080
+
+logging:
+  level:
+    root: INFO
+    com.riskpilot: DEBUG
+
+angel:
+  api:
+    key: ${ANGEL_API_KEY:}
+    clientcode: ${ANGEL_CLIENT_ID:}
+    pin: ${ANGEL_PIN:}
+    totp:
+      secret: ${ANGEL_TOTP_SECRET:}
+
+riskpilot:
+  csv:
+    path: ${RISKPILOT_CSV_PATH:shadow_live_forward_logs.csv}
+  ntfy:
+    topic: ${RISKPILOT_NTFY_TOPIC:riskpilot-live-signals}
+    enabled: ${RISKPILOT_ENABLE_NTFY:true}
