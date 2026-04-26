@@ -1,39 +1,22 @@
-# Build Stage optimized for Render free tier
 FROM maven:3.9.6-eclipse-temurin-17 AS builder
 WORKDIR /app
 
-# Set Maven memory limits for free tier
 ENV MAVEN_OPTS="-Xms256m -Xmx512m"
 
-COPY pom.xml .
+COPY pom.xml mvnw mvnw.cmd ./
+COPY .mvn ./.mvn
 COPY src ./src
 
-# Build with optimized settings for free tier
 RUN mvn clean package -DskipTests -Dmaven.test.skip=true -Dspring-boot.repack.skip=false
 
-# Run Stage dynamically smoothly logically solidly exactly smoothly smartly comfortably naturally appropriately natively squarely naturally natively cleverly.
 FROM eclipse-temurin:17-jre-jammy
+WORKDIR /app
 
-# Install Python & libraries for the Observer safely efficiently smoothly
-RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
-    rm -rf /var/lib/apt/lists/*
-RUN pip3 install websockets aiohttp
-
-# Force Cache Invalidation efficiently stably smoothly cleanly solidly seamlessly solidly confidently expertly correctly correctly safely firmly exactly safely safely explicit securely correctly strictly
-ENV LIVE_OBSERVER_VERSION="2026.4.19"
-# Enforce IST Clock Sync Check natively efficiently smoothly explicit correctly seamlessly tightly smartly successfully effortlessly seamlessly securely cleanly
+ENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
 ENV TZ="Asia/Kolkata"
 
-WORKDIR /app
-COPY --from=builder /app/target/riskpilot-0.0.1-SNAPSHOT.jar app.jar
-COPY observer.py .
-COPY frontend.html .
-COPY start.sh .
+COPY --from=builder /app/target/riskpilot-1.0.0-PRODUCTION.jar /app/app.jar
 
-RUN chmod +x start.sh
+EXPOSE 8080
 
-# Explicitly expose port 8080 (REST Health) and 8765 (WebSocket Observer)
-EXPOSE 8080 8765
-
-ENTRYPOINT ["./start.sh"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -Dserver.port=${PORT:-8080} -jar /app/app.jar"]

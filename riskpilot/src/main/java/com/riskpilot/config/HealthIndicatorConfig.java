@@ -4,11 +4,10 @@ import com.riskpilot.service.AngelOneMarketDataService;
 import com.riskpilot.service.HeartbeatMonitor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 
@@ -30,7 +29,6 @@ public class HealthIndicatorConfig {
         return new TradingEngineHealthIndicator(heartbeatMonitor);
     }
 
-    @Component
     public static class MarketDataHealthIndicator implements HealthIndicator {
         private final AngelOneMarketDataService marketDataService;
 
@@ -41,7 +39,7 @@ public class HealthIndicatorConfig {
         @Override
         public Health health() {
             try {
-                boolean isConnected = marketDataService.isConnected();
+                boolean isConnected = marketDataService.getNiftyLtp().isPresent();
                 if (isConnected) {
                     return Health.up()
                             .withDetail("status", "Connected")
@@ -63,7 +61,6 @@ public class HealthIndicatorConfig {
         }
     }
 
-    @Component
     public static class TradingEngineHealthIndicator implements HealthIndicator {
         private final HeartbeatMonitor heartbeatMonitor;
 
@@ -75,7 +72,7 @@ public class HealthIndicatorConfig {
         public Health health() {
             try {
                 boolean isHealthy = heartbeatMonitor.isHealthy();
-                long lastHeartbeat = heartbeatMonitor.getLastHeartbeatTime();
+                String lastHeartbeat = heartbeatMonitor.getLastHeartbeatTime();
                 
                 if (isHealthy) {
                     return Health.up()

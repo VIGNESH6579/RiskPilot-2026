@@ -8,6 +8,7 @@ import org.springframework.util.FileCopyUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -18,12 +19,12 @@ public class FrontendController {
     @GetMapping(value = "/", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> getFrontend() {
         try {
-            Resource resource = new ClassPathResource("frontend.html");
+            Resource resource = new ClassPathResource("static/index.html");
             if (resource.exists()) {
-                String content = FileCopyUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
+                String content = FileCopyUtils.copyToString(new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8));
                 return ResponseEntity.ok(content);
             } else {
-                // Fallback to simple HTML if frontend.html not found
+                // Fallback to simple HTML if the bundled dashboard is not available
                 String fallbackHtml = """
                     <!DOCTYPE html>
                     <html>
@@ -56,11 +57,12 @@ public class FrontendController {
             return ResponseEntity.ok(Map.of(
                 "status", "success",
                 "message", "Frontend-backend connection established",
-                "websocket", "ws://host/ws",
+                "websocket", "/ws",
                 "apiEndpoints", Map.of(
                     "tradeHistory", "/api/v1/data/trade-history",
                     "monitoring", "/api/v1/monitor/state",
-                    "health", "/api/v1/data/health"
+                    "health", "/api/v1/data/health",
+                    "systemHealth", "/api/v1/health/state"
                 )
             ));
         } catch (Exception e) {

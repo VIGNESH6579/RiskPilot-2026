@@ -48,7 +48,7 @@ class TradingSessionServiceTest {
         testSession = TradingSession.builder()
                 .id(1L)
                 .sessionDate(LocalDate.now())
-                .symbol("BANKNIFTY")
+                .symbol("NIFTY")
                 .dailyOpen(new BigDecimal("46000"))
                 .orHigh(new BigDecimal("46150"))
                 .orLow(new BigDecimal("45950"))
@@ -56,7 +56,7 @@ class TradingSessionServiceTest {
         
         testTrade = Trade.builder()
                 .id(1L)
-                .symbol("BANKNIFTY")
+                .symbol("NIFTY")
                 .direction("LONG")
                 .entryPrice(new BigDecimal("46100"))
                 .stopLoss(new BigDecimal("46015"))
@@ -71,7 +71,7 @@ class TradingSessionServiceTest {
         
         testSignal = TradingSignal.builder()
                 .id(1L)
-                .symbol("BANKNIFTY")
+                .symbol("NIFTY")
                 .direction("LONG")
                 .expectedEntry(new BigDecimal("46100"))
                 .stopLoss(new BigDecimal("46015"))
@@ -87,33 +87,33 @@ class TradingSessionServiceTest {
     @Test
     void getCurrentSession_ExistingSession_ReturnsSession() {
         // Given
-        when(sessionRepository.findActiveSession("BANKNIFTY"))
+        when(sessionRepository.findActiveSession("NIFTY"))
                 .thenReturn(Optional.of(testSession));
         
         // When
-        TradingSession result = tradingSessionService.getCurrentSession("BANKNIFTY");
+        TradingSession result = tradingSessionService.getCurrentSession("NIFTY");
         
         // Then
         assertNotNull(result);
-        assertEquals("BANKNIFTY", result.getSymbol());
+        assertEquals("NIFTY", result.getSymbol());
         assertEquals(LocalDate.now(), result.getSessionDate());
-        verify(sessionRepository).findActiveSession("BANKNIFTY");
+        verify(sessionRepository).findActiveSession("NIFTY");
     }
     
     @Test
     void getCurrentSession_NoExistingSession_CreatesNewSession() {
         // Given
-        when(sessionRepository.findActiveSession("BANKNIFTY"))
+        when(sessionRepository.findActiveSession("NIFTY"))
                 .thenReturn(Optional.empty());
         when(sessionRepository.save(any(TradingSession.class)))
                 .thenReturn(testSession);
         
         // When
-        TradingSession result = tradingSessionService.getCurrentSession("BANKNIFTY");
+        TradingSession result = tradingSessionService.getCurrentSession("NIFTY");
         
         // Then
         assertNotNull(result);
-        verify(sessionRepository).findActiveSession("BANKNIFTY");
+        verify(sessionRepository).findActiveSession("NIFTY");
         verify(sessionRepository).save(any(TradingSession.class));
     }
     
@@ -121,32 +121,32 @@ class TradingSessionServiceTest {
     void getActiveTrades_ReturnsActiveTrades() {
         // Given
         List<Trade> expectedTrades = Arrays.asList(testTrade);
-        when(tradeRepository.findActiveTradesBySymbol("BANKNIFTY"))
+        when(tradeRepository.findActiveTradesBySymbol("NIFTY"))
                 .thenReturn(expectedTrades);
         
         // When
-        List<Trade> result = tradingSessionService.getActiveTrades("BANKNIFTY");
+        List<Trade> result = tradingSessionService.getActiveTrades("NIFTY");
         
         // Then
         assertEquals(1, result.size());
         assertEquals(testTrade.getId(), result.get(0).getId());
-        verify(tradeRepository).findActiveTradesBySymbol("BANKNIFTY");
+        verify(tradeRepository).findActiveTradesBySymbol("NIFTY");
     }
     
     @Test
     void getRecentSignals_ReturnsRecentSignals() {
         // Given
         List<TradingSignal> expectedSignals = Arrays.asList(testSignal);
-        when(signalRepository.findExecutableSignalsSince(eq("BANKNIFTY"), any(LocalDateTime.class)))
+        when(signalRepository.findExecutableSignalsSince(eq("NIFTY"), any(LocalDateTime.class)))
                 .thenReturn(expectedSignals);
         
         // When
-        List<TradingSignal> result = tradingSessionService.getRecentSignals("BANKNIFTY", 10);
+        List<TradingSignal> result = tradingSessionService.getRecentSignals("NIFTY", 10);
         
         // Then
         assertEquals(1, result.size());
         assertEquals(testSignal.getId(), result.get(0).getId());
-        verify(signalRepository).findExecutableSignalsSince(eq("BANKNIFTY"), any(LocalDateTime.class));
+        verify(signalRepository).findExecutableSignalsSince(eq("NIFTY"), any(LocalDateTime.class));
     }
     
     @Test
@@ -171,8 +171,6 @@ class TradingSessionServiceTest {
                 .thenReturn(Optional.of(testTrade));
         when(tradeRepository.save(any(Trade.class)))
                 .thenReturn(testTrade);
-        when(tradeRepository.getTodayPnL("BANKNIFTY"))
-                .thenReturn(new BigDecimal("100.50"));
         
         // When
         tradingSessionService.closeTrade(1L, "MANUAL_CLOSE");
@@ -201,11 +199,11 @@ class TradingSessionServiceTest {
     void getPerformanceMetrics_NoTrades_ReturnsZeroMetrics() {
         // Given
         when(tradeRepository.findBySymbolAndEntryTimeBetween(
-                eq("BANKNIFTY"), any(LocalDateTime.class), any(LocalDateTime.class)))
+                eq("NIFTY"), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(Arrays.asList());
         
         // When
-        var result = tradingSessionService.getPerformanceMetrics("BANKNIFTY", 30);
+        var result = tradingSessionService.getPerformanceMetrics("NIFTY", 30);
         
         // Then
         assertEquals(0, result.get("totalTrades"));
@@ -222,11 +220,11 @@ class TradingSessionServiceTest {
         List<Trade> trades = Arrays.asList(winningTrade, losingTrade);
         
         when(tradeRepository.findBySymbolAndEntryTimeBetween(
-                eq("BANKNIFTY"), any(LocalDateTime.class), any(LocalDateTime.class)))
+                eq("NIFTY"), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(trades);
         
         // When
-        var result = tradingSessionService.getPerformanceMetrics("BANKNIFTY", 30);
+        var result = tradingSessionService.getPerformanceMetrics("NIFTY", 30);
         
         // Then
         assertEquals(2, result.get("totalTrades"));
@@ -240,16 +238,16 @@ class TradingSessionServiceTest {
     @Test
     void endSession_ActiveSession_EndsSessionSuccessfully() {
         // Given
-        when(sessionRepository.findActiveSession("BANKNIFTY"))
+        when(sessionRepository.findActiveSession("NIFTY"))
                 .thenReturn(Optional.of(testSession));
         when(sessionRepository.save(any(TradingSession.class)))
                 .thenReturn(testSession);
         
         // When
-        tradingSessionService.endSession("BANKNIFTY");
+        tradingSessionService.endSession("NIFTY");
         
         // Then
-        verify(sessionRepository).findActiveSession("BANKNIFTY");
+        verify(sessionRepository).findActiveSession("NIFTY");
         verify(sessionRepository).save(testSession);
         assertFalse(testSession.getSessionActive());
         assertEquals("CLOSED", testSession.getStatus());
@@ -259,21 +257,21 @@ class TradingSessionServiceTest {
     @Test
     void endSession_NoActiveSession_DoesNothing() {
         // Given
-        when(sessionRepository.findActiveSession("BANKNIFTY"))
+        when(sessionRepository.findActiveSession("NIFTY"))
                 .thenReturn(Optional.empty());
         
         // When
-        tradingSessionService.endSession("BANKNIFTY");
+        tradingSessionService.endSession("NIFTY");
         
         // Then
-        verify(sessionRepository).findActiveSession("BANKNIFTY");
+        verify(sessionRepository).findActiveSession("NIFTY");
         verify(sessionRepository, never()).save(any(TradingSession.class));
     }
     
     private Trade createWinningTrade() {
         return Trade.builder()
                 .id(2L)
-                .symbol("BANKNIFTY")
+                .symbol("NIFTY")
                 .direction("LONG")
                 .entryPrice(new BigDecimal("46100"))
                 .stopLoss(new BigDecimal("46015"))
@@ -290,7 +288,7 @@ class TradingSessionServiceTest {
     private Trade createLosingTrade() {
         return Trade.builder()
                 .id(3L)
-                .symbol("BANKNIFTY")
+                .symbol("NIFTY")
                 .direction("LONG")
                 .entryPrice(new BigDecimal("46200"))
                 .stopLoss(new BigDecimal("46115"))
@@ -304,3 +302,4 @@ class TradingSessionServiceTest {
                 .build();
     }
 }
+

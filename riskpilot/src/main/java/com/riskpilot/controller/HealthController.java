@@ -11,7 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/v1/monitor")
+@RequestMapping("/api/v1/health")
 public class HealthController {
 
     @Autowired
@@ -25,6 +25,7 @@ public class HealthController {
         healthStatus.put("timestamp", Instant.now());
         healthStatus.put("service", "riskpilot-2026");
         healthStatus.put("angelOneConnected", angelAuthService.getJwtToken() != null);
+        healthStatus.put("credentialsConfigured", angelAuthService.hasCredentials());
         healthStatus.put("version", "1.0.0");
         healthStatus.put("uptimeRobotReady", true);
         

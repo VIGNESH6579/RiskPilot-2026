@@ -47,23 +47,25 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
         public static void broadcastTradeData(Object tradeData) {
             if (tradeData == null) return;
             
-            String message;
+            String serializedMessage;
             try {
                 // Convert to JSON string properly
                 if (tradeData instanceof Map) {
                     // Simple JSON conversion for Map objects
-                    message = mapToJson((Map<String, Object>) tradeData);
+                    serializedMessage = mapToJson((Map<String, Object>) tradeData);
                 } else {
-                    message = tradeData.toString();
+                    serializedMessage = tradeData.toString();
                 }
             } catch (Exception e) {
-                message = "{\"error\":\"Failed to serialize trade data\"}";
+                serializedMessage = "{\"error\":\"Failed to serialize trade data\"}";
             }
+
+            final String finalMessage = serializedMessage;
 
             sessions.values().removeIf(session -> {
                 try {
                     if (session.isOpen()) {
-                        session.sendMessage(new TextMessage(message));
+                        session.sendMessage(new TextMessage(finalMessage));
                         return false;
                     }
                 } catch (IOException e) {

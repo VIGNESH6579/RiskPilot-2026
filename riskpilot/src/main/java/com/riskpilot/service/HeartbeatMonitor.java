@@ -23,6 +23,15 @@ public class HeartbeatMonitor {
         lastTickReceivedTime = LocalDateTime.now();
     }
 
+    public synchronized boolean isHealthy() {
+        long secondsSinceLastTick = java.time.Duration.between(lastTickReceivedTime, LocalDateTime.now()).getSeconds();
+        return secondsSinceLastTick < 45;
+    }
+
+    public synchronized String getLastHeartbeatTime() {
+        return lastTickReceivedTime.toString();
+    }
+
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
         LocalDateTime now = LocalDateTime.now();

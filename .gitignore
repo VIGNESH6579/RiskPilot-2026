@@ -1,0 +1,8 @@
+.idea/
+riskpilot/target/
+riskpilot/logs/
+riskpilot/*.log
+riskpilot/option_chain_cache.json
+riskpilot/adaptive_regime.json
+riskpilot/KILL_SWITCH.flag
+

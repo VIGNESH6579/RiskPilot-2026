@@ -15,7 +15,7 @@ public record TradingSessionSnapshot(
     double orHigh,
     double orLow,
     double cumulativeDailyLossR,
-    ActiveTrade activeTradeReference,
+    ActiveTradeExecution activeTradeReference,
     String lastRejectReason
 ) {
     public static TradingSessionSnapshot initial() {

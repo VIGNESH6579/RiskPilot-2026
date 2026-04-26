@@ -281,8 +281,11 @@ public class AdaptiveRegimeEngine {
         int direction = "TIGHTEN".equals(signal) ? 1 : -1;
 
         // Apply bounded steps
-        newConfig.setMinRegimeScore(clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"), 
-                                       (Integer) BOUNDS.get("minRegimeScore")[0], (Integer) BOUNDS.get("minRegimeScore")[1]));
+        newConfig.setMinRegimeScore((int) Math.round(clamp(
+            config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"),
+            (Integer) BOUNDS.get("minRegimeScore")[0],
+            (Integer) BOUNDS.get("minRegimeScore")[1]
+        )));
         newConfig.setMinORRange(clamp(config.getMinORRange() + direction * (Double) STEPS.get("minORRange"), 
                                     (Double) BOUNDS.get("minORRange")[0], (Double) BOUNDS.get("minORRange")[1]));
         newConfig.setMinATRRatio(clamp(config.getMinATRRatio() + direction * (Double) STEPS.get("minATRRatio"), 

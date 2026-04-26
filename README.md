@@ -1,148 +1,66 @@
 # RiskPilot-2026
 
-A production-grade algorithmic trading system with real-time Angel One market data integration.
+RiskPilot is a Spring Boot trading monitor for NIFTY with live market-data integration, expiry tracking, health endpoints, and a lightweight frontend dashboard.
 
-## Features
+## What It Does
 
-✅ **Real-time Market Data** - Angel One API integration for live OHLC data  
-✅ **Signal Generation** - Algorithmic trap trading strategy  
-✅ **WebSocket Dashboard** - Real-time trade updates  
-✅ **Alert System** - ntfy.sh notifications for trade exits  
-✅ **Health Monitoring** - UptimeRobot integration  
-✅ **Production Ready** - Secure environment-based credentials  
+- Uses live NIFTY spot and option-chain data.
+- Exposes REST and WebSocket endpoints for dashboard updates.
+- Shows current spot, source, feed health, session state, trade history, and expiry date.
+- Packages as a single Docker web service for Render deployment.
 
-## Tech Stack
+## Stack
 
-- **Backend**: Spring Boot 4.0.5 (Java 17)
-- **Real-time Communication**: WebSocket + aiohttp
-- **Market Data**: Angel One Broker API
-- **Monitoring**: Prometheus + Actuator
-- **Alerts**: ntfy.sh
-- **Deployment**: Docker on Render.com
+- Java 17
+- Spring Boot 4.0.5
+- Spring Web, WebSocket, Security, Actuator, JPA
+- H2 for local/dev runtime
+- Docker for deployment
+- Render Blueprint via root `render.yaml`
 
-## Quick Start
-
-### Prerequisites
-- Angel One trading account
-- Render.com account
-- GitHub account
-
-### Local Development
+## Local Run
 
 ```bash
-# Clone repository
 git clone https://github.com/VIGNESH6579/RiskPilot-2026.git
 cd RiskPilot-2026/riskpilot
-
-# Set environment variables
-export ANGEL_API_KEY=your_api_key
-export ANGEL_CLIENT_ID=your_client_id
-export ANGEL_PIN=your_pin
-export ANGEL_TOTP_SECRET=your_totp_secret
-
-# Build with Maven
-mvn clean package
-
-# Run application
-java -jar target/riskpilot-0.0.1-SNAPSHOT.jar
+./mvnw clean test
+./mvnw spring-boot:run
 ```
 
-## Production Deployment
-Follow: PRODUCTION_SETUP.md
+Open:
 
-## API Endpoints
+- `http://localhost:8080/`
+- `http://localhost:8080/api/v1/health/state`
 
-### Health & Monitoring
-- `GET /api/v1/monitor/state` - Health status
-- `GET /api/v1/monitor/detailed` - Detailed system status
-- `GET /actuator/health` - Spring Boot health
-- `GET /actuator/metrics` - Application metrics
-- `GET /actuator/prometheus` - Prometheus metrics
+## Required Environment Variables
 
-### WebSocket
-- `WS /ws/signals` - Real-time trade signal stream
+- `ANGEL_API_KEY`
+- `ANGEL_CLIENT_ID`
+- `ANGEL_PIN`
+- `ANGEL_TOTP_SECRET`
 
-## Configuration
-All sensitive data is stored in environment variables:
+Optional:
 
-```bash
-ANGEL_API_KEY           # Angel One API key
-ANGEL_CLIENT_ID         # Client ID
-ANGEL_PIN              # Account PIN
-ANGEL_TOTP_SECRET      # 2FA TOTP secret
-RISKPILOT_NTFY_TOPIC   # ntfy.sh topic for alerts
-DATABASE_URL           # MySQL connection string
-```
+- `SPRING_PROFILES_ACTIVE=prod`
+- `JAVA_OPTS=-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication`
+- `NIFTY_WEEKLY_EXPIRY_DAY`
+- `NIFTY_EXPIRY_OVERRIDE`
 
-## File Structure
-```
-riskpilot/
-├── src/
-│   ├── main/
-│   │   ├── java/com/riskpilot/
-│   │   │   ├── controller/    # REST API controllers
-│   │   │   ├── service/       # Business logic
-│   │   │   ├── dto/           # Data transfer objects
-│   │   │   └── config/        # Spring configuration
-│   │   └── resources/
-│   │       ├── application.yaml
-│   │       └── application-prod.yaml
-│   └── test/
-├── observer.py          # WebSocket observer (Python)
-├── frontend.html        # Dashboard UI
-├── Dockerfile          # Container configuration
-├── pom.xml            # Maven dependencies
-└── render.yaml        # Render.com deployment config
-```
+## Important Endpoints
 
-## Monitoring
+- `GET /`
+- `GET /api/v1/data/health`
+- `GET /api/v1/data/trade-history?limit=20`
+- `GET /api/v1/monitor/state`
+- `GET /api/v1/health/state`
+- `GET /api/v1/health/state`
+- `WS /ws`
 
-### UptimeRobot
-- Monitor: `/api/v1/monitor/state`
-- Interval: 5 minutes
-- Alerts: Email + Slack
+## Deploying To Render
 
-### ntfy.sh
-- Topic: riskpilot-live-signals
-- Alerts: Real-time trade exits
+- The repo root contains `render.yaml`.
+- The app builds from `riskpilot/Dockerfile`.
+- Render should use the web-service health check path `/api/v1/health/state`.
+- For a Git-linked Render service, each push to `main` can auto-deploy.
 
-### Prometheus Metrics
-- Endpoint: `/actuator/prometheus`
-- Key metrics: Request latency, memory usage, uptime
-
-## Troubleshooting
-
-### Angel One Auth Fails
-- Verify credentials in environment variables
-- Check TOTP secret is valid
-- Ensure market hours (9:15 AM - 3:30 PM IST)
-
-### WebSocket Not Connecting
-- Check Observer running on port 8765
-- Verify firewall allows WebSocket
-- Check browser console for errors
-
-### No Trade Signals
-- Verify Angel One authentication
-- Check market is open
-- Verify CSV file is writable
-
-## Contributing
-
-1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Commit changes: `git commit -m 'Add feature'`
-3. Push to branch: `git push origin feature/your-feature`
-4. Open a pull request
-
-## License
-Private - RiskPilot-2026
-
-## Support
-For issues and questions, please open a GitHub issue.
-
-## Roadmap
-- Machine learning signal optimization
-- Multi-leg strategy support
-- Advanced risk management
-- Mobile app integration
-- Redis message queue (replace CSV)
+More deployment detail is in `PRODUCTION_SETUP.md`.

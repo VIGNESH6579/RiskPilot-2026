@@ -58,6 +58,11 @@ public class CandleAggregator {
             historicalBuffer.remove(0);
         }
     }
+
+    public synchronized void addCandle(Candle candle) {
+        finalizeCandle(candle);
+        lastTickTime = candle.timestamp();
+    }
     
     public synchronized void markUnstable() {
         this.feedUnstable = true;

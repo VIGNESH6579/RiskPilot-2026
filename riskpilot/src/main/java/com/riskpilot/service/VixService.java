@@ -14,14 +14,13 @@ import org.springframework.web.client.RestTemplate;
 @Service
 public class VixService {
     private static final Logger log = LoggerFactory.getLogger(VixService.class);
+    private static final long VIX_CACHE_MS = 20_000L;
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
-    
-    // Cached fallback
-    private double lastKnownVix = 15.0;
+
+    private Double lastKnownVix;
     private long lastSuccessfulFetchEpochMs = 0L;
-    private static final long VIX_CACHE_MS = 20_000L;
 
     public VixService() {
         this.restTemplate = new RestTemplate();
@@ -30,7 +29,7 @@ public class VixService {
 
     public synchronized double getIndiaVix() {
         long now = System.currentTimeMillis();
-        if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
+        if (lastKnownVix != null && now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS) {
             return lastKnownVix;
         }
 
@@ -48,7 +47,7 @@ public class VixService {
             ResponseEntity<String> response =
                     restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
 
-            if (response.getBody() == null) return lastKnownVix;
+            if (response.getBody() == null) return lastKnownVix != null ? lastKnownVix : Double.NaN;
 
             JsonNode json = mapper.readTree(response.getBody());
             JsonNode data = json.get("data");
@@ -63,9 +62,9 @@ public class VixService {
                 }
             }
         } catch (Exception e) {
-            log.warn("NSE VIX fetch failed, returning cached value: {}", e.getMessage());
+            log.warn("NSE VIX fetch failed, returning last live value if available: {}", e.getMessage());
         }
 
-        return lastKnownVix;
+        return lastKnownVix != null ? lastKnownVix : Double.NaN;
     }
 }

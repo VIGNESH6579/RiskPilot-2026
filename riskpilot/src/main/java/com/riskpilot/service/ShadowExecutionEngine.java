@@ -1,36 +1,26 @@
 package com.riskpilot.service;
 
+import com.riskpilot.config.PlainWebSocketConfig;
 import com.riskpilot.config.RiskPilotProperties;
-import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
-import com.riskpilot.engine.RegimeConfidenceEngine;
 import com.riskpilot.engine.RiskGateEngine;
-import com.riskpilot.engine.RegimeFilter;
-import com.riskpilot.engine.RealTimeEdgeTracker;
 import com.riskpilot.engine.VolatilityNormalizer;
 import com.riskpilot.model.ActiveTradeExecution;
 import com.riskpilot.model.Candle;
-import com.riskpilot.model.CandleEntity;
 import com.riskpilot.model.GateDecision;
+import com.riskpilot.model.Regime;
 import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
-import com.riskpilot.service.CandleAggregator;
-import com.riskpilot.config.PlainWebSocketConfig;
-import com.riskpilot.service.LiveMetricsLogger;
-import com.riskpilot.service.SessionStateManager;
-import com.riskpilot.service.TrapEngine;
-import com.riskpilot.service.VixService;
-import com.riskpilot.service.WebSocketService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,248 +33,158 @@ public class ShadowExecutionEngine {
     private final RiskPilotProperties config;
     private final RiskGateEngine riskGateEngine;
     private final KillSwitchEngine killSwitchEngine;
-    private final RegimeFilter regimeFilter;
-    private final RealTimeEdgeTracker edgeTracker;
-    private final VolatilityNormalizer volatilityNormalizer;
-    private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
     private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
-
-    // Store candle data for regime confidence evaluation
-    private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
+    private final VolatilityNormalizer volatilityNormalizer;
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
-    private boolean dayBlockedByFirstTradeFailure;
-
-    // Constructor removed - using @RequiredArgsConstructor for dependency injection
 
     public synchronized void evaluateTick(double currentPrice) {
-        // 🔴 KILL-SWITCH CHECK (EVERY TICK)
         if (killSwitchEngine.isKillSwitchTriggered()) {
-            log.error("🚫 KILL SWITCH ACTIVE - Ignoring tick processing");
+            log.warn("Kill switch active, ignoring tick");
             return;
         }
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
-
-        if (state.tradeActive() && state.activeTradeReference() != null) {
-            ActiveTradeExecution trade = state.activeTradeReference();
-            
-            // 🔒 STEP 1: Update MFE/MAE (mandatory, every tick)
-            trade = ActiveTradeExecution.updateExcursions(trade, currentPrice);
-
-            // 🔒 STEP 2: Handle TP1 (tick-level, immediate)
-            trade = ActiveTradeExecution.fromTickTP1(trade, currentPrice);
-
-            // 🔒 STEP 3: Check Stop Loss (tick-level, immediate)
-            TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
-            
-            if (exit.triggered()) {
-                closeTrade(trade, exit);
-                return;
-            }
-            
-            updateActiveTradeState(trade, state.lastRejectReason());
-            broadcastCurrentSessionState();
+        if (!state.tradeActive() || state.activeTradeReference() == null) {
+            return;
         }
+
+        ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), currentPrice);
+        trade = ActiveTradeExecution.fromTickTP1(trade, currentPrice);
+
+        TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
+        if (exit.triggered()) {
+            closeTrade(trade, exit);
+            return;
+        }
+
+        updateActiveTradeState(trade, state.lastRejectReason());
     }
 
     public synchronized void evaluateCandle(Candle candle) {
-        TradingSessionSnapshot state = stateManager.getSnapshot();
-        
-        // 🔒 STEP 1: Update candle aggregator
         candleAggregator.addCandle(candle);
-        
-        // 🔒 STEP 2: Store candle data for regime confidence evaluation
-        storeCandleData(candle);
-        
-        // 🔒 STEP 3: Update regime filter with new candle data
-        updateRegimeFilter(candle);
-        
-        // 🔒 STEP 4: Update volatility normalizer with opening range
-        volatilityNormalizer.updateOpeningRange(candle.high(), candle.low(), candle.timestamp());
-        
-        // 🔒 STEP 5: Process exit logic if trade active
+        volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
+        updateSessionStateFromTime(candle.timestamp().toLocalTime());
+
+        TradingSessionSnapshot state = stateManager.getSnapshot();
         if (state.tradeActive() && state.activeTradeReference() != null) {
-            ActiveTradeExecution trade = state.activeTradeReference();
-            
-            // Candle close logic
-            trade = ActiveTradeExecution.fromCandleClose(trade, candle);
-            
-            // Check for late session forced exit
-            TradeExit forcedExit = checkForcedSessionExit(trade, candle);
-            if (forcedExit.triggered()) {
-                closeTrade(trade, forcedExit);
+            ActiveTradeExecution trade = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), candle);
+            if (riskGateEngine.shouldForceLateSessionExit(state)) {
+                closeTrade(trade, exitAtPrice(trade, candle.close, "TIME_CUTOFF_EXIT"));
                 return;
             }
-            
             updateActiveTradeState(trade, state.lastRejectReason());
-            broadcastCurrentSessionState();
             return;
         }
-        
-        // 🔒 STEP 6: Check for new signal
-        if (shouldEvaluateSignal(candle)) {
-            evaluateSignal(candle, state);
-        }
-    }
 
-    private void storeCandleData(Candle candle) {
-        RegimeConfidenceEngine.CandleData candleData = new RegimeConfidenceEngine.CandleData(
-            candle.open(), candle.high(), candle.low(), candle.close(), candle.timestamp()
-        );
-        
-        candleHistory.add(candleData);
-        
-        // Keep only last 50 candles for regime confidence evaluation
-        if (candleHistory.size() > 50) {
-            candleHistory.remove(0);
-        }
-    }
-
-    private void updateRegimeFilter(Candle candle) {
-        // Calculate ATR (simplified - you may want to use proper ATR calculation)
-        double atr = Math.abs(candle.high() - candle.low());
-        
-        // Update regime filter
-        regimeFilter.processCandle(
-            candle.open(), candle.high(), candle.low(), candle.close(),
-            candle.volume(), candle.timestamp(), atr
-        );
+        maybeOpenTrade(state, candleAggregator.getValidHistory());
     }
 
     public synchronized void evaluateCandleClose() {
-        List<CandleEntity> strictHistory = candleAggregator.getValidHistory();
-        if (strictHistory.size() < 10) {
+        List<Candle> history = candleAggregator.getValidHistory();
+        if (history.isEmpty()) {
             return;
         }
 
-        CandleEntity newestCandle = strictHistory.get(strictHistory.size() - 1);
-        updateSessionStateFromTime(LocalTime.parse(newestCandle.getTimestamp().toLocalTime().toString()));
-
-        if (dayBlockedByFirstTradeFailure) {
-            logReject(stateManager.getSnapshot(), "FIRST_TRADE_FAILURE_DAY_BLOCK");
-            return;
-        }
-
+        Candle latest = history.get(history.size() - 1);
+        updateSessionStateFromTime(latest.timestamp().toLocalTime());
         TradingSessionSnapshot state = stateManager.getSnapshot();
-        
-        // 🔒 STEP 4: FORCE LATE SESSION EXIT (CONFIG-DRIVEN)
-        if (riskGateEngine.shouldForceLateSessionExit(state)) {
-            log.warn("🚫 LATE SESSION FORCE EXIT: Time cutoff reached");
-            if (state.tradeActive() && state.activeTradeReference() != null) {
-                ActiveTradeExecution trade = state.activeTradeReference();
-                ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(trade, newestCandle);
-                TradeExit exit = new TradeExit(
-                    true,
-                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.getClosePrice()) * updated.remainingSize()),
-                    "TIME_CUTOFF_EXIT",
-                    newestCandle.getClosePrice()
-                );
-                closeTrade(updated, exit);
-            }
+
+        if (state.tradeActive() && state.activeTradeReference() != null && riskGateEngine.shouldForceLateSessionExit(state)) {
+            closeTrade(state.activeTradeReference(), exitAtPrice(state.activeTradeReference(), latest.close, "TIME_CUTOFF_EXIT"));
             return;
         }
 
-        if (state.tradeActive() && state.activeTradeReference() != null) {
-            CandleEntity previousCandle = strictHistory.get(strictHistory.size() - 2);
-            double currentRange = newestCandle.getHighPrice() - newestCandle.getLowPrice();
-            double previousRange = previousCandle.getHighPrice() - previousCandle.getLowPrice();
-            double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-            ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), newestCandle);
-            
-            if (state.timePhase() != TimePhase.EARLY && orRange > 0.0 && currentRange < (orRange * 0.2)) {
-                TradeExit exit = new TradeExit(
-                    true,
-                    updated.realizedPnL() + ((updated.entryPrice() - newestCandle.getClosePrice()) * updated.remainingSize()),
-                    "VOLATILITY_COLLAPSE_EXIT",
-                    newestCandle.getClosePrice()
-                );
-                closeTrade(updated, exit);
-                return;
-            }
-            updateActiveTradeState(updated, state.lastRejectReason());
-            broadcastCurrentSessionState();
-            return;
-        }
+        maybeOpenTrade(state, history);
+    }
 
-        if (newestCandle.time.equals(lastTriggeredCandleTime)) {
-            return;
-        }
-
-        // 🔒 STEP 1: Calculate metrics for gate evaluation
-        double localSupport = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.low).min().orElse(newestCandle.low);
-        double localResistance = strictHistory.stream().skip(Math.max(0, strictHistory.size() - 6)).mapToDouble(c -> c.high).max().orElse(newestCandle.high);
-        double liveVix = vixService.getIndiaVix();
-        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-        double entrySlippageEstimate = Math.abs(newestCandle.close - trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix).getEntry());
-
-        // 🔒 STEP 2: HARD GATE EVALUATION (NO BYPASS)
-        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, entrySlippageEstimate, 0L);
-        
-        // 🔒 STEP 3: MANDATORY DECISION LOGGING
-        riskGateEngine.logDecision(state, orRange, 0L, entrySlippageEstimate, decision);
-        
-        if (!decision.allowed()) {
-            log.warn("🚫 GATE REJECTION: {}", decision.reason());
-            return;
-        }
-
-        // 🔒 STEP 4: Only proceed if ALL gates passed
-        Signal signal = trapEngine.detectTrap(strictHistory, localSupport, localResistance, liveVix);
-        if (signal == null) {
-            return;
-        }
-
-        openTrade(signal, state);
-        lastTriggeredCandleTime = newestCandle.time;
+    public synchronized void restart() {
+        stateManager.resetDaily();
+        candleAggregator.clearHistory();
+        volatilityNormalizer.reset();
+        lastTriggeredCandleTime = "";
+        activeSignalTime = null;
+        activeExpectedEntry = 0.0;
         broadcastCurrentSessionState();
     }
 
     @Scheduled(cron = "0 14 9 * * ?")
     public void executeDailyHardReset() {
-        stateManager.resetDaily();
-        candleAggregator.clearHistory();
-        candleHistory.clear(); // Reset regime confidence candle data
-        lastTriggeredCandleTime = "";
-        activeSignalTime = null;
-        dayBlockedByFirstTradeFailure = false;
-        broadcastCurrentSessionState();
+        restart();
+    }
+
+    private void maybeOpenTrade(TradingSessionSnapshot state, List<Candle> history) {
+        if (history.size() < 7) {
+            return;
+        }
+
+        Candle latest = history.get(history.size() - 1);
+        String candleId = latest.date + "T" + latest.time;
+        if (candleId.equals(lastTriggeredCandleTime)) {
+            return;
+        }
+
+        double orRange = currentOrRange(state);
+        double localSupport = history.stream()
+            .skip(Math.max(0, history.size() - 6))
+            .mapToDouble(c -> c.low)
+            .min()
+            .orElse(latest.low);
+        double localResistance = history.stream()
+            .skip(Math.max(0, history.size() - 6))
+            .mapToDouble(c -> c.high)
+            .max()
+            .orElse(latest.high);
+
+        Signal signal = trapEngine.detectTrap(history, localSupport, localResistance, vixService.getIndiaVix());
+        if (signal == null) {
+            return;
+        }
+
+        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, 0.0, 0L);
+        riskGateEngine.logDecision(state, orRange, 0L, 0.0, decision);
+        if (!decision.allowed()) {
+            logReject(state, decision.reason());
+            return;
+        }
+
+        openTrade(signal, state);
+        lastTriggeredCandleTime = candleId;
     }
 
     private void updateSessionStateFromTime(LocalTime now) {
-        TimePhase phase = now.isBefore(LocalTime.NOON) ? TimePhase.EARLY :
-            (now.isBefore(LocalTime.of(13, 30)) ? TimePhase.MID : TimePhase.LATE);
+        LocalTime sessionStart = LocalTime.parse(config.getSession().getStart());
+        LocalTime sessionEnd = LocalTime.parse(config.getSession().getEnd());
+        LocalTime openingRangeEnd = LocalTime.parse(config.getSession().getOpeningRangeEnd());
+
+        List<Candle> history = candleAggregator.getValidHistory();
 
         stateManager.update(current -> {
-            boolean sessionActive = !now.isBefore(LocalTime.of(9, 15)) && now.isBefore(LocalTime.of(15, 30));
             double orHigh = current.orHigh();
             double orLow = current.orLow();
 
-            List<CandleEntity> history = candleAggregator.getValidHistory();
-            if (!history.isEmpty()) {
-                CandleEntity last = history.get(history.size() - 1);
-                if (now.isBefore(LocalTime.of(10, 15))) {
-                    orHigh = Math.max(orHigh, last.getHighPrice());
-                    orLow = Math.min(orLow, last.getLowPrice());
-                }
+            if (!history.isEmpty() && !now.isAfter(openingRangeEnd)) {
+                Candle last = history.get(history.size() - 1);
+                orHigh = Double.isFinite(orHigh) ? Math.max(orHigh, last.high) : last.high;
+                orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
             }
 
-            double orRange = (Double.isInfinite(orHigh) || Double.isInfinite(orLow)) ? 0.0 : (orHigh - orLow);
-            boolean volatilityQualified = orRange > 120.0;
+            double orRange = isValidOr(orHigh, orLow) ? (orHigh - orLow) : 0.0;
+            boolean volatilityQualified = orRange >= config.getFilters().getMinOrRange();
             Regime regime = volatilityQualified ? Regime.TREND : Regime.BLOCKED;
 
             return new TradingSessionSnapshot(
-                sessionActive,
+                !now.isBefore(sessionStart) && now.isBefore(sessionEnd),
                 regime,
                 volatilityQualified,
-                phase,
+                resolvePhase(now),
                 current.tradesTaken(),
                 current.tradeActive(),
                 !candleAggregator.isFeedUnstable(),
@@ -296,33 +196,51 @@ public class ShadowExecutionEngine {
                 current.lastRejectReason()
             );
         });
+
+        broadcastCurrentSessionState();
+    }
+
+    private TimePhase resolvePhase(LocalTime now) {
+        if (now.isBefore(LocalTime.parse(config.getTimePhase().getMid().getStart()))) {
+            return TimePhase.EARLY;
+        }
+        if (now.isBefore(LocalTime.parse(config.getTimePhase().getLate().getStart()))) {
+            return TimePhase.MID;
+        }
+        return TimePhase.LATE;
     }
 
     private void openTrade(Signal signal, TradingSessionSnapshot state) {
         LocalDateTime now = LocalDateTime.now();
-        double size = state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35;
-        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-        double tp1Distance = volatilityNormalizer.getCurrentTP1(); // Use normalized TP1
-        double dynamicTp1 = signal.getEntry() - tp1Distance;
-        double initialRisk = Math.abs(signal.getStopLoss() - signal.getEntry());
-        
+        double tp1Distance = Math.max(1.0, volatilityNormalizer.getCurrentTP1());
+        double tp1Level = "SHORT".equalsIgnoreCase(signal.getDirection())
+            ? signal.getEntry() - tp1Distance
+            : signal.getEntry() + tp1Distance;
+        double positionSize = switch (state.timePhase()) {
+            case MID -> config.getTimePhase().getMid().getPositionScale();
+            case LATE -> 0.0;
+            default -> config.getTimePhase().getEarly().getPositionScale();
+        };
+        double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - signal.getEntry()));
+
         ActiveTradeExecution trade = new ActiveTradeExecution(
             signal.getEntry(),
             signal.getStopLoss(),
-            dynamicTp1,
+            tp1Level,
             initialRisk,
             false,
             false,
             false,
             false,
-            size,
-            size,
+            positionSize,
+            positionSize,
             0.0,
             0.0,
             0.0,
             0.0,
             signal.getStopLoss()
         );
+
         activeSignalTime = now;
         activeExpectedEntry = signal.getEntry();
 
@@ -341,80 +259,44 @@ public class ShadowExecutionEngine {
             trade,
             "ALLOW"
         ));
+
         broadcastCurrentSessionState();
     }
 
     private void closeTrade(ActiveTradeExecution trade, TradeExit exit) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
-        if (state.activeTradeReference() == null || activeSignalTime == null) {
-            return;
-        }
+        double riskPoints = Math.max(1.0, trade.initialRisk());
+        double realizedR = exit.pnlPoints() / riskPoints;
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
-        double riskPts = Math.abs(trade.stopLoss() - trade.entryPrice());
-        double realizedR = riskPts == 0.0 ? 0.0 : exit.pnlPoints() / riskPts;
 
-        // Update real-time edge tracker with trade result
-        double entrySlippage = Math.abs(trade.entryPrice() - activeExpectedEntry);
-        double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - activeExpectedEntry) : 0.0;
-        edgeTracker.addTradeResult(
-            realizedR, 
-            trade.tp1Hit(), 
-            trade.runnerActive(),
-            entrySlippage,
-            runnerSlippage
-        );
+        if (activeSignalTime != null) {
+            liveMetricsLogger.logShadowExecution(
+                activeSignalTime,
+                LocalDateTime.now(),
+                activeExpectedEntry,
+                trade.entryPrice(),
+                expectedExit,
+                exit.exitPrice(),
+                trade.tp1Hit(),
+                trade.runnerActive(),
+                trade.mfe(),
+                trade.mae(),
+                realizedR,
+                "ALLOW",
+                "",
+                state.regime(),
+                state.timePhase(),
+                state.feedStable(),
+                exit.reason(),
+                LocalDateTime.now()
+            );
 
-        // Feed adaptive regime engine with trade results
-        RegimeFilter.RegimeMetrics currentRegime = regimeFilter.getCurrentRegime();
-        AdaptiveRegimeEngine.SessionFeatures sessionFeatures = new AdaptiveRegimeEngine.SessionFeatures(
-            currentRegime.getOrRange(),
-            currentRegime.getAtrRatio(),
-            currentRegime.getTrendEfficiency(),
-            currentRegime.getBreakoutHoldRate(),
-            currentRegime.getRegimeScore()
-        );
-        
-        adaptiveRegimeEngine.addTradeResult(
-            realizedR,
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            entrySlippage,
-            runnerSlippage,
-            sessionFeatures
-        );
-
-        liveMetricsLogger.logShadowExecution(
-            activeSignalTime,
-            LocalDateTime.now(),
-            activeExpectedEntry,
-            trade.entryPrice(),
-            expectedExit,
-            exit.exitPrice(),
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            trade.mfe(),
-            trade.mae(),
-            realizedR,
-            "ALLOW",
-            "",
-            state.regime(),
-            state.timePhase(),
-            state.feedStable(),
-            exit.reason(),
-            LocalDateTime.now()
-        );
-
-        // Broadcast trade data to frontend WebSocket
-        broadcastTradeData(activeSignalTime, trade, exit, realizedR);
-
-        boolean isFirstTradeFailure = state.tradesTaken() == 1 && !trade.tp1Hit() && trade.mae() > 80.0 && realizedR <= -1.0;
-        if (isFirstTradeFailure) {
-            dayBlockedByFirstTradeFailure = true;
+            broadcastTradeData(activeSignalTime, trade, exit, realizedR);
         }
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
-            isFirstTradeFailure ? Regime.BLOCKED : current.regime(),
+            current.regime(),
             current.volatilityQualified(),
             current.timePhase(),
             current.tradesTaken(),
@@ -425,8 +307,29 @@ public class ShadowExecutionEngine {
             current.orLow(),
             current.cumulativeDailyLossR() + Math.min(0.0, realizedR),
             null,
-            isFirstTradeFailure ? "FIRST_TRADE_FAILURE_DAY_BLOCK" : "ALLOW"
+            exit.reason()
         ));
+
+        broadcastCurrentSessionState();
+    }
+
+    private void updateActiveTradeState(ActiveTradeExecution trade, String lastRejectReason) {
+        stateManager.update(current -> new TradingSessionSnapshot(
+            current.sessionActive(),
+            current.regime(),
+            current.volatilityQualified(),
+            current.timePhase(),
+            current.tradesTaken(),
+            true,
+            current.feedStable(),
+            current.heartbeatAlive(),
+            current.orHigh(),
+            current.orLow(),
+            current.cumulativeDailyLossR(),
+            trade,
+            lastRejectReason
+        ));
+
         broadcastCurrentSessionState();
     }
 
@@ -446,7 +349,6 @@ public class ShadowExecutionEngine {
             current.activeTradeReference(),
             reason
         ));
-        broadcastCurrentSessionState();
 
         liveMetricsLogger.logReject(
             LocalDateTime.now(),
@@ -455,9 +357,9 @@ public class ShadowExecutionEngine {
             state.timePhase(),
             state.feedStable()
         );
-    }
 
-    // Trade execution methods moved to ActiveTradeExecution model
+        broadcastCurrentSessionState();
+    }
 
     private void broadcastCurrentSessionState() {
         TradingSessionSnapshot state = stateManager.getSnapshot();
@@ -468,42 +370,54 @@ public class ShadowExecutionEngine {
         payload.put("timePhase", state.timePhase().name());
         payload.put("tradeActive", state.tradeActive());
         payload.put("tradesTaken", state.tradesTaken());
-        payload.put("maxTradesPerDay", 2);
+        payload.put("maxTradesPerDay", config.getRisk().getMaxTradesPerDay());
         payload.put("feedStable", state.feedStable());
         payload.put("heartbeatAlive", state.heartbeatAlive());
         payload.put("dailyLossR", state.cumulativeDailyLossR());
         payload.put("lastRejectReason", state.lastRejectReason());
-        payload.put("orHigh", state.orHigh());
-        payload.put("orLow", state.orLow());
+        payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
+        payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
         webSocketService.sendSessionState(payload);
     }
 
     private void broadcastTradeData(LocalDateTime signalTime, ActiveTradeExecution trade, TradeExit exit, double realizedR) {
-        try {
-            // Create trade data payload matching frontend expectations
-            Map<String, Object> tradeData = new LinkedHashMap<>();
-            tradeData.put("id", signalTime.toString() + "_" + trade.entryPrice());
-            tradeData.put("signalTime", signalTime.toString());
-            tradeData.put("executeTime", LocalDateTime.now().toString());
-            tradeData.put("latencySec", java.time.Duration.between(signalTime, LocalDateTime.now()).toMillis() / 1000.0);
-            tradeData.put("expectedEntry", activeExpectedEntry);
-            tradeData.put("actualEntry", trade.entryPrice());
-            tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
-            tradeData.put("mfe", trade.mfe());
-            tradeData.put("mae", trade.mae());
-            tradeData.put("realizedR", realizedR);
-            tradeData.put("isRunner", trade.runnerActive());
-            tradeData.put("exitReason", exit.reason());
-            tradeData.put("exitTime", LocalDateTime.now().toString());
+        Map<String, Object> tradeData = new LinkedHashMap<>();
+        tradeData.put("id", signalTime.toString() + "_" + trade.entryPrice());
+        tradeData.put("signalTime", signalTime.toString());
+        tradeData.put("direction", trade.tp1Level() < trade.entryPrice() ? "SHORT" : "LONG");
+        tradeData.put("expectedEntry", activeExpectedEntry);
+        tradeData.put("actualEntry", trade.entryPrice());
+        tradeData.put("latencySec", Duration.between(signalTime, LocalDateTime.now()).toMillis() / 1000.0);
+        tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
+        tradeData.put("mfe", trade.mfe());
+        tradeData.put("mae", trade.mae());
+        tradeData.put("tp1Hit", trade.tp1Hit());
+        tradeData.put("runnerCaptured", trade.runnerActive());
+        tradeData.put("realizedR", realizedR);
+        tradeData.put("exitReason", exit.reason());
+        tradeData.put("exitTime", LocalDateTime.now().toString());
 
-            // Broadcast to plain WebSocket clients
-            PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastTradeData(tradeData);
-            
-            // Also broadcast via STOMP for compatibility
-            webSocketService.sendTradeExecution(tradeData);
-            
-        } catch (Exception e) {
-            log.error("Failed to broadcast trade data: {}", e.getMessage(), e);
-        }
+        PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastTradeData(tradeData);
+        webSocketService.sendTradeExecution(tradeData);
+    }
+
+    private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason) {
+        double points = trade.tp1Level() < trade.entryPrice()
+            ? trade.entryPrice() - price
+            : price - trade.entryPrice();
+        double size = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
+        return new TradeExit(true, points * size, reason, price);
+    }
+
+    private double currentOrRange(TradingSessionSnapshot state) {
+        return isValidOr(state.orHigh(), state.orLow()) ? state.orHigh() - state.orLow() : 0.0;
+    }
+
+    private boolean isValidOr(double orHigh, double orLow) {
+        return isValidNumber(orHigh) && isValidNumber(orLow) && orHigh >= orLow;
+    }
+
+    private boolean isValidNumber(double value) {
+        return !Double.isInfinite(value) && !Double.isNaN(value);
     }
 }

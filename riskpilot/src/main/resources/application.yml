@@ -1,7 +1,5 @@
 server:
   port: 8080
-  servlet:
-    context-path: /api
 
 spring:
   application:
@@ -40,14 +38,12 @@ spring:
   jackson:
     time-zone: Asia/Kolkata
     date-format: yyyy-MM-dd HH:mm:ss
-    serialization:
-      write-dates-as-timestamps: false
 
 # RiskPilot Specific Configuration
 riskpilot:
   # Trading Configuration
   trading:
-    symbol: ${TRADING_SYMBOL:BANKNIFTY}
+    symbol: ${TRADING_SYMBOL:NIFTY}
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
     session-start: ${SESSION_START:09:15}
     session-end: ${SESSION_END:15:30}
@@ -71,13 +67,6 @@ riskpilot:
     password: ${ANGELONE_PASSWORD:}
     totp-secret: ${ANGELONE_TOTP_SECRET:}
     base-url: ${ANGELONE_BASE_URL:https://apiconnect.angelbroking.com}
-    
-  # Observer Configuration
-  observer:
-    enabled: ${OBSERVER_ENABLED:true}
-    csv-path: ${OBSERVER_CSV_PATH:shadow_live_forward_logs.csv}
-    websocket-port: ${OBSERVER_WEBSOCKET_PORT:8765}
-    max-cache-size: ${OBSERVER_MAX_CACHE_SIZE:500}
     
   # Notification Configuration
   notification:

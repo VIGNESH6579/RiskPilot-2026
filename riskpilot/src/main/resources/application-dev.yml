@@ -27,15 +27,11 @@ logging:
 
 riskpilot:
   trading:
-    symbol: BANKNIFTY
-    max-trades-per-day: 5
+    symbol: NIFTY
+    max-trades-per-day: 2
     slippage-entry: 2.0
     slippage-exit: 2.0
     latency-threshold: 1.0
-  
-  observer:
-    enabled: true
-    csv-path: shadow_live_forward_logs_dev.csv
   
   notification:
     ntfy-enabled: false

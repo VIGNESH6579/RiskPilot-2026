@@ -1,361 +1,204 @@
-<!-- <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RiskPilot Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
-        .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-        .grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .card { background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
-        .label { color: #94a3b8; font-size: 12px; }
-        .value { font-size: 20px; margin-top: 5px; font-weight: 700; }
-        .panel { margin-top: 14px; background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
-        .clock { font-size: 14px; color: #93c5fd; }
-        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-        th, td { padding: 8px; border-bottom: 1px solid #334155; text-align: left; }
-        th { color: #94a3b8; font-weight: 600; }
-        .ok { color: #22c55e; }
-        .bad { color: #ef4444; }
-        .warn { color: #f59e0b; }
-        .mono { font-family: Consolas, monospace; }
-    </style>
-</head>
-<body>
-<div class="topbar">
-    <h2>RiskPilot Monitor (Read-Only)</h2>
-    <div id="clock" class="clock">IST: -</div>
-</div>
-<div id="wsStatus" class="warn">Socket: Connecting...</div>
-
-<div class="grid">
-    <div class="card"><div class="label">Regime</div><div id="regime" class="value">-</div></div>
-    <div class="card"><div class="label">Volatility Gate</div><div id="volatilityQualified" class="value">-</div></div>
-    <div class="card"><div class="label">Time Phase</div><div id="timePhase" class="value">-</div></div>
-    <div class="card"><div class="label">Trade Active</div><div id="tradeActive" class="value">-</div></div>
-    <div class="card"><div class="label">Trades Taken</div><div id="tradesTaken" class="value">-</div></div>
-    <div class="card"><div class="label">Daily Loss (R)</div><div id="dailyLossR" class="value">-</div></div>
-    <div class="card"><div class="label">Feed Stable</div><div id="feedStable" class="value">-</div></div>
-    <div class="card"><div class="label">Heartbeat Alive</div><div id="heartbeatAlive" class="value">-</div></div>
-    <div class="card"><div class="label">Session Active</div><div id="sessionActive" class="value">-</div></div>
-    <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">-</div></div>
-    <div class="card"><div class="label">Prev Close</div><div id="prevClose" class="value">-</div></div>
-    <div class="card"><div class="label">Nearest Expiry</div><div id="expiry" class="value" style="font-size:16px;">-</div></div>
-    <div class="card"><div class="label">Option Chain Health</div><div id="chainHealth" class="value">-</div></div>
-    <div class="card"><div class="label">Price Source</div><div id="spotSource" class="value" style="font-size:14px;">-</div></div>
-</div>
-
-<div class="panel">
-    <div class="label">Last Reject Reason</div>
-    <div id="lastRejectReason" class="value mono" style="font-size:14px;">-</div>
-</div>
-
-<div class="panel">
-    <div class="label">Recent Trade History</div>
-    <table>
-        <thead>
-            <tr>
-                <th>Signal Time</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>R</th>
-                <th>MFE</th>
-                <th>MAE</th>
-                <th>Reason</th>
-            </tr>
-        </thead>
-        <tbody id="tradeHistoryRows">
-            <tr><td colspan="7" class="mono">No trades yet</td></tr>
-        </tbody>
-    </table>
-</div>
-
-<script>
-    const fields = [
-        "regime", "volatilityQualified", "timePhase", "tradeActive", "tradesTaken",
-        "dailyLossR", "feedStable", "heartbeatAlive", "sessionActive", "lastRejectReason"
-    ];
-
-    function render(state) {
-        fields.forEach((f) => {
-            const el = document.getElementById(f);
-            if (!el) return;
-            const value = state[f];
-            el.textContent = value === null || value === undefined ? "-" : value;
-            el.classList.remove("ok", "bad", "warn");
-            if (value === true) el.classList.add("ok");
-            if (value === false) el.classList.add("bad");
-        });
-        if (typeof state.tradesTaken === "number" && typeof state.maxTradesPerDay === "number") {
-            document.getElementById("tradesTaken").textContent = `${state.tradesTaken} / ${state.maxTradesPerDay}`;
-        }
-    }
-
-    function refreshState() {
-        fetch(`/api/v1/monitor/state?ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((data) => render(data))
-            .catch(() => {});
-    }
-
-    function refreshOptionChain() {
-        fetch(`/api/v1/data/option-chain?ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((data) => {
-                const spotEl = document.getElementById("spot");
-                const expiryEl = document.getElementById("expiry");
-                const healthEl = document.getElementById("chainHealth");
-                const sourceEl = document.getElementById("spotSource");
-                const prevCloseEl = document.getElementById("prevClose");
-                spotEl.textContent = typeof data.spot === "number" ? data.spot.toFixed(2) : "-";
-                prevCloseEl.textContent = typeof data.previousClose === "number" ? data.previousClose.toFixed(2) : "-";
-                expiryEl.textContent = data.expiry || "-";
-                const healthy = data.spot && data.spot > 0;
-                const source = data.source || "UNKNOWN";
-                healthEl.textContent = healthy ? (source === "PREV_CLOSE_CACHE" ? "MARKET_CLOSED" : "LIVE") : "STALE";
-                sourceEl.textContent = source;
-                healthEl.classList.remove("ok", "bad");
-                sourceEl.classList.remove("ok", "bad");
-                healthEl.classList.add(healthy ? "ok" : "bad");
-                sourceEl.classList.add(source === "PREV_CLOSE_CACHE" ? "warn" : "ok");
-            })
-            .catch(() => {
-                const healthEl = document.getElementById("chainHealth");
-                const sourceEl = document.getElementById("spotSource");
-                healthEl.textContent = "DOWN";
-                sourceEl.textContent = "UNAVAILABLE";
-                healthEl.classList.remove("ok");
-                sourceEl.classList.remove("ok");
-                healthEl.classList.add("bad");
-                sourceEl.classList.add("bad");
-            });
-    }
-
-    function refreshClock() {
-        const now = new Date();
-        const formatted = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
-        document.getElementById("clock").textContent = `IST: ${formatted}`;
-    }
-
-    function refreshTradeHistory() {
-        fetch(`/api/v1/data/trade-history?limit=20&ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((rows) => {
-                const tbody = document.getElementById("tradeHistoryRows");
-                if (!Array.isArray(rows) || rows.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="7" class="mono">No trades yet</td></tr>`;
-                    return;
-                }
-                tbody.innerHTML = rows.map((t) => {
-                    const entry = typeof t.actualEntry === "number" ? t.actualEntry.toFixed(2) : "-";
-                    const exit = typeof t.actualExit === "number" ? t.actualExit.toFixed(2) : "-";
-                    const rr = typeof t.realizedR === "number" ? t.realizedR.toFixed(2) : "-";
-                    const mfe = typeof t.mfe === "number" ? t.mfe.toFixed(2) : "-";
-                    const mae = typeof t.mae === "number" ? t.mae.toFixed(2) : "-";
-                    const reason = t.exitReason || t.rejectReason || "-";
-                    return `<tr>
-                        <td>${t.signalTime || "-"}</td>
-                        <td>${entry}</td>
-                        <td>${exit}</td>
-                        <td>${rr}</td>
-                        <td>${mfe}</td>
-                        <td>${mae}</td>
-                        <td>${reason}</td>
-                    </tr>`;
-                }).join("");
-            })
-            .catch(() => {});
-    }
-
-    let stompClient = null;
-    let reconnectTimer = null;
-
-    function connectSocket() {
-        const socket = new SockJS("/ws");
-        stompClient = Stomp.over(socket);
-        stompClient.debug = () => {};
-        stompClient.connect({}, () => {
-            document.getElementById("wsStatus").textContent = "Socket: Connected";
-            document.getElementById("wsStatus").className = "ok";
-            stompClient.subscribe("/topic/session", (message) => {
-                render(JSON.parse(message.body));
-            });
-        }, () => {
-            document.getElementById("wsStatus").textContent = "Socket: Disconnected (retrying)";
-            document.getElementById("wsStatus").className = "bad";
-            if (reconnectTimer) clearTimeout(reconnectTimer);
-            reconnectTimer = setTimeout(connectSocket, 2000);
-        });
-    }
-
-    refreshState();
-    refreshOptionChain();
-    refreshTradeHistory();
-    refreshClock();
-    connectSocket();
-    setInterval(refreshState, 5000);
-    setInterval(refreshOptionChain, 3000);
-    setInterval(refreshTradeHistory, 5000);
-    setInterval(refreshClock, 1000);
-</script>
-</body>
-</html> -->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RiskPilot - Live Trading Monitor</title>
+  <title>RiskPilot Live Monitor</title>
   <style>
     :root {
-      --bg: #0a0f1f;
-      --panel: #121a30;
-      --panel-2: #1a2441;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-      --good: #34d399;
-      --warn: #f59e0b;
-      --bad: #f87171;
-      --line: #243153;
+      --bg: #081120;
+      --panel: #101b31;
+      --panel-2: #162540;
+      --line: #23385c;
+      --text: #edf4ff;
+      --muted: #93a8c9;
+      --good: #39d98a;
+      --warn: #ffbf69;
+      --bad: #ff7b7b;
+      --accent: #7cc6fe;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Inter, Segoe UI, system-ui, sans-serif;
-      background: var(--bg);
+      min-height: 100vh;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(124, 198, 254, 0.16), transparent 24rem),
+        linear-gradient(180deg, #09101c 0%, #081120 100%);
       color: var(--text);
     }
     .wrap {
-      max-width: 1400px;
+      max-width: 1280px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 24px 20px 40px;
     }
-    .topbar {
+    .hero {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      letter-spacing: 0.02em;
+    }
+    .sub {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .hero-right {
+      text-align: right;
+      min-width: 220px;
+    }
+    .clock {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(16, 27, 49, 0.85);
+      color: var(--warn);
+      font-size: 13px;
+    }
+    .status.ok { color: var(--good); }
+    .status.bad { color: var(--bad); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
       margin-bottom: 16px;
     }
-    h1 { margin: 0; font-size: 22px; font-weight: 700; }
-    .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
-    .status { padding: 8px 12px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; }
-    .status.ok { color: var(--good); }
-    .status.error { color: var(--bad); }
-    
-    .market-data {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 10px;
-      margin-bottom: 14px;
-    }
     .card {
-      background: var(--panel);
+      background: linear-gradient(180deg, rgba(20, 35, 61, 0.98), rgba(14, 25, 46, 0.98));
       border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px;
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
     }
-    .label { color: var(--muted); font-size: 12px; }
-    .value { font-size: 18px; margin-top: 3px; font-weight: 600; }
+    .label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .value {
+      margin-top: 6px;
+      font-size: 21px;
+      font-weight: 700;
+    }
+    .value.small {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+    .muted { color: var(--muted); }
     .table-wrap {
-      background: var(--panel);
+      background: rgba(16, 27, 49, 0.98);
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 18px;
       overflow: hidden;
+      box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
     }
     table {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
     }
-    thead { background: var(--panel-2); }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-    th { color: var(--muted); font-weight: 600; }
-    .mono { font-family: ui-monospace, monospace; }
-    .good { color: var(--good); }
-    .bad { color: var(--bad); }
-    .muted { color: var(--muted); }
-    .empty { padding: 28px; text-align: center; color: var(--muted); }
+    thead {
+      background: rgba(22, 37, 64, 0.98);
+    }
+    th, td {
+      text-align: left;
+      padding: 11px 12px;
+      border-bottom: 1px solid rgba(35, 56, 92, 0.85);
+      white-space: nowrap;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .empty {
+      padding: 34px 12px;
+      text-align: center;
+      color: var(--muted);
+    }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero { flex-direction: column; }
+      .hero-right { text-align: left; }
+      .table-wrap { overflow-x: auto; }
+    }
+    @media (max-width: 560px) {
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="topbar">
+    <div class="hero">
       <div>
-        <h1>🎯 RiskPilot Live Monitor</h1>
-        <div class="sub">Real-time NIFTY Options Trading System</div>
+        <h1>RiskPilot Live Monitor</h1>
+        <div class="sub">Live NIFTY data, expiry date, session health, and execution stream</div>
       </div>
-      <div style="text-align: right;">
-        <div id="clock" style="font-size: 18px; font-weight: 600;">--:--:--</div>
-        <div id="status" class="status error">Connecting...</div>
+      <div class="hero-right">
+        <div id="clock" class="clock">--:--:--</div>
+        <div id="status" class="status">Connecting...</div>
       </div>
     </div>
 
-    <!-- MARKET DATA PANEL -->
-    <div class="market-data">
+    <div class="grid">
       <div class="card">
         <div class="label">NIFTY Spot</div>
         <div id="spot" class="value">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Expiry Date</div>
+        <div id="expiry" class="value small">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Price Source</div>
+        <div id="source" class="value small muted">--</div>
       </div>
       <div class="card">
         <div class="label">India VIX</div>
         <div id="vix" class="value">--</div>
       </div>
       <div class="card">
-        <div class="label">Weekly Expiry</div>
-        <div id="expiry" class="value muted" style="font-size: 14px;">--</div>
-      </div>
-      <div class="card">
-        <div class="label">OR High</div>
-        <div id="orHigh" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">OR Low</div>
-        <div id="orLow" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Regime</div>
-        <div id="regime" class="value muted" style="font-size: 14px;">--</div>
-      </div>
-    </div>
-
-    <!-- ENGINE STATUS -->
-    <div class="market-data">
-      <div class="card">
         <div class="label">Session Active</div>
-        <div id="sessionActive" class="value">--</div>
+        <div id="session" class="value small">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Feed Stable</div>
+        <div id="feed" class="value small">--</div>
       </div>
       <div class="card">
         <div class="label">Trades Today</div>
-        <div id="tradesTaken" class="value">0</div>
+        <div id="trades" class="value">0</div>
       </div>
       <div class="card">
-        <div class="label">Feed Health</div>
-        <div id="feedHealth" class="value good">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Daily Loss</div>
-        <div id="dailyLoss" class="value">0.0R</div>
-      </div>
-      <div class="card">
-        <div class="label">Candles</div>
-        <div id="candleCount" class="value">0</div>
-      </div>
-      <div class="card">
-        <div class="label">Last Update</div>
-        <div id="lastUpdate" class="value muted" style="font-size: 12px;">--</div>
+        <div class="label">Last Reject</div>
+        <div id="reject" class="value small muted">--</div>
       </div>
     </div>
 
-    <!-- TRADES TABLE -->
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Time</th>
+            <th>Signal Time</th>
             <th>Direction</th>
             <th>Expected</th>
             <th>Actual</th>
@@ -365,160 +208,171 @@
             <th>MAE</th>
             <th>TP1</th>
             <th>Runner</th>
-            <th>P&L</th>
-            <th>Exit Reason</th>
+            <th>Exit</th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="12" class="empty">Awaiting trades...</td></tr>
+          <tr><td colspan="11" class="empty">Waiting for live trade activity...</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
   <script>
-    const MAX_ROWS = 50;
-    const rows = [];
+    const MAX_ROWS = 40;
     let reconnectTimer = null;
-    let ws = null;
+    let socket = null;
+    let tradeRows = [];
 
     const statusEl = document.getElementById("status");
-    const rowsEl = document.getElementById("rows");
     const clockEl = document.getElementById("clock");
-
-    // Market data elements
+    const rowsEl = document.getElementById("rows");
     const spotEl = document.getElementById("spot");
-    const vixEl = document.getElementById("vix");
     const expiryEl = document.getElementById("expiry");
-    const orHighEl = document.getElementById("orHigh");
-    const orLowEl = document.getElementById("orLow");
-    const regimeEl = document.getElementById("regime");
-    
-    // Engine status
-    const sessionActiveEl = document.getElementById("sessionActive");
-    const tradesEl = document.getElementById("tradesTaken");
-    const feedEl = document.getElementById("feedHealth");
-    const lossEl = document.getElementById("dailyLoss");
-    const candleEl = document.getElementById("candleCount");
-    const lastUpdateEl = document.getElementById("lastUpdate");
+    const sourceEl = document.getElementById("source");
+    const vixEl = document.getElementById("vix");
+    const sessionEl = document.getElementById("session");
+    const feedEl = document.getElementById("feed");
+    const tradesEl = document.getElementById("trades");
+    const rejectEl = document.getElementById("reject");
 
-    // Live clock
-    function updateClock() {
-      const now = new Date();
-      clockEl.textContent = now.toLocaleTimeString('en-IN');
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // Fetch market data
-    function fetchMarketData() {
-      fetch('/api/v1/data/health')
-        .then(r => r.json())
-        .then(data => {
-          if (data.spot) spotEl.textContent = data.spot.toFixed(2);
-          if (data.expiry) expiryEl.textContent = data.expiry;
-        })
-        .catch(e => console.error('Market data fetch error', e));
-
-      fetch('/api/v1/data/vix')
-        .then(r => r.text())
-        .then(vix => {
-          vixEl.textContent = parseFloat(vix).toFixed(2);
-        })
-        .catch(e => console.error('VIX fetch error', e));
-
-      fetch('/api/v1/engine/state')
-        .then(r => r.json())
-        .then(state => {
-          sessionActiveEl.textContent = state.sessionActive ? '✅ Yes' : '❌ No';
-          feedEl.textContent = state.feedHealthy ? '✅ Healthy' : '⚠️ Unstable';
-          feedEl.className = 'value ' + (state.feedHealthy ? 'good' : 'bad');
-          if (state.regime) regimeEl.textContent = state.regime;
-          if (state.orHigh) orHighEl.textContent = state.orHigh.toFixed(0);
-          if (state.orLow) orLowEl.textContent = state.orLow.toFixed(0);
-          lastUpdateEl.textContent = new Date().toLocaleTimeString();
-        })
-        .catch(e => console.error('Engine state fetch error', e));
-
-      fetch('/api/v1/engine/candle-history')
-        .then(r => r.json())
-        .then(data => {
-          candleEl.textContent = data.candleHistorySize || 0;
-        })
-        .catch(e => console.error('Candle history fetch error', e));
+    function formatNum(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
     }
 
-    // WebSocket connection
-    function connect() {
-      const protocol = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${protocol}://${location.host}/ws`);
-
-      ws.onopen = () => {
-        setStatus("Connected", true);
-        fetchMarketData();
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          rows.unshift(payload);
-          if (rows.length > MAX_ROWS) rows.pop();
-          renderTable();
-          updateEngineMetrics();
-        } catch (e) {}
-      };
-
-      ws.onerror = () => setStatus("Socket error", false);
-      ws.onclose = () => {
-        setStatus("Disconnected, retrying...", false);
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connect, 1500);
-      };
-    }
-
-    function setStatus(text, ok) {
+    function setStatus(text, kind) {
       statusEl.textContent = text;
-      statusEl.className = "status" + (ok ? " ok" : " error");
+      statusEl.className = "status" + (kind ? " " + kind : "");
     }
 
-    function formatNum(v, d = 2) {
-      return typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "-";
+    function updateClock() {
+      clockEl.textContent = new Date().toLocaleTimeString("en-IN", {
+        hour12: false,
+        timeZone: "Asia/Kolkata"
+      });
     }
 
-    function renderTable() {
-      if (rows.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades...</td></tr>';
+    function boolLabel(value) {
+      if (value === true) return { text: "Yes", className: "good" };
+      if (value === false) return { text: "No", className: "bad" };
+      return { text: "--", className: "muted" };
+    }
+
+    function renderTrades() {
+      if (!Array.isArray(tradeRows) || tradeRows.length === 0) {
+        rowsEl.innerHTML = '<tr><td colspan="11" class="empty">Waiting for live trade activity...</td></tr>';
         return;
       }
-      rowsEl.innerHTML = rows.map((r, i) => `
-        <tr>
-          <td>${r.signalTime || "-"}</td>
-          <td>${r.direction || "-"}</td>
-          <td>${formatNum(r.expectedEntry)}</td>
-          <td>${formatNum(r.actualEntry)}</td>
-          <td class="${(r.latencySec || 0) > 2 ? "bad" : "muted"}">${formatNum(r.latencySec)}</td>
-          <td class="${Math.abs(r.slippage || 0) > 1 ? "bad" : "good"}">${formatNum(r.slippage)}</td>
-          <td>${formatNum(r.mfe)}</td>
-          <td>${formatNum(r.mae)}</td>
-          <td>${r.tp1Hit ? "✅" : "❌"}</td>
-          <td>${r.runnerCaptured ? "✅" : "❌"}</td>
-          <td class="${(r.realizedR || 0) > 0 ? "good" : "bad"}">${formatNum(r.realizedR)}R</td>
-          <td class="${(r.exitReason || "").includes("FAIL") ? "bad" : "muted"}">${r.exitReason || "-"}</td>
-        </tr>
-      `).join("");
+
+      rowsEl.innerHTML = tradeRows.map((row) => {
+        const latencyClass = (row.latencySec || 0) > 2 ? "bad" : "muted";
+        const slipClass = Math.abs(row.slippage || 0) > 1 ? "bad" : "good";
+        const tp1 = row.tp1Hit ? "Yes" : "No";
+        const runner = row.runnerCaptured ? "Yes" : "No";
+        return `
+          <tr>
+            <td>${row.signalTime || "--"}</td>
+            <td>${row.direction || "--"}</td>
+            <td>${formatNum(row.expectedEntry)}</td>
+            <td>${formatNum(row.actualEntry)}</td>
+            <td class="${latencyClass}">${formatNum(row.latencySec)}</td>
+            <td class="${slipClass}">${formatNum(row.slippage)}</td>
+            <td>${formatNum(row.mfe)}</td>
+            <td>${formatNum(row.mae)}</td>
+            <td>${tp1}</td>
+            <td>${runner}</td>
+            <td>${row.exitReason || "--"}</td>
+          </tr>
+        `;
+      }).join("");
     }
 
-    function updateEngineMetrics() {
-      tradesEl.textContent = rows.length;
-      if (rows.length > 0) {
-        const totalR = rows.reduce((acc, r) => acc + (r.realizedR || 0), 0);
-        lossEl.textContent = totalR.toFixed(2) + 'R';
-        lossEl.className = 'value ' + (totalR > 0 ? 'good' : 'bad');
+    function mergeTrade(row) {
+      if (!row || !row.signalTime) return;
+      tradeRows = [row, ...tradeRows.filter((item) => item.signalTime !== row.signalTime)].slice(0, MAX_ROWS);
+      renderTrades();
+    }
+
+    async function refreshDashboard() {
+      try {
+        const [healthResponse, stateResponse, historyResponse] = await Promise.all([
+          fetch("/api/v1/data/health", { cache: "no-store" }),
+          fetch("/api/v1/monitor/state", { cache: "no-store" }),
+          fetch("/api/v1/data/trade-history?limit=20", { cache: "no-store" })
+        ]);
+
+        const health = await healthResponse.json();
+        const state = await stateResponse.json();
+        const history = await historyResponse.json();
+
+        spotEl.textContent = formatNum(health.spot);
+        expiryEl.textContent = health.expiryDate || health.expiry || "--";
+        sourceEl.textContent = health.source || health.optionChainSource || "--";
+        sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
+        vixEl.textContent = health.vix !== null && health.vix !== undefined ? formatNum(health.vix) : "--";
+
+        const session = boolLabel(state.sessionActive);
+        sessionEl.textContent = session.text;
+        sessionEl.className = "value small " + session.className;
+
+        const feed = boolLabel(state.feedStable);
+        feedEl.textContent = feed.text;
+        feedEl.className = "value small " + feed.className;
+
+        tradesEl.textContent = String(state.tradesTaken ?? 0);
+        rejectEl.textContent = state.lastRejectReason || "--";
+        rejectEl.className = "value small " + (state.lastRejectReason && state.lastRejectReason !== "ALLOW" ? "warn" : "muted");
+
+        if (Array.isArray(history) && history.length > 0) {
+          tradeRows = history.slice(0, MAX_ROWS).map((row) => ({
+            signalTime: row.signalTime,
+            direction: row.direction || (row.expectedEntry && row.actualEntry && row.actualEntry <= row.expectedEntry ? "SHORT" : "--"),
+            expectedEntry: row.expectedEntry,
+            actualEntry: row.actualEntry,
+            latencySec: row.latencySec,
+            slippage: row.entrySlippage ?? row.slippage,
+            mfe: row.mfe,
+            mae: row.mae,
+            tp1Hit: row.tp1Hit,
+            runnerCaptured: row.runnerCaptured,
+            exitReason: row.exitReason
+          }));
+          renderTrades();
+        }
+      } catch (error) {
+        console.error("Dashboard refresh failed", error);
+        setStatus("API unavailable", "bad");
       }
     }
 
-    connect();
-    setInterval(fetchMarketData, 5000); // Refresh every 5 seconds
+    function connectSocket() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${protocol}://${location.host}/ws`);
+
+      socket.onopen = () => setStatus("Live stream connected", "ok");
+
+      socket.onmessage = (event) => {
+        try {
+          mergeTrade(JSON.parse(event.data));
+        } catch (error) {
+          console.error("WebSocket parse failed", error);
+        }
+      };
+
+      socket.onerror = () => setStatus("Socket error", "bad");
+
+      socket.onclose = () => {
+        setStatus("Disconnected, retrying...", "bad");
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectSocket, 1500);
+      };
+    }
+
+    updateClock();
+    refreshDashboard();
+    connectSocket();
+    setInterval(updateClock, 1000);
+    setInterval(refreshDashboard, 5000);
   </script>
 </body>
 </html>

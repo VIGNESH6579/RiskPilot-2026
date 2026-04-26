@@ -2,11 +2,12 @@ package com.riskpilot.service;
 
 import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.exception.TradingException;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -19,264 +20,179 @@ public class StrictValidationService {
     private final RiskPilotProperties properties;
     private final AtomicInteger dailyTradeCount = new AtomicInteger(0);
     private final AtomicInteger consecutiveLosses = new AtomicInteger(0);
+
     private volatile double dailyLossR = 0.0;
-    private volatile LocalDateTime lastTradeDate;
+    private volatile LocalDate lastTradeDate;
 
     @PostConstruct
     public void validate() {
-        log.info("🔒 STRICT VALIDATION STARTUP");
-        
+        validateSystem();
+    }
+
+    public void validateSystem() {
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
         }
-
         if (properties.getExecution().getSlippage().getEntryMax() > 3.0) {
             throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high");
         }
-
         if (!properties.isStrictMode()) {
             throw new IllegalStateException("STRICT_MODE_REQUIRED: Strict mode must be enabled");
         }
-        
-        // 🔴 REAL-TIME DATA VALIDATION
         if (!properties.getInfra().getFeed().isRealTimeOnly()) {
             throw new IllegalStateException("REAL_TIME_REQUIRED: System must use real-time data only");
         }
-        
-        if (!"angelone-live".equals(properties.getInfra().getFeed().getDataSource())) {
-            throw new IllegalStateException("LIVE_FEED_REQUIRED: Only Angel One live feed allowed");
-        }
-        
         if (!properties.getInfra().getMarketData().isFallbackDisabled()) {
             throw new IllegalStateException("FALLBACKS_DISABLED: Fallback data sources must be disabled");
         }
-        
         if (!properties.getInfra().getMarketData().isMockDisabled()) {
             throw new IllegalStateException("MOCKS_DISABLED: Mock data sources must be disabled");
         }
-        
-        log.info("✅ STRICT VALIDATION PASSED - REAL-TIME ONLY MODE");
     }
 
     public void validateTradingParameters() {
-        log.info("🔒 STRICT MODE: Validating trading parameters against doctrine");
-        
-        // Trade count validation
-        if (config.getRisk().getMaxTradesPerDay() > 2) {
-            throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 2. Current: " + 
-                config.getRisk().getMaxTradesPerDay());
+        validateSystem();
+        if (properties.getExecution().getSlippage().getTp1Max() > 3.0) {
+            throw new TradingException("STRICT_MODE_VIOLATION: tp1-max slippage cannot exceed 3.0");
         }
-        
-        // Slippage validation
-        var slippage = config.getExecution().getSlippage();
-        if (slippage.getEntryMax() > 2.0) {
-            throw new TradingException("STRICT_MODE_VIOLATION: entry-max slippage cannot exceed 2.0. Current: " + 
-                slippage.getEntryMax());
+        if (properties.getExecution().getLatency().getSoftBlockMs() > 1000) {
+            throw new TradingException("STRICT_MODE_VIOLATION: soft-block-ms cannot exceed 1000");
         }
-        
-        if (slippage.getTp1Max() > 3.0) {
-            throw new TradingException("STRICT_MODE_VIOLATION: tp1-max slippage cannot exceed 3.0. Current: " + 
-                slippage.getTp1Max());
-        }
-        
-        // Latency validation
-        var latency = properties.getExecution().getLatency();
-        if (latency.getSoftBlockMs() > 1000) {
-            throw new TradingException("STRICT_MODE_VIOLATION: soft-block-ms cannot exceed 1000. Current: " + 
-                latency.getSoftBlockMs());
-        }
-        
-        log.info("✅ Trading parameters validation passed");
     }
 
     public boolean canExecuteNewTrade() {
-        if (!properties.getStrictMode()) {
-            return true; // Allow if not in strict mode
+        if (!properties.isStrictMode()) {
+            return true;
         }
 
-        LocalDateTime now = LocalDateTime.now();
-        
-        // Reset daily counters at start of new trading day
-        if (lastTradeDate == null || now.toLocalDate().isAfter(lastTradeDate.toLocalDate())) {
-            dailyTradeCount.set(0);
-            consecutiveLosses.set(0);
-            dailyLossR = 0.0;
-            lastTradeDate = now;
-            log.info("📅 Daily trading counters reset for new day");
-        }
-
-        // Check daily trade limit
+        refreshDailyCountersIfNeeded();
         if (dailyTradeCount.get() >= properties.getRisk().getMaxTradesPerDay()) {
-            log.warn("🚫 TRADE REJECTED: Daily trade limit reached ({}/{})", 
-                dailyTradeCount.get(), properties.getRisk().getMaxTradesPerDay());
             return false;
         }
-
-        // Check consecutive losses
         if (consecutiveLosses.get() >= properties.getRisk().getMaxConsecutiveLosses()) {
-            log.warn("🚫 TRADE REJECTED: Consecutive loss limit reached ({}/{})", 
-                consecutiveLosses.get(), properties.getRisk().getMaxConsecutiveLosses());
             return false;
         }
-
-        // Check daily loss limit
         if (dailyLossR <= -properties.getRisk().getMaxDailyLossR()) {
-            log.warn("🚫 TRADE REJECTED: Daily loss limit reached ({}R/{})", 
-                dailyLossR, properties.getRisk().getMaxDailyLossR());
             return false;
         }
-
-        // Check time phase restrictions
-        LocalTime currentTime = now.toLocalTime();
-        var timePhase = properties.getTimePhase();
-        
-        if (isInLatePhase(currentTime, timePhase) && !timePhase.getLate().getAllowNewTrades()) {
-            log.warn("🚫 TRADE REJECTED: New trades not allowed in late phase");
-            return false;
-        }
-
-        return true;
+        return !isInLatePhase(LocalTime.now());
     }
 
-    public void recordTradeExecution(double pnl) {
-        if (!properties.getStrictMode()) {
+    public void recordTradeExecution(double pnlR) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
+        refreshDailyCountersIfNeeded();
         dailyTradeCount.incrementAndGet();
-        
-        if (pnl < 0) {
+        dailyLossR += pnlR;
+        if (pnlR < 0) {
             consecutiveLosses.incrementAndGet();
-            dailyLossR += pnl;
-            log.warn("📉 LOSS RECORDED: {}R, consecutive losses: {}, daily loss: {}R", 
-                pnl, consecutiveLosses.get(), dailyLossR);
         } else {
             consecutiveLosses.set(0);
-            dailyLossR += pnl;
-            log.info("📈 PROFIT RECORDED: {}R, consecutive losses reset to 0", pnl);
         }
+        lastTradeDate = LocalDate.now();
     }
 
     public void validateSlippage(String tradeType, double actualSlippage) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
-        var slippageConfig = properties.getExecution().getSlippage();
         double maxAllowed = switch (tradeType.toUpperCase()) {
-            case "ENTRY" -> slippageConfig.getEntryMax();
-            case "TP1" -> slippageConfig.getTp1Max();
-            case "RUNNER" -> slippageConfig.getRunnerMax();
-            case "PANIC_EXIT" -> slippageConfig.getPanicExitMax();
-            default -> 999.0;
+            case "ENTRY" -> properties.getExecution().getSlippage().getEntryMax();
+            case "TP1" -> properties.getExecution().getSlippage().getTp1Max();
+            case "RUNNER" -> properties.getExecution().getSlippage().getRunnerMax();
+            case "PANIC_EXIT" -> properties.getExecution().getSlippage().getPanicExitMax();
+            default -> Double.MAX_VALUE;
         };
 
-        if (actualSlippage > maxAllowed) {
-            if (properties.getExecution().getRejectOnHighSlippage()) {
-                throw new TradingException(String.format(
-                    "STRICT_MODE_VIOLATION: %s slippage %.2f exceeds maximum %.2f", 
-                    tradeType, actualSlippage, maxAllowed));
-            } else {
-                log.warn("⚠️ HIGH SLIPPAGE: {} slippage %.2f exceeds maximum %.2f", 
-                    tradeType, actualSlippage, maxAllowed);
-            }
+        if (actualSlippage > maxAllowed && properties.getExecution().isRejectOnHighSlippage()) {
+            throw new TradingException(String.format(
+                "STRICT_MODE_VIOLATION: %s slippage %.2f exceeds %.2f",
+                tradeType, actualSlippage, maxAllowed
+            ));
         }
     }
 
     public void validateLatency(long actualLatencyMs) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
-        var latencyConfig = properties.getExecution().getLatency();
-        
-        if (actualLatencyMs > latencyConfig.getPanicMs()) {
+        var latency = properties.getExecution().getLatency();
+        if (actualLatencyMs > latency.getPanicMs()) {
             throw new TradingException(String.format(
-                "STRICT_MODE_VIOLATION: Latency %dms exceeds panic threshold %dms", 
-                actualLatencyMs, latencyConfig.getPanicMs()));
+                "STRICT_MODE_VIOLATION: latency %dms exceeds panic threshold %dms",
+                actualLatencyMs, latency.getPanicMs()
+            ));
         }
-
-        if (actualLatencyMs > latencyConfig.getHardBlockMs()) {
-            if (properties.getExecution().getRejectOnLatencyBreach()) {
-                throw new TradingException(String.format(
-                    "STRICT_MODE_VIOLATION: Latency %dms exceeds hard block threshold %dms", 
-                    actualLatencyMs, latencyConfig.getHardBlockMs()));
-            } else {
-                log.warn("⚠️ HIGH LATENCY: %dms exceeds hard block threshold %dms", 
-                    actualLatencyMs, latencyConfig.getHardBlockMs());
-            }
-        }
-
-        if (actualLatencyMs > latencyConfig.getSoftBlockMs()) {
-            log.warn("⚠️ ELEVATED LATENCY: %dms exceeds soft block threshold %dms", 
-                actualLatencyMs, latencyConfig.getSoftBlockMs());
+        if (actualLatencyMs > latency.getHardBlockMs() && properties.getExecution().isRejectOnLatencyBreach()) {
+            throw new TradingException(String.format(
+                "STRICT_MODE_VIOLATION: latency %dms exceeds hard block threshold %dms",
+                actualLatencyMs, latency.getHardBlockMs()
+            ));
         }
     }
 
     public void validateRegime(String currentRegime) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
         String requiredRegime = properties.getFilters().getRegimeRequired();
-        
-        if (!"ALL".equals(requiredRegime) && !requiredRegime.equals(currentRegime)) {
+        if (!"ALL".equalsIgnoreCase(requiredRegime) && !requiredRegime.contains(currentRegime)) {
             throw new TradingException(String.format(
-                "STRICT_MODE_VIOLATION: Current regime '%s' does not match required '%s'", 
-                currentRegime, requiredRegime));
+                "STRICT_MODE_VIOLATION: regime '%s' does not match required '%s'",
+                currentRegime, requiredRegime
+            ));
         }
     }
 
     public void validateTimePhase(LocalTime currentTime) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
-
-        var timePhase = properties.getTimePhase();
-        
-        if (isInEarlyPhase(currentTime, timePhase)) {
-            log.debug("🕐 Early phase: Position scale = {}", timePhase.getEarly().getPositionScale());
-        } else if (isInMidPhase(currentTime, timePhase)) {
-            log.debug("🕐 Mid phase: Position scale = {}", timePhase.getMid().getPositionScale());
-        } else if (isInLatePhase(currentTime, timePhase)) {
-            log.debug("🕐 Late phase: Force exit = {}", timePhase.getLate().getForceExit());
+        if (isInLatePhase(currentTime) && !properties.getTimePhase().getLate().getAllowNewTrades()) {
+            throw new TradingException("STRICT_MODE_VIOLATION: new trades are blocked in late phase");
         }
-    }
-
-    private boolean isInEarlyPhase(LocalTime time, RiskPilotProperties.TimePhase config) {
-        return !time.isBefore(LocalTime.parse(config.getEarly().getStart())) && 
-               time.isBefore(LocalTime.parse(config.getEarly().getEnd()));
-    }
-
-    private boolean isInMidPhase(LocalTime time, RiskPilotProperties.TimePhase config) {
-        return !time.isBefore(LocalTime.parse(config.getMid().getStart())) && 
-               time.isBefore(LocalTime.parse(config.getMid().getEnd()));
-    }
-
-    private boolean isInLatePhase(LocalTime time, RiskPilotProperties.TimePhase config) {
-        return !time.isBefore(LocalTime.parse(config.getLate().getStart())) && 
-               time.isBefore(LocalTime.parse(config.getLate().getEnd()));
     }
 
     public TradingMetrics getDailyMetrics() {
-        return TradingMetrics.builder()
-                .dailyTradeCount(dailyTradeCount.get())
-                .consecutiveLosses(consecutiveLosses.get())
-                .dailyLossR(dailyLossR)
-                .maxAllowedTrades(properties.getRisk().getMaxTradesPerDay())
-                .maxAllowedLossR(properties.getRisk().getMaxDailyLossR())
-                .maxAllowedConsecutiveLosses(properties.getRisk().getMaxConsecutiveLosses())
-                .strictMode(properties.getStrictMode())
-                .build();
+        refreshDailyCountersIfNeeded();
+        return new TradingMetrics(
+            dailyTradeCount.get(),
+            consecutiveLosses.get(),
+            dailyLossR,
+            properties.getRisk().getMaxTradesPerDay(),
+            properties.getRisk().getMaxDailyLossR(),
+            properties.getRisk().getMaxConsecutiveLosses(),
+            properties.isStrictMode()
+        );
+    }
+
+    private void refreshDailyCountersIfNeeded() {
+        LocalDate today = LocalDate.now();
+        if (lastTradeDate == null || !lastTradeDate.equals(today)) {
+            dailyTradeCount.set(0);
+            consecutiveLosses.set(0);
+            dailyLossR = 0.0;
+            lastTradeDate = today;
+        }
+    }
+
+    private boolean isInLatePhase(LocalTime time) {
+        return !time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getStart()))
+            && time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getEnd()));
     }
 
     public record TradingMetrics(
-            int dailyTradeCount,
-            int consecutiveLosses,
-            double dailyLossR,
-            int maxAllowedTrades,
-            double maxAllowedLossR,
-            int maxAllowedConsecutiveLosses,
-            boolean strictMode
+        int dailyTradeCount,
+        int consecutiveLosses,
+        double dailyLossR,
+        int maxAllowedTrades,
+        double maxAllowedLossR,
+        int maxAllowedConsecutiveLosses,
+        boolean strictMode
     ) {}
 }

@@ -1,7 +1,6 @@
 # Test Data
 *.csv
 nifty_5m.csv
-banknifty_5m.csv
 
 # Debug Docs
 BUGFIX_REPORT.md

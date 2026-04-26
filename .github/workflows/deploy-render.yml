@@ -52,4 +52,4 @@ jobs:
       
     - name: Verify deployment
       run: |
-        curl -f ${{ secrets.RENDER_SERVICE_URL }}/api/actuator/health || exit 1
+        curl -f ${{ secrets.RENDER_SERVICE_URL }}/api/v1/health/state || exit 1

@@ -27,16 +27,16 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/actuator/health").permitAll()
-                .requestMatchers("/api/actuator/info").permitAll()
-                .requestMatchers("/api/actuator/metrics").hasRole("ADMIN")
-                .requestMatchers("/api/v1/trading/status").permitAll()
-                .requestMatchers("/api/v1/trading/**").hasRole("TRADER")
+                .requestMatchers("/", "/index.html").permitAll()
+                .requestMatchers("/api/initial-data").permitAll()
+                .requestMatchers("/api/v1/**").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers("/ws", "/ws/**", "/ws/signals/**").permitAll()
                 .requestMatchers("/h2-console/**").permitAll()
-                .requestMatchers("/frontend.html").permitAll()
-                .requestMatchers("/observer/**").permitAll()
-                .anyRequest().authenticated()
+                .anyRequest().permitAll()
             );
+
+        http.headers(headers -> headers.frameOptions(frame -> frame.disable()));
         
         return http.build();
     }

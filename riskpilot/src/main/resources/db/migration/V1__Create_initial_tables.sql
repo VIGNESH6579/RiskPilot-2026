@@ -120,7 +120,7 @@ INSERT INTO trading_sessions (
     session_date, symbol, daily_open, or_high, or_low, or_expansion, 
     fast_candle_exists, regime, session_start
 ) VALUES (
-    CURDATE(), 'BANKNIFTY', 46000.00, 46150.00, 45950.00, 200.00,
+    CURDATE(), 'NIFTY', 46000.00, 46150.00, 45950.00, 200.00,
     TRUE, 'TREND', NOW()
 );
 
@@ -155,3 +155,4 @@ SELECT
 FROM trades t
 GROUP BY DATE(t.entry_time), t.symbol
 ORDER BY trade_date DESC;
+
