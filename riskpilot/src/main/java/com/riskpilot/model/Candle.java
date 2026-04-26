@@ -1,9 +1,14 @@
 package com.riskpilot.model;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 public class Candle {
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
+    private static final DateTimeFormatter FALLBACK_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     public final String date;
     public final String time;
     public final double open;
@@ -38,11 +43,13 @@ public class Candle {
 
     public LocalDateTime timestamp() {
         try {
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            return LocalDateTime.parse(date + " " + time, formatter);
+            return LocalDateTime.of(LocalDate.parse(date, DATE_FORMATTER), LocalTime.parse(time));
         } catch (Exception e) {
-            // Fallback to current time if parsing fails
-            return LocalDateTime.now();
+            try {
+                return LocalDateTime.parse(date + " " + time, FALLBACK_FORMATTER);
+            } catch (Exception ignored) {
+                return LocalDateTime.now();
+            }
         }
     }
 

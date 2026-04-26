@@ -32,6 +32,11 @@ public class HealthController {
         return ResponseEntity.ok(healthStatus);
     }
 
+    @GetMapping("/ping")
+    public ResponseEntity<String> ping() {
+        return ResponseEntity.ok("pong");
+    }
+
     @GetMapping("/detailed")
     public ResponseEntity<Map<String, Object>> getDetailedStatus() {
         Map<String, Object> details = new HashMap<>();

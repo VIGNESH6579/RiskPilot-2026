@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -17,6 +18,8 @@ public class VolatilityNormalizer {
     private static final double TP1_VOLATILITY_RATIO_MAX = 0.15;
     private static final double FIXED_TP1_FALLBACK = 15.0;
 
+    private final AtomicReference<Double> openingHigh = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> openingLow = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> openingRange = new AtomicReference<>(0.0);
     private final AtomicReference<Double> currentTP1 = new AtomicReference<>(FIXED_TP1_FALLBACK);
     private final AtomicReference<LocalDateTime> lastUpdate = new AtomicReference<>(LocalDateTime.now());
@@ -30,8 +33,13 @@ public class VolatilityNormalizer {
         private final boolean usedVolatilityNormalization;
         private final LocalDateTime timestamp;
 
-        public TP1Calculation(double openingRange, double volatilityRatio, 
-                            double calculatedTP1, double finalTP1, boolean usedVolatilityNormalization) {
+        public TP1Calculation(
+            double openingRange,
+            double volatilityRatio,
+            double calculatedTP1,
+            double finalTP1,
+            boolean usedVolatilityNormalization
+        ) {
             this.openingRange = openingRange;
             this.volatilityRatio = volatilityRatio;
             this.calculatedTP1 = calculatedTP1;
@@ -41,88 +49,67 @@ public class VolatilityNormalizer {
         }
     }
 
-    /**
-     * Update opening range and recalculate TP1
-     */
     public synchronized void updateOpeningRange(double high, double low, LocalDateTime timestamp) {
-        if (timestamp.toLocalTime().isBefore(OPENING_RANGE_END)) {
-            double dayRange = high - low;
-            openingRange.set(dayRange);
-            recalculateTP1();
-            log.info("🌅 Opening Range updated: {:.1f} → TP1: {:.1f}", dayRange, currentTP1.get());
+        if (timestamp.toLocalTime().isAfter(OPENING_RANGE_END)) {
+            return;
         }
+
+        double currentHigh = openingHigh.get();
+        double currentLow = openingLow.get();
+        double updatedHigh = Double.isNaN(currentHigh) ? high : Math.max(currentHigh, high);
+        double updatedLow = Double.isNaN(currentLow) ? low : Math.min(currentLow, low);
+
+        openingHigh.set(updatedHigh);
+        openingLow.set(updatedLow);
+        openingRange.set(Math.max(0.0, updatedHigh - updatedLow));
+        recalculateTP1();
+        lastUpdate.set(LocalDateTime.now());
     }
 
-    /**
-     * Recalculate TP1 based on current volatility
-     */
     private void recalculateTP1() {
-        double or = openingRange.get();
-        if (or <= 0) {
+        double orRange = openingRange.get();
+        if (orRange <= 0.0) {
             currentTP1.set(FIXED_TP1_FALLBACK);
             return;
         }
 
-        // Calculate volatility-normalized TP1
         double volatilityRatio = (TP1_VOLATILITY_RATIO_MIN + TP1_VOLATILITY_RATIO_MAX) / 2.0;
-        double calculatedTP1 = or * volatilityRatio;
-
-        // Apply bounds
-        double finalTP1 = Math.max(12.0, Math.min(calculatedTP1, or * TP1_VOLATILITY_RATIO_MAX));
-
-        // Use volatility normalization if OR is significant
-        boolean usedNormalization = or > 80.0; // Only normalize if meaningful range
-
-        currentTP1.set(usedNormalization ? finalTP1 : FIXED_TP1_FALLBACK);
-        lastUpdate.set(LocalDateTime.now());
-
-        log.debug("📊 TP1 Calculation: OR={:.1f}, Ratio={:.3f}, TP1={:.1f}, Normalized={}", 
-                or, volatilityRatio, finalTP1, usedNormalization);
+        double calculatedTP1 = orRange * volatilityRatio;
+        double finalTP1 = Math.max(12.0, Math.min(calculatedTP1, orRange * TP1_VOLATILITY_RATIO_MAX));
+        currentTP1.set(orRange > 80.0 ? finalTP1 : FIXED_TP1_FALLBACK);
     }
 
-    /**
-     * Get current TP1 for trading
-     */
     public double getCurrentTP1() {
         return currentTP1.get();
     }
 
-    /**
-     * Get TP1 calculation details
-     */
     public TP1Calculation getTP1Details() {
-        double or = openingRange.get();
+        double orRange = openingRange.get();
         double volatilityRatio = (TP1_VOLATILITY_RATIO_MIN + TP1_VOLATILITY_RATIO_MAX) / 2.0;
-        double calculatedTP1 = or * volatilityRatio;
-        double finalTP1 = currentTP1.get();
-        boolean usedNormalization = or > 80.0;
-
-        return new TP1Calculation(or, volatilityRatio, calculatedTP1, finalTP1, usedNormalization);
+        return new TP1Calculation(
+            orRange,
+            volatilityRatio,
+            orRange * volatilityRatio,
+            currentTP1.get(),
+            orRange > 80.0
+        );
     }
 
-    /**
-     * Force TP1 recalculation (for testing or manual override)
-     */
     public synchronized void forceRecalculation() {
         recalculateTP1();
-        log.info("🔄 TP1 force recalculated: {:.1f}", currentTP1.get());
+        lastUpdate.set(LocalDateTime.now());
     }
 
-    /**
-     * Reset normalizer
-     */
     public void reset() {
+        openingHigh.set(Double.NaN);
+        openingLow.set(Double.NaN);
         openingRange.set(0.0);
         currentTP1.set(FIXED_TP1_FALLBACK);
         lastUpdate.set(LocalDateTime.now());
-        log.info("🔄 Volatility normalizer reset");
     }
 
-    /**
-     * Get statistics
-     */
-    public java.util.Map<String, Object> getStats() {
-        return java.util.Map.of(
+    public Map<String, Object> getStats() {
+        return Map.of(
             "openingRange", openingRange.get(),
             "currentTP1", currentTP1.get(),
             "lastUpdate", lastUpdate.get().toString(),

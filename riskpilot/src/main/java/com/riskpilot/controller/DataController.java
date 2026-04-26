@@ -1,20 +1,22 @@
 package com.riskpilot.controller;
 
+import com.riskpilot.model.TradeLog;
+import com.riskpilot.repository.TradeLogRepository;
 import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.VixService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -29,6 +31,7 @@ public class DataController {
 
     private final VixService vixService;
     private final OptionChainService optionChainService;
+    private final TradeLogRepository tradeLogRepository;
 
     @GetMapping("/vix")
     public Map<String, Object> getVix() {
@@ -65,6 +68,22 @@ public class DataController {
     @GetMapping("/trade-history")
     public List<Map<String, Object>> tradeHistory(@RequestParam(defaultValue = "25") int limit) {
         int capped = Math.max(1, Math.min(limit, 200));
+
+        try {
+            List<TradeLog> logs = tradeLogRepository.findTop200ByOrderBySignalTimeDesc();
+            if (!logs.isEmpty()) {
+                return logs.stream()
+                    .limit(capped)
+                    .map(this::toTradeMap)
+                    .toList();
+            }
+        } catch (Exception ignored) {
+        }
+
+        return readCsvTradeHistory(capped);
+    }
+
+    private List<Map<String, Object>> readCsvTradeHistory(int limit) {
         Path csvPath = Path.of(System.getenv().getOrDefault("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv"));
         if (!Files.exists(csvPath)) {
             return Collections.emptyList();
@@ -79,9 +98,13 @@ public class DataController {
                     isHeader = false;
                     continue;
                 }
-                if (line.isBlank()) continue;
+                if (line.isBlank()) {
+                    continue;
+                }
                 List<String> parts = parseCsvLine(line);
-                if (parts.size() < 21) continue;
+                if (parts.size() < 21) {
+                    continue;
+                }
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("signalTime", parts.get(0));
                 row.put("executionTime", parts.get(1));
@@ -109,11 +132,38 @@ public class DataController {
         } catch (IOException ignored) {
             return Collections.emptyList();
         }
+
         Collections.reverse(rows);
-        if (rows.size() > capped) {
-            return new ArrayList<>(rows.subList(0, capped));
+        if (rows.size() > limit) {
+            return new ArrayList<>(rows.subList(0, limit));
         }
         return rows;
+    }
+
+    private Map<String, Object> toTradeMap(TradeLog log) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("signalTime", log.getSignalTime());
+        row.put("executionTime", log.getExecutionTime());
+        row.put("latencySec", log.getLatencySec());
+        row.put("expectedEntry", log.getExpectedEntry());
+        row.put("actualEntry", log.getActualEntry());
+        row.put("entrySlippage", log.getEntrySlippage());
+        row.put("expectedExit", log.getExpectedExit());
+        row.put("actualExit", log.getActualExit());
+        row.put("exitSlippage", log.getExitSlippage());
+        row.put("tp1Hit", log.getTp1Hit());
+        row.put("runnerCaptured", log.getRunnerCaptured());
+        row.put("mfe", log.getMfe());
+        row.put("mae", log.getMae());
+        row.put("realizedR", log.getRealizedR());
+        row.put("gateDecision", log.getGateDecision());
+        row.put("rejectReason", log.getRejectReason());
+        row.put("regime", log.getRegime());
+        row.put("timePhase", log.getTimePhase());
+        row.put("feedStable", log.getFeedStable());
+        row.put("exitReason", log.getExitReason());
+        row.put("exitTime", log.getExitTime());
+        return row;
     }
 
     private static Double toDouble(String raw) {

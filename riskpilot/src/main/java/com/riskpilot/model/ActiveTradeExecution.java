@@ -11,6 +11,8 @@ public record ActiveTradeExecution(
     boolean tailHalfLocked,
     double positionSize,
     double remainingSize,
+    int quantity,
+    int remainingQuantity,
     double realizedPnL,
     double mfe,
     double mae,
@@ -44,6 +46,8 @@ public record ActiveTradeExecution(
             trade.tailHalfLocked(),
             trade.positionSize(),
             remaining,
+            trade.quantity(),
+            Math.max(0, trade.quantity() - Math.max(1, (int) Math.round(trade.quantity() * 0.20))),
             trade.realizedPnL() + pnl,
             trade.mfe(),
             trade.mae(),
@@ -58,7 +62,9 @@ public record ActiveTradeExecution(
         }
 
         boolean shortTrade = isShort(trade);
-        double candidateTrailingSl = shortTrade ? candle.high + 10.0 : candle.low - 10.0;
+        double atr = candle.high - candle.low;
+        double buffer = Math.max(10.0, atr * 0.4);
+        double candidateTrailingSl = shortTrade ? candle.high + buffer : candle.low - buffer;
         double tightenedSl = shortTrade
             ? Math.min(trade.trailingSL(), candidateTrailingSl)
             : Math.max(trade.trailingSL(), candidateTrailingSl);
@@ -74,6 +80,8 @@ public record ActiveTradeExecution(
             trade.tailHalfLocked(),
             trade.positionSize(),
             trade.remainingSize(),
+            trade.quantity(),
+            trade.remainingQuantity(),
             trade.realizedPnL(),
             trade.mfe(),
             trade.mae(),
@@ -111,6 +119,8 @@ public record ActiveTradeExecution(
             trade.tailHalfLocked(),
             trade.positionSize(),
             trade.remainingSize(),
+            trade.quantity(),
+            trade.remainingQuantity(),
             trade.realizedPnL(),
             Math.max(trade.mfe(), favorableMove),
             Math.max(trade.mae(), adverseMove),

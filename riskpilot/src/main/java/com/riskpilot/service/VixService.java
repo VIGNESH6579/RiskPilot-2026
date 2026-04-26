@@ -1,6 +1,5 @@
 package com.riskpilot.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,10 +10,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
+
 @Service
 public class VixService {
     private static final Logger log = LoggerFactory.getLogger(VixService.class);
     private static final long VIX_CACHE_MS = 20_000L;
+    private static final String YAHOO_VIX_URL =
+        "https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=1d";
 
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper;
@@ -33,36 +36,31 @@ public class VixService {
             return lastKnownVix;
         }
 
-        String url = "https://www.nseindia.com/api/allIndices";
-
         try {
             HttpHeaders headers = new HttpHeaders();
-            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            headers.set("User-Agent", "Mozilla/5.0");
             headers.set("Accept", "application/json");
-            headers.set("Referer", "https://www.nseindia.com/");
-            headers.set("Connection", "keep-alive");
+            ResponseEntity<String> response = restTemplate.exchange(
+                URI.create(YAHOO_VIX_URL),
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                String.class
+            );
 
-            HttpEntity<String> entity = new HttpEntity<>(headers);
-
-            ResponseEntity<String> response =
-                    restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
-
-            if (response.getBody() == null) return lastKnownVix != null ? lastKnownVix : Double.NaN;
-
-            JsonNode json = mapper.readTree(response.getBody());
-            JsonNode data = json.get("data");
-
-            if (data != null && data.isArray()) {
-                for (JsonNode obj : data) {
-                    if (obj.has("index") && obj.get("index").asText().equalsIgnoreCase("INDIA VIX")) {
-                        lastKnownVix = obj.get("last").asDouble();
-                        lastSuccessfulFetchEpochMs = now;
-                        return lastKnownVix;
-                    }
-                }
+            double vix = mapper.readTree(response.getBody())
+                .path("chart")
+                .path("result")
+                .path(0)
+                .path("meta")
+                .path("regularMarketPrice")
+                .asDouble(0.0);
+            if (vix > 0.0) {
+                lastKnownVix = vix;
+                lastSuccessfulFetchEpochMs = now;
+                return vix;
             }
         } catch (Exception e) {
-            log.warn("NSE VIX fetch failed, returning last live value if available: {}", e.getMessage());
+            log.warn("Yahoo India VIX fetch failed: {}", e.getMessage());
         }
 
         return lastKnownVix != null ? lastKnownVix : Double.NaN;

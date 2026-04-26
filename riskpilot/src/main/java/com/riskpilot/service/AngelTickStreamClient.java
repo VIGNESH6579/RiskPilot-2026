@@ -1,10 +1,10 @@
 package com.riskpilot.service;
 
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -17,34 +17,37 @@ public class AngelTickStreamClient {
     private final CandleAggregator candleAggregator;
     private final HeartbeatMonitor heartbeatMonitor;
     private final OptionChainService optionChainService;
+    private final ShadowExecutionEngine shadowExecutionEngine;
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
         HeartbeatMonitor heartbeatMonitor,
-        OptionChainService optionChainService
+        OptionChainService optionChainService,
+        ShadowExecutionEngine shadowExecutionEngine
     ) {
         this.candleAggregator = candleAggregator;
         this.heartbeatMonitor = heartbeatMonitor;
         this.optionChainService = optionChainService;
+        this.shadowExecutionEngine = shadowExecutionEngine;
     }
 
     @PostConstruct
     public void init() {
-        // Production-safe fallback feed:
-        // until SmartAPI WS integration is completed, keep engine alive with polled live spot.
         poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
     }
 
     private void pollSpotAsTick() {
         try {
-            OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
-            if (snap == null || snap.spot() <= 0.0) {
+            OptionChainService.OptionChainSnapshot snapshot = optionChainService.fetchNiftyChain();
+            if (snapshot == null || snapshot.spot() <= 0.0) {
                 candleAggregator.markUnstable();
                 return;
             }
+
             heartbeatMonitor.registerTick();
-            candleAggregator.processTick(LocalDateTime.now(), snap.spot(), 1L);
+            candleAggregator.processTick(LocalDateTime.now(), snapshot.spot(), 1L);
+            shadowExecutionEngine.evaluateTick(snapshot.spot());
         } catch (Exception e) {
             candleAggregator.markUnstable();
             log.debug("Tick polling failed: {}", e.getMessage());

@@ -6,7 +6,10 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -26,6 +29,8 @@ public class RegimeFilter {
     private final Queue<CandleData> candleHistory = new ConcurrentLinkedQueue<>();
     private final Queue<BreakoutData> breakoutHistory = new ConcurrentLinkedQueue<>();
     private final AtomicReference<RegimeMetrics> currentRegime = new AtomicReference<>();
+    private final AtomicReference<Double> openingHigh = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> openingLow = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> openingRange = new AtomicReference<>(0.0);
     private final AtomicReference<Double> openingATR = new AtomicReference<>(0.0);
 
@@ -39,8 +44,7 @@ public class RegimeFilter {
         private final LocalDateTime timestamp;
         private final double atr;
 
-        public CandleData(double open, double high, double low, double close, double volume, 
-                         LocalDateTime timestamp, double atr) {
+        public CandleData(double open, double high, double low, double close, double volume, LocalDateTime timestamp, double atr) {
             this.open = open;
             this.high = high;
             this.low = low;
@@ -52,7 +56,7 @@ public class RegimeFilter {
 
         public double getEfficiency() {
             double range = high - low;
-            return range > 0 ? Math.abs(close - open) / range : 0.0;
+            return range > 0.0 ? Math.abs(close - open) / range : 0.0;
         }
     }
 
@@ -61,12 +65,6 @@ public class RegimeFilter {
         private final double breakoutPrice;
         private final boolean held;
         private final LocalDateTime timestamp;
-
-        public BreakoutData(double breakoutPrice, boolean held, LocalDateTime timestamp) {
-            this.breakoutPrice = breakoutPrice;
-            this.held = held;
-            this.timestamp = timestamp;
-        }
     }
 
     @Data
@@ -80,9 +78,15 @@ public class RegimeFilter {
         private final LocalDateTime timestamp;
         private final List<String> blockingReasons;
 
-        public RegimeMetrics(int regimeScore, double orRange, double atrRatio,
-                           double trendEfficiency, double breakoutHoldRate,
-                           boolean tradingAllowed, List<String> blockingReasons) {
+        public RegimeMetrics(
+            int regimeScore,
+            double orRange,
+            double atrRatio,
+            double trendEfficiency,
+            double breakoutHoldRate,
+            boolean tradingAllowed,
+            List<String> blockingReasons
+        ) {
             this.regimeScore = regimeScore;
             this.orRange = orRange;
             this.atrRatio = atrRatio;
@@ -94,80 +98,68 @@ public class RegimeFilter {
         }
     }
 
-    /**
-     * Process new candle and update regime metrics
-     */
-    public synchronized void processCandle(double open, double high, double low, double close, 
-                                         double volume, LocalDateTime timestamp, double atr) {
+    public synchronized void processCandle(
+        double open,
+        double high,
+        double low,
+        double close,
+        double volume,
+        LocalDateTime timestamp,
+        double atr
+    ) {
         CandleData candle = new CandleData(open, high, low, close, volume, timestamp, atr);
-        
-        // Update history
         candleHistory.offer(candle);
-        if (candleHistory.size() > 20) { // Keep last 20 candles
+        if (candleHistory.size() > 20) {
             candleHistory.poll();
         }
 
-        // Set opening range (first candle of the day)
-        if (timestamp.toLocalTime().isBefore(OPENING_RANGE_END)) {
-            double dayRange = high - low;
-            openingRange.set(dayRange);
-            openingATR.set(atr);
-            log.info("🌅 Opening Range set: {:.1f}, ATR: {:.1f}", dayRange, atr);
-        }
-
-        // Detect breakouts
+        updateOpeningRange(candle);
         detectBreakouts(candle);
-
-        // Compute regime metrics
-        RegimeMetrics metrics = computeRegimeMetrics();
-        currentRegime.set(metrics);
-
-        log.debug("📊 Regime updated: Score={}, Trading={}, OR={:.1f}, ATR={:.2f}, Eff={:.2f}, Hold={:.2f}",
-                metrics.getRegimeScore(), metrics.isTradingAllowed(), metrics.getOrRange(),
-                metrics.getAtrRatio(), metrics.getTrendEfficiency(), metrics.getBreakoutHoldRate());
+        currentRegime.set(computeRegimeMetrics());
     }
 
-    /**
-     * Detect breakouts and track hold rates
-     */
-    private void detectBreakouts(CandleData candle) {
-        double orRange = openingRange.get();
-        if (orRange == 0) return; // No opening range yet
+    private void updateOpeningRange(CandleData candle) {
+        if (candle.getTimestamp().toLocalTime().isAfter(OPENING_RANGE_END)) {
+            return;
+        }
 
-        // Simple breakout detection
-        double highBreakout = candleHistory.stream()
-                .limit(3) // Last 3 candles
-                .mapToDouble(CandleData::getHigh)
-                .max()
-                .orElse(candle.getHigh());
-
-        double lowBreakout = candleHistory.stream()
-                .limit(3)
-                .mapToDouble(CandleData::getLow)
-                .min()
-                .orElse(candle.getLow());
-
-        // Check if breakout held (simplified)
-        boolean highHeld = candle.getClose() > highBreakout;
-        boolean lowHeld = candle.getClose() < lowBreakout;
-
-        if (highBreakout > 0 || lowBreakout > 0) {
-            BreakoutData breakout = new BreakoutData(highBreakout, highHeld || lowHeld, candle.getTimestamp());
-            breakoutHistory.offer(breakout);
-            if (breakoutHistory.size() > 10) {
-                breakoutHistory.poll();
-            }
+        double high = Double.isNaN(openingHigh.get()) ? candle.getHigh() : Math.max(openingHigh.get(), candle.getHigh());
+        double low = Double.isNaN(openingLow.get()) ? candle.getLow() : Math.min(openingLow.get(), candle.getLow());
+        openingHigh.set(high);
+        openingLow.set(low);
+        openingRange.set(Math.max(0.0, high - low));
+        if (openingATR.get() <= 0.0 && candle.getAtr() > 0.0) {
+            openingATR.set(candle.getAtr());
         }
     }
 
-    /**
-     * Compute regime metrics
-     */
+    private void detectBreakouts(CandleData candle) {
+        List<CandleData> candles = new ArrayList<>(candleHistory);
+        if (candles.size() < 2 || openingRange.get() <= 0.0) {
+            return;
+        }
+
+        List<CandleData> priorCandles = candles.subList(Math.max(0, candles.size() - 4), candles.size() - 1);
+        double priorHigh = priorCandles.stream().mapToDouble(CandleData::getHigh).max().orElse(candle.getHigh());
+        double priorLow = priorCandles.stream().mapToDouble(CandleData::getLow).min().orElse(candle.getLow());
+        boolean brokeHigh = candle.getHigh() > priorHigh;
+        boolean brokeLow = candle.getLow() < priorLow;
+        if (!brokeHigh && !brokeLow) {
+            return;
+        }
+
+        double breakoutPrice = brokeHigh ? priorHigh : priorLow;
+        boolean held = brokeHigh ? candle.getClose() >= priorHigh : candle.getClose() <= priorLow;
+        breakoutHistory.offer(new BreakoutData(breakoutPrice, held, candle.getTimestamp()));
+        if (breakoutHistory.size() > 10) {
+            breakoutHistory.poll();
+        }
+    }
+
     private RegimeMetrics computeRegimeMetrics() {
         List<String> blockingReasons = new ArrayList<>();
         int score = 0;
 
-        // 1. Opening Range Expansion
         double orRange = openingRange.get();
         if (orRange > OR_EXPANSION_THRESHOLD) {
             score += 2;
@@ -177,7 +169,6 @@ public class RegimeFilter {
             blockingReasons.add("OR_EXPANSION_INSUFFICIENT");
         }
 
-        // 2. Volatility Continuity (ATR Ratio)
         double atrRatio = computeATRRatio();
         if (atrRatio > ATR_EXPANSION_RATIO) {
             score += 1;
@@ -185,7 +176,6 @@ public class RegimeFilter {
             blockingReasons.add("VOLATILITY_DYING");
         }
 
-        // 3. Directional Efficiency
         double trendEfficiency = computeTrendEfficiency();
         if (trendEfficiency > TREND_EFFICIENCY_MIN) {
             score += 2;
@@ -193,7 +183,6 @@ public class RegimeFilter {
             blockingReasons.add("CHOPPY_MARKET");
         }
 
-        // 4. Breakout Hold Rate
         double breakoutHoldRate = computeBreakoutHoldRate();
         if (breakoutHoldRate > BREAKOUT_HOLD_RATE_MIN) {
             score += 1;
@@ -201,82 +190,57 @@ public class RegimeFilter {
             blockingReasons.add("FAKE_BREAKOUTS");
         }
 
-        boolean tradingAllowed = score >= MIN_REGIME_SCORE;
-
-        return new RegimeMetrics(score, orRange, atrRatio, trendEfficiency, 
-                               breakoutHoldRate, tradingAllowed, blockingReasons);
+        return new RegimeMetrics(score, orRange, atrRatio, trendEfficiency, breakoutHoldRate, score >= MIN_REGIME_SCORE, blockingReasons);
     }
 
-    /**
-     * Compute ATR ratio (current vs opening)
-     */
     private double computeATRRatio() {
-        double openingAtr = openingATR.get();
-        if (openingAtr == 0) return 0.0;
+        double baseAtr = openingATR.get();
+        if (baseAtr <= 0.0) {
+            return 0.0;
+        }
 
-        List<CandleData> recent = new ArrayList<>(candleHistory).stream()
-                .filter(c -> c.getTimestamp().toLocalTime().isAfter(OPENING_RANGE_END))
-                .limit(5)
-                .toList();
+        List<CandleData> candles = new ArrayList<>(candleHistory);
+        List<CandleData> postOpening = candles.stream()
+            .filter(c -> c.getTimestamp().toLocalTime().isAfter(OPENING_RANGE_END))
+            .toList();
+        if (postOpening.isEmpty()) {
+            return 0.0;
+        }
 
-        if (recent.isEmpty()) return 0.0;
-
-        double currentATR = recent.stream()
-                .mapToDouble(CandleData::getAtr)
-                .average()
-                .orElse(openingAtr);
-
-        return currentATR / openingAtr;
+        List<CandleData> recent = postOpening.subList(Math.max(0, postOpening.size() - TREND_WINDOW), postOpening.size());
+        double currentAtr = recent.stream().mapToDouble(CandleData::getAtr).average().orElse(baseAtr);
+        return currentAtr / baseAtr;
     }
 
-    /**
-     * Compute trend efficiency
-     */
     private double computeTrendEfficiency() {
-        List<CandleData> recent = new ArrayList<>(candleHistory).stream()
-                .limit(TREND_WINDOW)
-                .toList();
+        List<CandleData> candles = new ArrayList<>(candleHistory);
+        if (candles.size() < TREND_WINDOW) {
+            return 0.0;
+        }
 
-        if (recent.size() < TREND_WINDOW) return 0.0;
-
-        return recent.stream()
-                .mapToDouble(CandleData::getEfficiency)
-                .average()
-                .orElse(0.0);
+        List<CandleData> recent = candles.subList(candles.size() - TREND_WINDOW, candles.size());
+        return recent.stream().mapToDouble(CandleData::getEfficiency).average().orElse(0.0);
     }
 
-    /**
-     * Compute breakout hold rate
-     */
     private double computeBreakoutHoldRate() {
         List<BreakoutData> breakouts = new ArrayList<>(breakoutHistory);
-        if (breakouts.isEmpty()) return 0.0;
+        if (breakouts.isEmpty()) {
+            return 0.0;
+        }
 
-        long held = breakouts.stream()
-                .mapToLong(b -> b.isHeld() ? 1 : 0)
-                .sum();
-
+        long held = breakouts.stream().filter(BreakoutData::isHeld).count();
         return (double) held / breakouts.size();
     }
 
-    /**
-     * Check if trading is allowed
-     */
     public boolean isTradingAllowed() {
         RegimeMetrics regime = currentRegime.get();
         return regime != null && regime.isTradingAllowed();
     }
 
-    /**
-     * Get current regime metrics
-     */
     public RegimeMetrics getCurrentRegime() {
         return currentRegime.get();
     }
 
-    /**
-     * Get regime statistics
-     */
     public Map<String, Object> getStats() {
         RegimeMetrics regime = currentRegime.get();
         return Map.of(
@@ -292,15 +256,13 @@ public class RegimeFilter {
         );
     }
 
-    /**
-     * Reset regime filter
-     */
     public void reset() {
         candleHistory.clear();
         breakoutHistory.clear();
         currentRegime.set(null);
+        openingHigh.set(Double.NaN);
+        openingLow.set(Double.NaN);
         openingRange.set(0.0);
         openingATR.set(0.0);
-        log.info("🔄 Regime filter reset");
     }
 }

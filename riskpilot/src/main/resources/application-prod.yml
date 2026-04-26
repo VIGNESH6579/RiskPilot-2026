@@ -2,7 +2,7 @@ spring:
   application:
     name: riskpilot
   datasource:
-    url: ${DATABASE_URL:jdbc:h2:mem:riskpilot;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
+    url: ${JDBC_DATABASE_URL:${DATABASE_URL:jdbc:h2:file:./data/riskpilot;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}}
     driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
     username: ${DATABASE_USERNAME:sa}
     password: ${DATABASE_PASSWORD:password}
@@ -11,7 +11,7 @@ spring:
       enabled: false
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: false
     properties:
       hibernate:

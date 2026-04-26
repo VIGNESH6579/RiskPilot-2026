@@ -10,6 +10,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -120,6 +121,14 @@ public class AngelAuthService {
     public synchronized void invalidateSession() {
         currentJwtToken = null;
         currentFeedToken = null;
+    }
+
+    @Scheduled(cron = "0 10 9 * * MON-FRI", zone = "Asia/Kolkata")
+    public void preMarketAuth() {
+        log.info("Pre-market auth starting");
+        invalidateSession();
+        boolean success = authenticate();
+        log.info("Pre-market auth result: {}", success);
     }
 
     private String resolveLocalIp() {

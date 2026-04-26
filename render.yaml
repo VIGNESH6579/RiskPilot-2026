@@ -1,3 +1,9 @@
+databases:
+  - name: riskpilot-2026-db
+    databaseName: riskpilot
+    user: riskpilot
+    plan: free
+
 services:
   - type: web
     name: riskpilot-2026
@@ -6,9 +12,27 @@ services:
     dockerfilePath: ./riskpilot/Dockerfile
     dockerContext: ./riskpilot
     autoDeployTrigger: commit
-    healthCheckPath: /api/v1/health/state
+    healthCheckPath: /api/v1/health/ping
     envVars:
       - key: JAVA_OPTS
         value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
       - key: SPRING_PROFILES_ACTIVE
         value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: riskpilot-2026-db
+          property: connectionString
+      - key: DATABASE_USERNAME
+        fromDatabase:
+          name: riskpilot-2026-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: riskpilot-2026-db
+          property: password
+      - key: DATABASE_DRIVER
+        value: org.postgresql.Driver
+      - key: JPA_DIALECT
+        value: org.hibernate.dialect.PostgreSQLDialect
+      - key: JPA_DDL_AUTO
+        value: update

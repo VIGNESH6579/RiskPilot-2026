@@ -7,6 +7,7 @@ public class Signal {
     private double stopLoss;
     private double target;
     private int confidence;
+    private int quantity;
 
     public void setSymbol(String symbol) { this.symbol = symbol; }
     public String getSymbol() { return symbol; }
@@ -25,4 +26,7 @@ public class Signal {
     
     public void setConfidence(int confidence) { this.confidence = confidence; }
     public int getConfidence() { return confidence; }
+
+    public void setQuantity(int quantity) { this.quantity = quantity; }
+    public int getQuantity() { return quantity; }
 }
