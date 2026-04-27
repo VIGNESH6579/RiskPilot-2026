@@ -39,14 +39,32 @@ public class TradingSessionService {
 
     @Transactional
     public TradingSession createNewSession(String symbol) {
-        TradingSession session = TradingSession.builder()
-                .sessionDate(LocalDate.now())
+        LocalDate today = LocalDate.now();
+        TradingSession session = sessionRepository
+            .findBySymbolAndSessionDate(symbol, today)
+            .orElseGet(() -> sessionRepository.save(TradingSession.builder()
+                .sessionDate(today)
                 .symbol(symbol)
                 .sessionStart(LocalDateTime.now())
-                .build();
-        
-        session = sessionRepository.save(session);
-        log.info("Created new trading session for symbol: {} on date: {}", symbol, LocalDate.now());
+                .dailyOpen(BigDecimal.ZERO)
+                .orHigh(BigDecimal.ZERO)
+                .orLow(BigDecimal.ZERO)
+                .orExpansion(BigDecimal.ZERO)
+                .fastCandleExists(false)
+                .regime("UNKNOWN")
+                .regimeLocked(false)
+                .tradesGenerated(0)
+                .tradesExecuted(0)
+                .tradesRejected(0)
+                .totalPnL(BigDecimal.ZERO)
+                .maxDrawdown(BigDecimal.ZERO)
+                .maxProfit(BigDecimal.ZERO)
+                .sessionActive(true)
+                .dayBlockedByFirstTradeFailure(false)
+                .status("ACTIVE")
+                .build()));
+
+        log.info("Resolved trading session for symbol: {} on date: {}", symbol, today);
         return session;
     }
 

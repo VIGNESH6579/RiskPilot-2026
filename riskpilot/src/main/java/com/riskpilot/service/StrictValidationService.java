@@ -5,6 +5,7 @@ import com.riskpilot.exception.TradingException;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -169,6 +170,12 @@ public class StrictValidationService {
             properties.getRisk().getMaxConsecutiveLosses(),
             properties.isStrictMode()
         );
+    }
+
+    @Scheduled(cron = "0 1 0 * * *", zone = "Asia/Kolkata")
+    public void midnightReset() {
+        refreshDailyCountersIfNeeded();
+        log.info("Daily counters reset at midnight");
     }
 
     private void refreshDailyCountersIfNeeded() {

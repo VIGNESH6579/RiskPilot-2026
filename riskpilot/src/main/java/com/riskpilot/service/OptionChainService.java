@@ -1,5 +1,6 @@
 package com.riskpilot.service;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.hc.client5.http.classic.HttpClient;
@@ -480,6 +481,7 @@ public class OptionChainService {
         );
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record OptionChainSnapshot(
         int support,
         int resistance,

@@ -123,7 +123,7 @@ public class AngelAuthService {
         currentFeedToken = null;
     }
 
-    @Scheduled(cron = "0 10 9 * * MON-FRI", zone = "Asia/Kolkata")
+    @Scheduled(cron = "0 0 9 * * MON-FRI", zone = "Asia/Kolkata")
     public void preMarketAuth() {
         log.info("Pre-market auth starting");
         invalidateSession();

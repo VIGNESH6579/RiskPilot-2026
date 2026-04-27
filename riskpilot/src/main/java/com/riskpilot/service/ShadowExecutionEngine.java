@@ -138,7 +138,7 @@ public class ShadowExecutionEngine {
         broadcastCurrentSessionState();
     }
 
-    @Scheduled(cron = "0 14 9 * * ?")
+    @Scheduled(cron = "0 0 9 * * ?")
     public void executeDailyHardReset() {
         restart();
     }
@@ -520,7 +520,7 @@ public class ShadowExecutionEngine {
     }
 
     private RegimeConfidenceEngine.RegimeScore evaluateRegimeConfidence(TradingSessionSnapshot snapshot, List<Candle> history) {
-        if (history.size() < 10) {
+        if (history.size() < 6) {
             return null;
         }
 
