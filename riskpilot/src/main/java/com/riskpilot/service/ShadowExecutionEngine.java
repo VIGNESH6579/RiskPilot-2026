@@ -16,25 +16,31 @@ import com.riskpilot.model.GateDecision;
 import com.riskpilot.model.Regime;
 import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
+import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ShadowExecutionEngine {
+    private static final String DEFAULT_SYMBOL = "NIFTY";
 
     private final RiskPilotProperties config;
     private final RiskGateEngine riskGateEngine;
@@ -52,10 +58,12 @@ public class ShadowExecutionEngine {
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final StrictValidationService strictValidationService;
     private final NtfyNotificationService ntfyNotificationService;
+    private final TradeRepository tradeRepository;
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
+    private Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
 
     public synchronized void evaluateTick(double currentPrice) {
@@ -78,7 +86,7 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        updateActiveTradeState(trade, state.lastRejectReason());
+        updateActiveTradeState(trade, state.lastRejectReason(), currentPrice);
     }
 
     @EventListener
@@ -110,7 +118,7 @@ public class ShadowExecutionEngine {
                 closeTrade(trade, exitAtPrice(trade, candle.close, "TIME_CUTOFF_EXIT"));
                 return;
             }
-            updateActiveTradeState(trade, state.lastRejectReason());
+            updateActiveTradeState(trade, state.lastRejectReason(), candle.close);
             return;
         }
 
@@ -126,6 +134,7 @@ public class ShadowExecutionEngine {
     }
 
     public synchronized void restart() {
+        cancelPersistedActiveTrade("ENGINE_RESTART");
         stateManager.resetDaily();
         candleAggregator.clearHistory();
         volatilityNormalizer.reset();
@@ -134,6 +143,7 @@ public class ShadowExecutionEngine {
         lastTriggeredCandleTime = "";
         activeSignalTime = null;
         activeExpectedEntry = 0.0;
+        activeTradeId = null;
         lastRegimeConfidenceScore = null;
         broadcastCurrentSessionState();
     }
@@ -299,6 +309,7 @@ public class ShadowExecutionEngine {
 
         activeSignalTime = now;
         activeExpectedEntry = signal.getEntry();
+        persistOpenedTrade(signal, trade, now);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -324,6 +335,7 @@ public class ShadowExecutionEngine {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         double riskPoints = Math.max(1.0, trade.initialRisk());
         double realizedR = exit.pnlPoints() / riskPoints;
+        double finalRealizedPnL = trade.realizedPnL() + exit.pnlPoints();
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double entrySlip = activeSignalTime != null ? Math.abs(trade.entryPrice() - activeExpectedEntry) : 0.0;
         double exitSlip = Math.abs(exit.exitPrice() - expectedExit);
@@ -378,6 +390,7 @@ public class ShadowExecutionEngine {
         );
         strictValidationService.recordTradeExecution(realizedR);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
+        finalizePersistedTrade(trade, exit, finalRealizedPnL);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -397,10 +410,12 @@ public class ShadowExecutionEngine {
 
         activeSignalTime = null;
         activeExpectedEntry = 0.0;
+        activeTradeId = null;
         broadcastCurrentSessionState();
     }
 
-    private void updateActiveTradeState(ActiveTradeExecution trade, String lastRejectReason) {
+    private void updateActiveTradeState(ActiveTradeExecution trade, String lastRejectReason, double currentPrice) {
+        syncPersistedActiveTrade(trade, currentPrice);
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
             current.regime(),
@@ -470,6 +485,7 @@ public class ShadowExecutionEngine {
         payload.put("regimeConfidenceReason", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getReason() : null);
         payload.put("reducedMode", lastRegimeConfidenceScore != null && lastRegimeConfidenceScore.isReducedMode());
         webSocketService.sendSessionState(payload);
+        PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastSessionState(payload);
     }
 
     private void broadcastTradeData(LocalDateTime signalTime, ActiveTradeExecution trade, TradeExit exit, double realizedR) {
@@ -536,5 +552,142 @@ public class ShadowExecutionEngine {
 
     private boolean isValidNumber(double value) {
         return !Double.isInfinite(value) && !Double.isNaN(value);
+    }
+
+    private void persistOpenedTrade(Signal signal, ActiveTradeExecution trade, LocalDateTime entryTime) {
+        try {
+            cancelPersistedActiveTrade("STALE_RECOVERY");
+            Trade persistedTrade = Trade.builder()
+                .symbol(resolveSignalSymbol(signal))
+                .direction(resolveTradeDirection(trade))
+                .entryPrice(decimal(trade.entryPrice()))
+                .stopLoss(decimal(trade.stopLoss()))
+                .targetPrice(decimal(trade.tp1Level()))
+                .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
+                .remainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())))
+                .realizedPnL(decimal(trade.realizedPnL()))
+                .unrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP))
+                .maxFavorableExcursion(decimal(trade.mfe()))
+                .maxAdverseExcursion(decimal(trade.mae()))
+                .tp1Hit(trade.tp1Hit())
+                .runnerActive(trade.runnerActive())
+                .tailHalfLocked(trade.tailHalfLocked())
+                .trailingStopLoss(decimal(trade.trailingSL()))
+                .status("ACTIVE")
+                .exitReason("OPEN")
+                .entryTime(entryTime)
+                .build();
+            persistedTrade = tradeRepository.save(persistedTrade);
+            activeTradeId = persistedTrade.getId();
+        } catch (Exception e) {
+            log.warn("Unable to persist opened shadow trade: {}", e.getMessage());
+        }
+    }
+
+    private void syncPersistedActiveTrade(ActiveTradeExecution trade, double currentPrice) {
+        try {
+            Optional<Trade> persistedTrade = findPersistedActiveTrade();
+            if (persistedTrade.isEmpty()) {
+                return;
+            }
+
+            Trade entity = persistedTrade.get();
+            entity.setStopLoss(decimal(trade.stopLoss()));
+            entity.setTargetPrice(decimal(trade.tp1Level()));
+            entity.setRemainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())));
+            entity.setRealizedPnL(decimal(trade.realizedPnL()));
+            entity.setUnrealizedPnL(decimal(calculateUnrealizedPnL(trade, currentPrice)));
+            entity.setMaxFavorableExcursion(decimal(trade.mfe()));
+            entity.setMaxAdverseExcursion(decimal(trade.mae()));
+            entity.setTp1Hit(trade.tp1Hit());
+            entity.setRunnerActive(trade.runnerActive());
+            entity.setTailHalfLocked(trade.tailHalfLocked());
+            entity.setTrailingStopLoss(decimal(trade.trailingSL()));
+            entity.setStatus("ACTIVE");
+            entity.setExitReason("OPEN");
+            tradeRepository.save(entity);
+            activeTradeId = entity.getId();
+        } catch (Exception e) {
+            log.warn("Unable to sync active shadow trade: {}", e.getMessage());
+        }
+    }
+
+    private void finalizePersistedTrade(ActiveTradeExecution trade, TradeExit exit, double finalRealizedPnL) {
+        try {
+            Optional<Trade> persistedTrade = findPersistedActiveTrade();
+            if (persistedTrade.isEmpty()) {
+                return;
+            }
+
+            Trade entity = persistedTrade.get();
+            entity.setStopLoss(decimal(trade.stopLoss()));
+            entity.setTargetPrice(decimal(trade.tp1Level()));
+            entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            entity.setRealizedPnL(decimal(finalRealizedPnL));
+            entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            entity.setMaxFavorableExcursion(decimal(trade.mfe()));
+            entity.setMaxAdverseExcursion(decimal(trade.mae()));
+            entity.setTp1Hit(trade.tp1Hit());
+            entity.setRunnerActive(trade.runnerActive());
+            entity.setTailHalfLocked(trade.tailHalfLocked());
+            entity.setTrailingStopLoss(decimal(trade.trailingSL()));
+            entity.setStatus("CLOSED");
+            entity.setExitReason(exit.reason());
+            entity.setExitTime(LocalDateTime.now());
+            tradeRepository.save(entity);
+        } catch (Exception e) {
+            log.warn("Unable to finalize shadow trade record: {}", e.getMessage());
+        }
+    }
+
+    private void cancelPersistedActiveTrade(String reason) {
+        try {
+            Optional<Trade> persistedTrade = findPersistedActiveTrade();
+            if (persistedTrade.isEmpty()) {
+                return;
+            }
+
+            Trade entity = persistedTrade.get();
+            entity.setStatus("CANCELLED");
+            entity.setExitReason(reason);
+            entity.setExitTime(LocalDateTime.now());
+            entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            tradeRepository.save(entity);
+        } catch (Exception e) {
+            log.warn("Unable to cancel stale active shadow trade: {}", e.getMessage());
+        }
+    }
+
+    private Optional<Trade> findPersistedActiveTrade() {
+        if (activeTradeId != null) {
+            Optional<Trade> byId = tradeRepository.findById(activeTradeId);
+            if (byId.isPresent()) {
+                return byId;
+            }
+        }
+        return tradeRepository.findFirstBySymbolAndStatusOrderByEntryTimeDesc(DEFAULT_SYMBOL, "ACTIVE");
+    }
+
+    private String resolveSignalSymbol(Signal signal) {
+        if (signal.getSymbol() == null || signal.getSymbol().isBlank()) {
+            return DEFAULT_SYMBOL;
+        }
+        return signal.getSymbol().trim();
+    }
+
+    private String resolveTradeDirection(ActiveTradeExecution trade) {
+        return trade.tp1Level() < trade.entryPrice() ? "SHORT" : "LONG";
+    }
+
+    private double calculateUnrealizedPnL(ActiveTradeExecution trade, double currentPrice) {
+        double pnlPoints = trade.tp1Level() < trade.entryPrice()
+            ? trade.entryPrice() - currentPrice
+            : currentPrice - trade.entryPrice();
+        return pnlPoints * trade.remainingSize();
+    }
+
+    private BigDecimal decimal(double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
     }
 }

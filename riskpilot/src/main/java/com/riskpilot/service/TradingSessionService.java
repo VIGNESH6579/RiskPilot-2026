@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,8 +85,33 @@ public class TradingSessionService {
 
     @Transactional
     public void processManualSignal(TradingSignal signal) {
+        LocalDateTime now = LocalDateTime.now();
         signal.setStatus("MANUAL");
-        signal.setExecutionTime(LocalDateTime.now());
+        signal.setExecutionTime(now);
+        if (signal.getSignalTime() == null) {
+            signal.setSignalTime(now);
+        }
+        if (signal.getRegime() == null || signal.getRegime().isBlank()) {
+            signal.setRegime("TREND");
+        }
+        if (signal.getTimePhase() == null || signal.getTimePhase().isBlank()) {
+            signal.setTimePhase(resolveCurrentTimePhase());
+        }
+        if (signal.getRiskAmount() == null && signal.getExpectedEntry() != null && signal.getStopLoss() != null) {
+            signal.setRiskAmount(signal.getExpectedEntry().subtract(signal.getStopLoss()).abs().setScale(2, RoundingMode.HALF_UP));
+        }
+        if (signal.getRewardAmount() == null && signal.getExpectedEntry() != null && signal.getTargetPrice() != null) {
+            signal.setRewardAmount(signal.getTargetPrice().subtract(signal.getExpectedEntry()).abs().setScale(2, RoundingMode.HALF_UP));
+        }
+        if (signal.getRiskRewardRatio() == null) {
+            BigDecimal riskAmount = signal.getRiskAmount();
+            BigDecimal rewardAmount = signal.getRewardAmount();
+            if (riskAmount != null && rewardAmount != null && riskAmount.compareTo(BigDecimal.ZERO) > 0) {
+                signal.setRiskRewardRatio(rewardAmount.divide(riskAmount, 2, RoundingMode.HALF_UP));
+            } else {
+                signal.setRiskRewardRatio(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            }
+        }
         signalRepository.save(signal);
         
         log.info("Processed manual signal: {} for symbol: {}", signal.getId(), signal.getSymbol());
@@ -191,5 +217,16 @@ public class TradingSessionService {
         
         sessionRepository.save(session);
         log.info("Ended trading session for symbol: {}", symbol);
+    }
+
+    private String resolveCurrentTimePhase() {
+        LocalTime now = LocalTime.now();
+        if (now.isBefore(LocalTime.of(12, 0))) {
+            return "EARLY";
+        }
+        if (now.isBefore(LocalTime.of(13, 30))) {
+            return "MID";
+        }
+        return "LATE";
     }
 }

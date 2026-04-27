@@ -118,7 +118,13 @@ class TradingControllerTest {
                   "expectedEntry": 46100,
                   "stopLoss": 46015,
                   "targetPrice": 46250,
-                  "confidence": 75
+                  "confidence": 75,
+                  "riskAmount": 85,
+                  "rewardAmount": 150,
+                  "riskRewardRatio": 1.76,
+                  "regime": "TREND",
+                  "timePhase": "EARLY",
+                  "signalTime": "2026-04-27T09:30:00"
                 }
                 """;
         

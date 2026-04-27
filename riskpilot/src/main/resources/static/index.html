@@ -258,6 +258,22 @@
       return { text: "--", className: "muted" };
     }
 
+    function applySessionState(state) {
+      if (!state || typeof state !== "object") return;
+
+      const session = boolLabel(state.sessionActive);
+      sessionEl.textContent = session.text;
+      sessionEl.className = "value small " + session.className;
+
+      const feed = boolLabel(state.feedStable);
+      feedEl.textContent = feed.text;
+      feedEl.className = "value small " + feed.className;
+
+      tradesEl.textContent = String(state.tradesTaken ?? 0);
+      rejectEl.textContent = state.lastRejectReason || "--";
+      rejectEl.className = "value small " + (state.lastRejectReason && state.lastRejectReason !== "ALLOW" ? "warn" : "muted");
+    }
+
     function renderTrades() {
       if (!Array.isArray(tradeRows) || tradeRows.length === 0) {
         rowsEl.innerHTML = '<tr><td colspan="11" class="empty">Waiting for live trade activity...</td></tr>';
@@ -311,17 +327,7 @@
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
         vixEl.textContent = health.vix !== null && health.vix !== undefined ? formatNum(health.vix) : "--";
 
-        const session = boolLabel(state.sessionActive);
-        sessionEl.textContent = session.text;
-        sessionEl.className = "value small " + session.className;
-
-        const feed = boolLabel(state.feedStable);
-        feedEl.textContent = feed.text;
-        feedEl.className = "value small " + feed.className;
-
-        tradesEl.textContent = String(state.tradesTaken ?? 0);
-        rejectEl.textContent = state.lastRejectReason || "--";
-        rejectEl.className = "value small " + (state.lastRejectReason && state.lastRejectReason !== "ALLOW" ? "warn" : "muted");
+        applySessionState(state);
 
         if (Array.isArray(history) && history.length > 0) {
           tradeRows = history.slice(0, MAX_ROWS).map((row) => ({
@@ -353,7 +359,16 @@
 
       socket.onmessage = (event) => {
         try {
-          mergeTrade(JSON.parse(event.data));
+          const message = JSON.parse(event.data);
+          if (message && message.eventType === "session") {
+            applySessionState(message.payload);
+            return;
+          }
+          if (message && message.eventType === "trade") {
+            mergeTrade(message.payload);
+            return;
+          }
+          mergeTrade(message.payload || message);
         } catch (error) {
           console.error("WebSocket parse failed", error);
         }

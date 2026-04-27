@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -142,7 +144,7 @@ public class StrictValidationService {
         }
 
         String requiredRegime = properties.getFilters().getRegimeRequired();
-        if (!"ALL".equalsIgnoreCase(requiredRegime) && !requiredRegime.contains(currentRegime)) {
+        if (!isAllowedRegime(requiredRegime, currentRegime)) {
             throw new TradingException(String.format(
                 "STRICT_MODE_VIOLATION: regime '%s' does not match required '%s'",
                 currentRegime, requiredRegime
@@ -191,6 +193,28 @@ public class StrictValidationService {
     private boolean isInLatePhase(LocalTime time) {
         return !time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getStart()))
             && time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getEnd()));
+    }
+
+    private boolean isAllowedRegime(String requiredRegime, String currentRegime) {
+        if (requiredRegime == null || requiredRegime.isBlank() || "ALL".equalsIgnoreCase(requiredRegime)) {
+            return true;
+        }
+        if (currentRegime == null || currentRegime.isBlank()) {
+            return false;
+        }
+
+        String normalizedRequired = requiredRegime.trim().toUpperCase(Locale.ENGLISH);
+        String normalizedCurrent = currentRegime.trim().toUpperCase(Locale.ENGLISH);
+
+        return switch (normalizedRequired) {
+            case "TREND_ONLY" -> "TREND".equals(normalizedCurrent);
+            case "CHOP_ONLY", "RANGE_ONLY" -> "CHOP".equals(normalizedCurrent);
+            case "BLOCKED_ONLY" -> "BLOCKED".equals(normalizedCurrent);
+            default -> Arrays.stream(normalizedRequired.split("[,|]"))
+                .map(String::trim)
+                .filter(token -> !token.isEmpty())
+                .anyMatch(normalizedCurrent::equals);
+        };
     }
 
     public record TradingMetrics(

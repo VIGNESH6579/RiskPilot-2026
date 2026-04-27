@@ -77,8 +77,11 @@ class TradingSessionServiceTest {
                 .stopLoss(new BigDecimal("46015"))
                 .targetPrice(new BigDecimal("46250"))
                 .confidence(75)
+                .riskAmount(new BigDecimal("85.00"))
+                .rewardAmount(new BigDecimal("150.00"))
+                .riskRewardRatio(new BigDecimal("1.76"))
                 .regime("TREND")
-                .timePhase("MIDDLE")
+                .timePhase("MID")
                 .status("GENERATED")
                 .signalTime(LocalDateTime.now())
                 .build();
@@ -162,6 +165,30 @@ class TradingSessionServiceTest {
         verify(signalRepository).save(testSignal);
         assertEquals("MANUAL", testSignal.getStatus());
         assertNotNull(testSignal.getExecutionTime());
+    }
+
+    @Test
+    void processManualSignal_PopulatesDerivedFieldsWhenMissing() {
+        TradingSignal incompleteSignal = TradingSignal.builder()
+                .symbol("NIFTY")
+                .direction("SHORT")
+                .expectedEntry(new BigDecimal("24050"))
+                .stopLoss(new BigDecimal("24100"))
+                .targetPrice(new BigDecimal("23950"))
+                .build();
+
+        when(signalRepository.save(any(TradingSignal.class)))
+                .thenReturn(incompleteSignal);
+
+        tradingSessionService.processManualSignal(incompleteSignal);
+
+        verify(signalRepository).save(incompleteSignal);
+        assertNotNull(incompleteSignal.getSignalTime());
+        assertNotNull(incompleteSignal.getRiskAmount());
+        assertNotNull(incompleteSignal.getRewardAmount());
+        assertNotNull(incompleteSignal.getRiskRewardRatio());
+        assertNotNull(incompleteSignal.getRegime());
+        assertNotNull(incompleteSignal.getTimePhase());
     }
     
     @Test

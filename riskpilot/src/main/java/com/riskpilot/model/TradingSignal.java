@@ -1,6 +1,8 @@
 package com.riskpilot.model;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
@@ -21,18 +23,23 @@ public class TradingSignal {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     
+    @NotBlank
     @Column(nullable = false, length = 20)
     private String symbol;
     
+    @NotBlank
     @Column(nullable = false, length = 10)
     private String direction; // LONG or SHORT
     
+    @NotNull
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal expectedEntry;
     
+    @NotNull
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal stopLoss;
     
+    @NotNull
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal targetPrice;
     
