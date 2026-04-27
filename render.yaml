@@ -36,3 +36,9 @@ services:
         value: org.hibernate.dialect.PostgreSQLDialect
       - key: JPA_DDL_AUTO
         value: update
+      - key: NTFY_ENABLED
+        value: "false"
+      - key: NTFY_TOPIC
+        value: riskpilot_shadow_alerts
+      - key: NTFY_COOLDOWN_SEC
+        value: "10"

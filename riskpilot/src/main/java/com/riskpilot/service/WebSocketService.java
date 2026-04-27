@@ -1,7 +1,6 @@
 package com.riskpilot.service;
 
 import com.riskpilot.model.Signal;
-import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -17,14 +16,14 @@ public class WebSocketService {
     }
 
     public void sendSignal(Signal signal) {
-        messagingTemplate.send("/topic/signal", MessageBuilder.withPayload(signal).build());
+        messagingTemplate.convertAndSend("/topic/signal", signal);
     }
 
     public void sendSessionState(Map<String, Object> payload) {
-        messagingTemplate.send("/topic/session", MessageBuilder.withPayload(payload).build());
+        messagingTemplate.convertAndSend("/topic/session", (Object) payload);
     }
 
     public void sendTradeExecution(Map<String, Object> tradeData) {
-        messagingTemplate.send("/topic/trade", MessageBuilder.withPayload(tradeData).build());
+        messagingTemplate.convertAndSend("/topic/trade", (Object) tradeData);
     }
 }

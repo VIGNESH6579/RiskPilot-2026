@@ -26,12 +26,12 @@ logging:
     org.hibernate.SQL: DEBUG
 
 riskpilot:
-  trading:
-    symbol: NIFTY
+  risk:
     max-trades-per-day: 2
-    slippage-entry: 2.0
-    slippage-exit: 2.0
-    latency-threshold: 1.0
-  
+  execution:
+    slippage:
+      entry-max: 2.0
+    latency:
+      soft-block-ms: 500
   notification:
     ntfy-enabled: false

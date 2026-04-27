@@ -20,6 +20,7 @@ public class CandleAggregator {
     private final List<Candle> historicalBuffer = new ArrayList<>();
     private Candle currentBuildingCandle = null;
     private LocalDateTime lastTickTime = LocalDateTime.now();
+    private LocalDateTime lastArrivalTime = null;
     
     private boolean feedUnstable = false;
 
@@ -29,9 +30,15 @@ public class CandleAggregator {
 
     // Triggered externally by the WebSocket Client parsing JSON
     public synchronized void processTick(LocalDateTime tickTime, double price, long volume) {
-        long tickDelayMs = java.time.Duration.between(tickTime, LocalDateTime.now()).toMillis();
-        feedUnstable = tickDelayMs > 1500;
+        processTick(tickTime, price, volume, 0L);
+    }
+
+    public synchronized void processTick(LocalDateTime tickTime, double price, long volume, long sourceAgeMs) {
+        LocalDateTime now = LocalDateTime.now();
+        long arrivalGapMs = lastArrivalTime == null ? 0L : java.time.Duration.between(lastArrivalTime, now).toMillis();
+        feedUnstable = sourceAgeMs > 1500L || (lastArrivalTime != null && arrivalGapMs > 4500L);
         lastTickTime = tickTime;
+        lastArrivalTime = now;
 
         // 5-minute alignment logic securely
         int minute = tickTime.getMinute();
@@ -97,6 +104,7 @@ public class CandleAggregator {
     public synchronized void clearHistory() {
         historicalBuffer.clear();
         currentBuildingCandle = null;
+        lastArrivalTime = null;
         feedUnstable = false;
     }
 }

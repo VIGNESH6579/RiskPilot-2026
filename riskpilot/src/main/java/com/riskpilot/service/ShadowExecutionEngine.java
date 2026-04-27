@@ -5,6 +5,7 @@ import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
 import com.riskpilot.engine.RealTimeEdgeTracker;
+import com.riskpilot.engine.RegimeConfidenceEngine;
 import com.riskpilot.engine.RegimeFilter;
 import com.riskpilot.engine.RiskGateEngine;
 import com.riskpilot.engine.VolatilityNormalizer;
@@ -46,13 +47,16 @@ public class ShadowExecutionEngine {
     private final WebSocketService webSocketService;
     private final VolatilityNormalizer volatilityNormalizer;
     private final RegimeFilter regimeFilter;
+    private final RegimeConfidenceEngine regimeConfidenceEngine;
     private final RealTimeEdgeTracker edgeTracker;
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final StrictValidationService strictValidationService;
+    private final NtfyNotificationService ntfyNotificationService;
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
+    private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
 
     public synchronized void evaluateTick(double currentPrice) {
         if (killSwitchEngine.isKillSwitchTriggered()) {
@@ -130,6 +134,7 @@ public class ShadowExecutionEngine {
         lastTriggeredCandleTime = "";
         activeSignalTime = null;
         activeExpectedEntry = 0.0;
+        lastRegimeConfidenceScore = null;
         broadcastCurrentSessionState();
     }
 
@@ -204,9 +209,29 @@ public class ShadowExecutionEngine {
             }
 
             double orRange = isValidOr(orHigh, orLow) ? (orHigh - orLow) : 0.0;
-            boolean tradingAllowed = regimeMetrics != null
-                ? regimeMetrics.isTradingAllowed()
-                : orRange >= config.getFilters().getMinOrRange();
+            TradingSessionSnapshot candidateSnapshot = new TradingSessionSnapshot(
+                !now.isBefore(sessionStart) && now.isBefore(sessionEnd),
+                current.regime(),
+                false,
+                resolvePhase(now),
+                current.tradesTaken(),
+                current.tradeActive(),
+                !candleAggregator.isFeedUnstable(),
+                current.heartbeatAlive(),
+                orHigh,
+                orLow,
+                current.cumulativeDailyLossR(),
+                current.activeTradeReference(),
+                current.lastRejectReason()
+            );
+            RegimeConfidenceEngine.RegimeScore confidenceScore = evaluateRegimeConfidence(candidateSnapshot, history);
+            lastRegimeConfidenceScore = confidenceScore;
+
+            boolean tradingAllowed = confidenceScore != null
+                ? confidenceScore.isTradingAllowed()
+                : regimeMetrics != null
+                    ? regimeMetrics.isTradingAllowed()
+                    : orRange >= config.getFilters().getMinOrRange();
             Regime regime = tradingAllowed ? Regime.TREND : Regime.BLOCKED;
 
             return new TradingSessionSnapshot(
@@ -291,6 +316,7 @@ public class ShadowExecutionEngine {
             "ALLOW"
         ));
 
+        ntfyNotificationService.notifyTradeEntry(signal, trade);
         broadcastCurrentSessionState();
     }
 
@@ -351,6 +377,7 @@ public class ShadowExecutionEngine {
             features
         );
         strictValidationService.recordTradeExecution(realizedR);
+        ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -437,6 +464,11 @@ public class ShadowExecutionEngine {
         payload.put("lastRejectReason", state.lastRejectReason());
         payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
+        RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
+        payload.put("regimeFilterScore", regimeMetrics != null ? regimeMetrics.getRegimeScore() : null);
+        payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
+        payload.put("regimeConfidenceReason", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getReason() : null);
+        payload.put("reducedMode", lastRegimeConfidenceScore != null && lastRegimeConfidenceScore.isReducedMode());
         webSocketService.sendSessionState(payload);
     }
 
@@ -485,6 +517,17 @@ public class ShadowExecutionEngine {
             .mapToDouble(c -> c.high - c.low)
             .average()
             .orElse(0.0);
+    }
+
+    private RegimeConfidenceEngine.RegimeScore evaluateRegimeConfidence(TradingSessionSnapshot snapshot, List<Candle> history) {
+        if (history.size() < 10) {
+            return null;
+        }
+
+        List<RegimeConfidenceEngine.CandleData> confidenceCandles = history.stream()
+            .map(c -> new RegimeConfidenceEngine.CandleData(c.open, c.high, c.low, c.close, c.timestamp()))
+            .toList();
+        return regimeConfidenceEngine.evaluate(snapshot, confidenceCandles);
     }
 
     private boolean isValidOr(double orHigh, double orLow) {

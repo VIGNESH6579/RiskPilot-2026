@@ -6,19 +6,15 @@ spring:
     name: riskpilot
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
-  
-  # Database Configuration (disabled in prod)
   datasource:
     url: ${DATABASE_URL:jdbc:h2:mem:riskpilot}
     driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
     username: ${DATABASE_USERNAME:sa}
     password: ${DATABASE_PASSWORD:password}
-  
   h2:
     console:
       enabled: ${H2_CONSOLE_ENABLED:false}
       path: /h2-console
-  
   jpa:
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:none}
@@ -27,54 +23,85 @@ spring:
       hibernate:
         format_sql: true
         dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
-  
-  # WebSocket Configuration
   websocket:
     message-broker:
       application-prefix: /app
       user-prefix: /user
-  
-  # Jackson Configuration
   jackson:
     time-zone: Asia/Kolkata
     date-format: yyyy-MM-dd HH:mm:ss
 
-# RiskPilot Specific Configuration
 riskpilot:
-  # Trading Configuration
-  trading:
-    symbol: ${TRADING_SYMBOL:NIFTY}
+  mode: SHADOW
+  strict-mode: true
+  session:
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
-    session-start: ${SESSION_START:09:15}
-    session-end: ${SESSION_END:15:30}
+    start: ${SESSION_START:09:15}
+    end: ${SESSION_END:15:30}
     opening-range-end: ${OPENING_RANGE_END:09:45}
-    
-    # Risk Parameters
-    max-trades-per-day: ${MAX_TRADES_PER_DAY:3}
-    max-position-size: ${MAX_POSITION_SIZE:75}
-    default-stop-loss: ${DEFAULT_STOP_LOSS:85}
-    default-take-profit: ${DEFAULT_TAKE_PROFIT:120}
-    
-    # Execution Parameters
-    slippage-entry: ${SLIPPAGE_ENTRY:5.0}
-    slippage-exit: ${SLIPPAGE_EXIT:5.0}
-    latency-threshold: ${LATENCY_THRESHOLD:2.0}
-    
-  # Angel One API Configuration
-  angelone:
-    api-key: ${ANGELONE_API_KEY:}
-    client-code: ${ANGELONE_CLIENT_CODE:}
-    password: ${ANGELONE_PASSWORD:}
-    totp-secret: ${ANGELONE_TOTP_SECRET:}
-    base-url: ${ANGELONE_BASE_URL:https://apiconnect.angelbroking.com}
-    
-  # Notification Configuration
+  filters:
+    regime-required: TREND_ONLY
+    min-or-range: 120
+    max-spread: 2.0
+  time-phase:
+    early:
+      start: "09:15"
+      end: "12:00"
+      position-scale: 1.0
+    mid:
+      start: "12:00"
+      end: "13:30"
+      position-scale: 0.35
+    late:
+      start: "13:30"
+      end: "15:30"
+      allow-new-trades: false
+      force-exit: true
+  risk:
+    max-trades-per-day: ${MAX_TRADES_PER_DAY:2}
+    one-trade-at-a-time: true
+    max-daily-loss-r: 1.5
+    max-consecutive-losses: 3
+  execution:
+    slippage:
+      entry-max: ${SLIPPAGE_ENTRY:2.0}
+      tp1-max: 3.0
+      runner-max: 6.0
+      panic-exit-max: 8.0
+    latency:
+      soft-block-ms: 500
+      hard-block-ms: 1500
+      panic-ms: 5000
+    reject-on-high-slippage: true
+    reject-on-latency-breach: true
+  infra:
+    feed:
+      require-stable: true
+      max-missing-ticks: 3
+      instability-timeout-sec: 15
+      real-time-only: true
+      data-source: angelone-live
+    heartbeat:
+      enabled: true
+      panic-exit-on-failure: true
+      timeout-sec: 30
+    market-data:
+      cache-ttl-seconds: 5
+      refresh-interval-seconds: 2
+      fallback-disabled: true
+      mock-disabled: true
   notification:
     ntfy-enabled: ${NTFY_ENABLED:false}
     ntfy-topic: ${NTFY_TOPIC:riskpilot_shadow_alerts}
     ntfy-cooldown-sec: ${NTFY_COOLDOWN_SEC:10}
 
-# Logging Configuration
+angelone:
+  api-key: ${ANGELONE_API_KEY:}
+  client-code: ${ANGELONE_CLIENT_CODE:}
+  password: ${ANGELONE_PASSWORD:}
+  totp-secret: ${ANGELONE_TOTP_SECRET:}
+  base-url: ${ANGELONE_BASE_URL:https://apiconnect.angelbroking.com}
+
 logging:
   level:
     com.riskpilot: ${LOG_LEVEL:INFO}
@@ -88,7 +115,6 @@ logging:
     max-size: 10MB
     max-history: 30
 
-# Management & Monitoring
 management:
   endpoints:
     web:

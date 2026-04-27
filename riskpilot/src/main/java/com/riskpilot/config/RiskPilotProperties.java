@@ -16,6 +16,7 @@ public class RiskPilotProperties {
     private Risk risk = new Risk();
     private Execution execution = new Execution();
     private Infra infra = new Infra();
+    private Notification notification = new Notification();
 
     @Data
     public static class Session {
@@ -125,5 +126,12 @@ public class RiskPilotProperties {
             private boolean fallbackDisabled = true;  // NO FALLBACKS
             private boolean mockDisabled = true;     // NO MOCKS
         }
+    }
+
+    @Data
+    public static class Notification {
+        private boolean ntfyEnabled = false;
+        private String ntfyTopic = "riskpilot_shadow_alerts";
+        private int ntfyCooldownSec = 10;
     }
 }

@@ -45,8 +45,9 @@ public class AngelTickStreamClient {
                 return;
             }
 
+            LocalDateTime observedAt = LocalDateTime.now();
             heartbeatMonitor.registerTick();
-            candleAggregator.processTick(LocalDateTime.now(), snapshot.spot(), 1L);
+            candleAggregator.processTick(observedAt, snapshot.spot(), 1L, snapshot.sourceAgeMs());
             shadowExecutionEngine.evaluateTick(snapshot.spot());
         } catch (Exception e) {
             candleAggregator.markUnstable();

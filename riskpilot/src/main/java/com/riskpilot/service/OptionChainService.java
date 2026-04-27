@@ -51,7 +51,7 @@ public class OptionChainService {
     private final DayOfWeek defaultExpiryDay;
     private final String explicitExpiryOverride;
 
-    private OptionChainSnapshot lastKnownSnapshot = new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
+    private OptionChainSnapshot lastKnownSnapshot = snapshot(0, 0, 0.0, "", 0.0, "STALE_CACHE");
 
     // Yahoo Finance result cache — prevents hitting Yahoo every 2 s
     private volatile OptionChainSnapshot yahooCachedSnapshot = null;
@@ -145,7 +145,7 @@ public class OptionChainService {
             if (resistance == support) resistance += 50;
 
             String expiry = resolveFallbackExpiry();
-            lastKnownSnapshot = new OptionChainSnapshot(support, resistance, spot, expiry, prevClose, source);
+            lastKnownSnapshot = snapshot(support, resistance, spot, expiry, prevClose, source);
             writeCache(lastKnownSnapshot);
 
             // Update Yahoo cache
@@ -177,7 +177,7 @@ public class OptionChainService {
         // Use cached spot directly — NSE last-value call is blocked from cloud IPs
         double marketCloseSpot = cached.spot() > 0.0 ? cached.spot() : lastKnownSnapshot.spot();
         double prevClose = cached.previousClose() > 0.0 ? cached.previousClose() : marketCloseSpot;
-        return new OptionChainSnapshot(
+        return snapshot(
             cached.support(),
             cached.resistance(),
             marketCloseSpot,
@@ -246,7 +246,7 @@ public class OptionChainService {
             int support    = (int)(Math.floor(ltp / 50.0) * 50);
             int resistance = (int)(Math.ceil (ltp / 50.0) * 50);
             if (resistance == support) resistance += 50;
-            OptionChainSnapshot snap = new OptionChainSnapshot(
+            OptionChainSnapshot snap = snapshot(
                 support, resistance,
                 marketOpen ? ltp : prevClose,
                 expiry, prevClose,
@@ -278,7 +278,7 @@ public class OptionChainService {
             double last = row.path("last").asDouble(0.0);
             double prevClose = row.path("previousClose").asDouble(last);
             String expiry = resolveFallbackExpiry();
-            return new OptionChainSnapshot(
+            return snapshot(
                 0,
                 0,
                 marketOpen ? last : prevClose,
@@ -311,7 +311,7 @@ public class OptionChainService {
                     double last = row.path("last").asDouble(0.0);
                     double prevClose = row.path("previousClose").asDouble(last);
                     String expiry = resolveFallbackExpiry();
-                    return new OptionChainSnapshot(
+                    return snapshot(
                         0,
                         0,
                         marketOpen ? last : prevClose,
@@ -461,12 +461,39 @@ public class OptionChainService {
         }
     }
 
-    public record OptionChainSnapshot(
+    private OptionChainSnapshot snapshot(
         int support,
         int resistance,
         double spot,
         String expiry,
         double previousClose,
         String source
-    ) {}
+    ) {
+        return new OptionChainSnapshot(
+            support,
+            resistance,
+            spot,
+            expiry,
+            previousClose,
+            source,
+            System.currentTimeMillis()
+        );
+    }
+
+    public record OptionChainSnapshot(
+        int support,
+        int resistance,
+        double spot,
+        String expiry,
+        double previousClose,
+        String source,
+        long fetchedAtEpochMs
+    ) {
+        public long sourceAgeMs() {
+            if (fetchedAtEpochMs <= 0L) {
+                return Long.MAX_VALUE;
+            }
+            return Math.max(0L, System.currentTimeMillis() - fetchedAtEpochMs);
+        }
+    }
 }
