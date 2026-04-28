@@ -157,6 +157,29 @@ public class MarketDataStateService {
         return Math.max(0L, Duration.between(current.lastAcceptedAt(), now).toMillis());
     }
 
+    public long lastTickAgeMs(Instant now) {
+        MarketDataSnapshot current = snapshotRef.get();
+        if (current.lastTick() == null) {
+            return Long.MAX_VALUE;
+        }
+        return Math.max(0L, Duration.between(current.lastTick().receivedAt(), now).toMillis());
+    }
+
+    public String resolvePriceSource(boolean marketOpen, long maxSilenceMs) {
+        MarketDataSnapshot current = snapshotRef.get();
+        if (current.lastTick() == null) {
+            return "STALE";
+        }
+        if (!marketOpen) {
+            return "MARKET_CLOSED";
+        }
+        long ageMs = lastTickAgeMs(Instant.now());
+        if (current.feedBlocked() || current.halted() || ageMs > maxSilenceMs) {
+            return "STALE";
+        }
+        return "LIVE";
+    }
+
     private boolean shouldCountRejectedTick(String reason) {
         return reason == null || !"MARKET_CLOSED_TICK".equals(reason);
     }

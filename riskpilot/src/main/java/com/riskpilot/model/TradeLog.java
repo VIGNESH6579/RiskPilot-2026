@@ -40,6 +40,7 @@ public class TradeLog {
     private Double mfe;
     private Double mae;
     private Double realizedR;
+    private String direction;
     private String gateDecision;
     private String rejectReason;
     private String regime;

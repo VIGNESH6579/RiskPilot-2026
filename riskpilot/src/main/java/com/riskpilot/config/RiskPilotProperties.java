@@ -9,7 +9,7 @@ import com.riskpilot.model.MarketDataTransport;
 @ConfigurationProperties(prefix = "riskpilot")
 public class RiskPilotProperties {
 
-    private String mode = "LIVE"; // LIVE | PAPER
+    private String mode = "SHADOW"; // LIVE | SHADOW | PAPER
     private boolean strictMode = true;
     private boolean enforceStrictTiming = true;
 
@@ -30,11 +30,26 @@ public class RiskPilotProperties {
         return "PAPER".equalsIgnoreCase(mode);
     }
 
+    public boolean isShadowMode() {
+        return "SHADOW".equalsIgnoreCase(mode);
+    }
+
+    public boolean isRealFeedMode() {
+        return isLiveMode() || isShadowMode();
+    }
+
+    public String dataSourceLabel() {
+        return isPaperMode() ? "SIMULATED" : "REAL";
+    }
+
     @Data
     public static class Session {
         private String timezone = "Asia/Kolkata";
         private String start = "09:15";
         private String end = "15:30";
+        private String entryStart = "09:20";
+        private String lastEntryCutoff = "15:00";
+        private String forceExit = "15:25";
         private String openingRangeEnd = "09:45";
     }
 

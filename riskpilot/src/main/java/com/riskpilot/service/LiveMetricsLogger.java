@@ -21,9 +21,9 @@ public class LiveMetricsLogger {
 
     private static final Logger log = LoggerFactory.getLogger(LiveMetricsLogger.class);
     private static final String CSV_HEADER =
-        "signalTime,executionTime,latencySec,entryLatencyMs,exitLatencyMs,expectedEntry,actualEntry,entrySlippage," +
+        "signalTime,executionTime,direction,latencySec,entryLatencyMs,exitLatencyMs,expectedEntry,actualEntry,entrySlippage," +
         "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR," +
-        "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitTime";
+        "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitType,exitTime";
 
     private final TradeLogRepository tradeLogRepository;
 
@@ -34,10 +34,11 @@ public class LiveMetricsLogger {
         TimePhase timePhase,
         boolean feedStable
     ) {
+        LocalDateTime effectiveSignalTime = signalTime != null ? signalTime : LocalDateTime.now();
         ensureHeader();
         appendRow(String.format(
             "%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
-            signalTime,
+            effectiveSignalTime,
             "",
             0,
             "",
@@ -62,7 +63,7 @@ public class LiveMetricsLogger {
         ));
 
         persistLog(TradeLog.builder()
-            .signalTime(signalTime)
+            .signalTime(effectiveSignalTime)
             .latencySec(0.0)
             .entryLatencyMs(0L)
             .exitLatencyMs(0L)
@@ -94,17 +95,23 @@ public class LiveMetricsLogger {
         TimePhase timePhase,
         boolean feedStable,
         String exitReason,
+        String exitType,
         LocalDateTime exitTime
     ) {
+        LocalDateTime effectiveSignalTime = signalTime != null ? signalTime : LocalDateTime.now();
+        LocalDateTime effectiveExecutionTime = executionTime != null ? executionTime : effectiveSignalTime;
+        LocalDateTime effectiveExitTime = exitTime != null ? exitTime : effectiveExecutionTime;
         ensureHeader();
         double latencySec = entryLatencyMs / 1000.0;
         double entrySlippage = actualEntryPrice - expectedEntryPrice;
         double exitSlippage = actualExitPrice - expectedExitPrice;
+        String direction = actualEntryPrice > expectedEntryPrice ? "LONG" : "SHORT";
 
         appendRow(String.format(
-            "%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s",
-            signalTime,
-            executionTime,
+            "%s,%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s,%s",
+            effectiveSignalTime,
+            effectiveExecutionTime,
+            direction,
             latencySec,
             entryLatencyMs,
             exitLatencyMs,
@@ -125,12 +132,13 @@ public class LiveMetricsLogger {
             timePhase,
             feedStable,
             escapeCsv(exitReason),
-            exitTime
+            escapeCsv(exitType),
+            effectiveExitTime
         ));
 
         persistLog(TradeLog.builder()
-            .signalTime(signalTime)
-            .executionTime(executionTime)
+            .signalTime(effectiveSignalTime)
+            .executionTime(effectiveExecutionTime)
             .latencySec(latencySec)
             .entryLatencyMs(entryLatencyMs)
             .exitLatencyMs(exitLatencyMs)
@@ -145,13 +153,15 @@ public class LiveMetricsLogger {
             .mfe(mfe)
             .mae(mae)
             .realizedR(realizedR)
+            .direction(direction)
             .gateDecision(gateDecision)
             .rejectReason(rejectReason)
             .regime(regime != null ? regime.name() : null)
             .timePhase(timePhase != null ? timePhase.name() : null)
             .feedStable(feedStable)
             .exitReason(exitReason)
-            .exitTime(exitTime)
+            .exitType(exitType)
+            .exitTime(effectiveExitTime)
             .build());
     }
 
@@ -159,7 +169,7 @@ public class LiveMetricsLogger {
         try {
             tradeLogRepository.save(tradeLog);
         } catch (Exception e) {
-            log.warn("Trade log DB persist failed: {}", e.getMessage());
+            log.error("CRITICAL: Trade log persistence failed", e);
         }
     }
 

@@ -441,32 +441,42 @@ public class ShadowExecutionEngine {
             log.warn("Exit slippage validation triggered: {}", e.getMessage());
         }
 
-        if (activeSignalTime != null && activeExecutionTime != null) {
-            liveMetricsLogger.logShadowExecution(
+        LocalDateTime effectiveSignalTime = activeSignalTime != null ? activeSignalTime : LocalDateTime.now();
+        LocalDateTime effectiveExecutionTime = activeExecutionTime != null ? activeExecutionTime : effectiveSignalTime;
+        if (activeSignalTime == null || activeExecutionTime == null) {
+            log.warn(
+                "STATE_RECOVERY_MODE activeSignalTime={} activeExecutionTime={} exitReason={}",
                 activeSignalTime,
                 activeExecutionTime,
-                activeEntryLatencyMs,
-                exitLatencyMs,
-                activeExpectedEntry,
-                trade.entryPrice(),
-                expectedExit,
-                exit.exitPrice(),
-                trade.tp1Hit(),
-                trade.runnerActive(),
-                trade.mfe(),
-                trade.mae(),
-                realizedR,
-                "ALLOW",
-                "",
-                state.regime(),
-                state.timePhase(),
-                state.feedStable(),
-                exit.reason(),
-                LocalDateTime.now()
+                exit.reason()
             );
-
-            broadcastTradeData(activeSignalTime, activeExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitLatencyMs);
         }
+
+        liveMetricsLogger.logShadowExecution(
+            effectiveSignalTime,
+            effectiveExecutionTime,
+            activeEntryLatencyMs,
+            exitLatencyMs,
+            activeExpectedEntry,
+            trade.entryPrice(),
+            expectedExit,
+            exit.exitPrice(),
+            trade.tp1Hit(),
+            trade.runnerActive(),
+            trade.mfe(),
+            trade.mae(),
+            realizedR,
+            "ALLOW",
+            "",
+            state.regime(),
+            state.timePhase(),
+            state.feedStable(),
+            exit.reason(),
+            exit.exitType(),
+            LocalDateTime.now()
+        );
+
+        broadcastTradeData(effectiveSignalTime, effectiveExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitLatencyMs);
 
         edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(), entrySlip, exitSlip);
         RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
@@ -579,7 +589,12 @@ public class ShadowExecutionEngine {
         payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
         MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
+        boolean marketOpen = marketSessionService.isMarketOpen();
+        String priceSource = marketOpen ? "LIVE" : "MARKET_CLOSED";
         payload.put("transport", marketDataSnapshot.transport() != null ? marketDataSnapshot.transport().name() : null);
+        payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
+        payload.put("priceSource", priceSource);
+        payload.put("lastPrice", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().price() : null);
         payload.put("sourceAgeMs", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().sourceAgeMs() : null);
         payload.put("feedBlocked", marketDataSnapshot.feedBlocked());
         payload.put("feedBlockReason", marketDataSnapshot.blockReason());
@@ -619,6 +634,7 @@ public class ShadowExecutionEngine {
         tradeData.put("runnerCaptured", trade.runnerActive());
         tradeData.put("realizedR", realizedR);
         tradeData.put("exitReason", exit.reason());
+        tradeData.put("exitType", exit.exitType());
         tradeData.put("exitTime", LocalDateTime.now().toString());
 
         broadcastExecutor.execute(() -> webSocketService.sendTradeExecution(tradeData));

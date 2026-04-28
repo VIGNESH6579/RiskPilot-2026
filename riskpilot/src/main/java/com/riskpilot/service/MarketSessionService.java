@@ -45,11 +45,45 @@ public class MarketSessionService {
         return ZonedDateTime.ofInstant(timestamp, zoneId());
     }
 
+    public boolean canEnterNewTrade() {
+        return canEnterNewTrade(now());
+    }
+
+    public boolean canEnterNewTrade(Instant timestamp) {
+        LocalTime localTime = toMarketTime(timestamp).toLocalTime();
+        return !localTime.isBefore(entryStart()) && localTime.isBefore(lastEntryCutoff());
+    }
+
+    public boolean shouldForceExit() {
+        return shouldForceExit(now());
+    }
+
+    public boolean shouldForceExit(Instant timestamp) {
+        LocalTime localTime = toMarketTime(timestamp).toLocalTime();
+        return !localTime.isBefore(forceExitTime());
+    }
+
+    public String marketStatus() {
+        return isMarketOpen() ? "OPEN" : "CLOSED";
+    }
+
     private LocalTime marketOpen() {
         return LocalTime.parse(properties.getMarket().getOpen());
     }
 
     private LocalTime marketClose() {
         return LocalTime.parse(properties.getMarket().getClose());
+    }
+
+    private LocalTime entryStart() {
+        return LocalTime.parse(properties.getSession().getEntryStart());
+    }
+
+    private LocalTime lastEntryCutoff() {
+        return LocalTime.parse(properties.getSession().getLastEntryCutoff());
+    }
+
+    private LocalTime forceExitTime() {
+        return LocalTime.parse(properties.getSession().getForceExit());
     }
 }

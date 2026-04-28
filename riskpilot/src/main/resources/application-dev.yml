@@ -32,6 +32,10 @@ riskpilot:
     open: "09:15"
     close: "15:30"
     zone: Asia/Kolkata
+  session:
+    entry-start: "09:20"
+    last-entry-cutoff: "15:00"
+    force-exit: "15:25"
   infra:
     feed:
       startup-fail-fast: false

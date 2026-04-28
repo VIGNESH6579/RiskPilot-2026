@@ -3,6 +3,7 @@ package com.riskpilot.controller;
 import com.riskpilot.model.TradeLog;
 import com.riskpilot.repository.TradeLogRepository;
 import com.riskpilot.service.MarketDataStateService;
+import com.riskpilot.service.MarketSessionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,20 +26,24 @@ public class DataController {
 
     private final MarketDataStateService marketDataStateService;
     private final TradeLogRepository tradeLogRepository;
+    private final MarketSessionService marketSessionService;
 
     @GetMapping("/health")
     public Map<String, Object> health() {
         MarketDataStateService.MarketDataSnapshot snapshot = marketDataStateService.snapshot();
+        boolean marketOpen = marketSessionService.isMarketOpen();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", snapshot.transport() != null ? snapshot.transport().name() : null);
         payload.put("spot", snapshot.lastTick() != null && snapshot.lastTick().price() > 0.0 ? snapshot.lastTick().price() : null);
         payload.put("sourceAgeMs", snapshot.lastTick() != null ? snapshot.lastTick().sourceAgeMs() : null);
         payload.put("lastFreshTickAt", snapshot.lastAcceptedAt());
-        payload.put("healthy", snapshot.connected() && snapshot.subscribed() && snapshot.ready() && !snapshot.feedBlocked() && snapshot.lastTick() != null);
+        payload.put("healthy", marketOpen && snapshot.connected() && snapshot.subscribed() && snapshot.ready() && !snapshot.feedBlocked() && snapshot.lastTick() != null);
         payload.put("feedBlocked", snapshot.feedBlocked());
         payload.put("feedBlockReason", snapshot.blockReason());
         payload.put("ready", snapshot.ready());
         payload.put("parseFailureCount", snapshot.parseFailureCount());
+        payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
+        payload.put("priceSource", marketOpen ? "LIVE" : "MARKET_CLOSED");
         payload.put("timestamp", Instant.now().toString());
         return payload;
     }
@@ -48,7 +53,7 @@ public class DataController {
         int capped = Math.max(1, Math.min(limit, 200));
 
         try {
-            List<TradeLog> logs = tradeLogRepository.findTop200ByOrderBySignalTimeDesc();
+            List<TradeLog> logs = tradeLogRepository.findTop200ByGateDecisionOrderBySignalTimeDesc("ALLOW");
             return logs.stream()
                 .limit(capped)
                 .map(this::toTradeMap)
@@ -62,11 +67,14 @@ public class DataController {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("signalTime", log.getSignalTime());
         row.put("executionTime", log.getExecutionTime());
+        row.put("direction", log.getDirection());
         row.put("latencySec", log.getLatencySec());
+        row.put("latencyMs", log.getEntryLatencyMs());
         row.put("entryLatencyMs", log.getEntryLatencyMs());
         row.put("exitLatencyMs", log.getExitLatencyMs());
         row.put("expectedEntry", log.getExpectedEntry());
         row.put("actualEntry", log.getActualEntry());
+        row.put("slippage", log.getEntrySlippage());
         row.put("entrySlippage", log.getEntrySlippage());
         row.put("expectedExit", log.getExpectedExit());
         row.put("actualExit", log.getActualExit());
@@ -82,6 +90,7 @@ public class DataController {
         row.put("timePhase", log.getTimePhase());
         row.put("feedStable", log.getFeedStable());
         row.put("exitReason", log.getExitReason());
+        row.put("exitType", log.getExitType());
         row.put("exitTime", log.getExitTime());
         return row;
     }

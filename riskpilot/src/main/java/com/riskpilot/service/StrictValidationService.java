@@ -37,8 +37,8 @@ public class StrictValidationService {
     }
 
     public void validateSystem() {
-        if (!properties.isLiveMode() && !properties.isPaperMode()) {
-            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE or PAPER");
+        if (!properties.isLiveMode() && !properties.isPaperMode() && !properties.isShadowMode()) {
+            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE, SHADOW or PAPER");
         }
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
@@ -52,13 +52,14 @@ public class StrictValidationService {
         if (!properties.getInfra().getFeed().isRealTimeOnly()) {
             throw new IllegalStateException("REAL_TIME_REQUIRED: System must use real-time data only");
         }
-        if (properties.isLiveMode()
+        if (properties.isRealFeedMode()
             && properties.getInfra().getFeed().getTransport() != MarketDataTransport.WEBSOCKET) {
-            throw new IllegalStateException("WEBSOCKET_REQUIRED: LIVE mode requires Angel websocket streaming");
+            throw new IllegalStateException("WEBSOCKET_REQUIRED: LIVE and SHADOW modes require Angel websocket streaming");
         }
         log.info(
-            "Runtime mode={} marketOpen={} enforceStrictTiming={}",
+            "Runtime MODE={}, DATA_SOURCE={}, marketOpen={}, enforceStrictTiming={}",
             properties.getMode(),
+            properties.dataSourceLabel(),
             marketSessionService.isMarketOpen(),
             properties.isEnforceStrictTiming()
         );
@@ -89,7 +90,7 @@ public class StrictValidationService {
         if (dailyLossR <= -properties.getRisk().getMaxDailyLossR()) {
             return false;
         }
-        return !isInLatePhase(marketSessionService.nowIst().toLocalTime());
+        return true;
     }
 
     public void recordTradeExecution(double pnlR) {
@@ -270,12 +271,7 @@ public class StrictValidationService {
     }
 
     public void validateTimePhase(LocalTime currentTime) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
-        if (isInLatePhase(currentTime) && !properties.getTimePhase().getLate().getAllowNewTrades()) {
-            throw new TradingException("STRICT_MODE_VIOLATION: new trades are blocked in late phase");
-        }
+        // Entry window gating lives in RiskGateEngine to keep a single time-based decision path.
     }
 
     public TradingMetrics getDailyMetrics() {
@@ -305,11 +301,6 @@ public class StrictValidationService {
             dailyLossR = 0.0;
             lastTradeDate = today;
         }
-    }
-
-    private boolean isInLatePhase(LocalTime time) {
-        return !time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getStart()))
-            && time.isBefore(LocalTime.parse(properties.getTimePhase().getLate().getEnd()));
     }
 
     private boolean isAllowedRegime(String requiredRegime, String currentRegime) {

@@ -22,7 +22,7 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
 
 riskpilot:
-  mode: LIVE
+  mode: SHADOW
   strict-mode: true
   enforce-strict-timing: true
   market:
@@ -33,6 +33,9 @@ riskpilot:
     timezone: Asia/Kolkata
     start: "09:15"
     end: "15:30"
+    entry-start: "09:20"
+    last-entry-cutoff: "15:00"
+    force-exit: "15:25"
     opening-range-end: "09:45"
   filters:
     regime-required: TREND_ONLY

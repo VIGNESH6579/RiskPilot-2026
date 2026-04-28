@@ -35,8 +35,9 @@ public class RiskPilotApplication {
         strictValidationService.validateSystem();
         adaptiveRegimeEngine.initialize();
         log.info(
-            "RiskPilot runtime ready mode={} marketOpen={} enforceStrictTiming={}",
+            "RiskPilot runtime ready MODE={}, DATA_SOURCE={}, marketOpen={}, enforceStrictTiming={}",
             riskPilotProperties.getMode(),
+            riskPilotProperties.dataSourceLabel(),
             isMarketOpen(),
             riskPilotProperties.isEnforceStrictTiming()
         );

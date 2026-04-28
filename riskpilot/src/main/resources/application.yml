@@ -32,7 +32,7 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
 
 riskpilot:
-  mode: ${RISKPILOT_MODE:LIVE}
+  mode: ${RISKPILOT_MODE:SHADOW}
   strict-mode: true
   enforce-strict-timing: ${RISKPILOT_ENFORCE_STRICT_TIMING:true}
   market:
@@ -43,6 +43,9 @@ riskpilot:
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
     start: ${SESSION_START:09:15}
     end: ${SESSION_END:15:30}
+    entry-start: ${SESSION_ENTRY_START:09:20}
+    last-entry-cutoff: ${SESSION_LAST_ENTRY_CUTOFF:15:00}
+    force-exit: ${SESSION_FORCE_EXIT:15:25}
     opening-range-end: ${OPENING_RANGE_END:09:45}
   filters:
     regime-required: TREND_ONLY
