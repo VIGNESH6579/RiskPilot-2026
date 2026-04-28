@@ -1,11 +1,15 @@
 package com.riskpilot.controller;
 
 import com.riskpilot.service.CandleAggregator;
-import com.riskpilot.service.ShadowExecutionEngine;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
+import com.riskpilot.service.MarketSessionService;
+import com.riskpilot.service.MarketDataStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -17,43 +21,40 @@ public class EngineController {
     private static final Logger logger = LoggerFactory.getLogger(EngineController.class);
 
     @Autowired
-    private ShadowExecutionEngine shadowExecutionEngine;
+    private CandleAggregator candleAggregator;
 
     @Autowired
-    private CandleAggregator candleAggregator;
+    private MarketDataStateService marketDataStateService;
+
+    @Autowired
+    private MarketSessionService marketSessionService;
 
     @GetMapping("/health")
     public Map<String, Object> getHealth() {
+        var marketData = marketDataStateService.snapshot();
         Map<String, Object> health = new LinkedHashMap<>();
-        health.put("status", "ONLINE");
+        health.put("status", marketData.feedBlocked() ? "BLOCKED" : "ONLINE");
         health.put("feedStable", candleAggregator.isFeedUnstable() ? "UNSTABLE" : "STABLE");
+        health.put("transport", marketData.transport() != null ? marketData.transport().name() : null);
+        health.put("sourceAgeMs", marketData.lastTick() != null ? marketData.lastTick().sourceAgeMs() : null);
+        health.put("halted", marketData.halted());
+        health.put("consecutiveRejectedTicks", marketData.consecutiveRejectedTicks());
+        health.put("marketOpen", marketSessionService.isMarketOpen());
         health.put("timestamp", LocalDateTime.now().toString());
         return health;
     }
 
-    @PostMapping("/test-tick")
-    public Map<String, Object> sendTestTick(@RequestParam double price) {
-        try {
-            logger.info("📍 TEST TICK: {}", price);
-            candleAggregator.processTick(LocalDateTime.now(), price, 1000);
-            shadowExecutionEngine.evaluateTick(price);
-            
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("status", "SUCCESS");
-            response.put("price", price);
-            response.put("timestamp", LocalDateTime.now().toString());
-            return response;
-        } catch (Exception e) {
-            logger.error("❌ Test tick failed", e);
-            return errorResponse("Failed: " + e.getMessage());
-        }
-    }
-
     @GetMapping("/state")
     public Map<String, Object> getEngineState() {
+        var marketData = marketDataStateService.snapshot();
         Map<String, Object> state = new LinkedHashMap<>();
         state.put("sessionActive", true);
         state.put("feedHealthy", !candleAggregator.isFeedUnstable());
+        state.put("transport", marketData.transport() != null ? marketData.transport().name() : null);
+        state.put("sourceAgeMs", marketData.lastTick() != null ? marketData.lastTick().sourceAgeMs() : null);
+        state.put("halted", marketData.halted());
+        state.put("consecutiveRejectedTicks", marketData.consecutiveRejectedTicks());
+        state.put("marketOpen", marketSessionService.isMarketOpen());
         state.put("timestamp", LocalDateTime.now().toString());
         return state;
     }
@@ -69,20 +70,17 @@ public class EngineController {
     @PostMapping("/reset")
     public Map<String, Object> resetSession() {
         try {
-            logger.info("🔄 Resetting session...");
+            logger.info("Resetting session");
             candleAggregator.clearHistory();
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "RESET_COMPLETE");
             return response;
         } catch (Exception e) {
-            return errorResponse("Reset failed");
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "ERROR");
+            response.put("error", "Reset failed");
+            return response;
         }
     }
 
-    private Map<String, Object> errorResponse(String error) {
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("status", "ERROR");
-        response.put("error", error);
-        return response;
-    }
 }

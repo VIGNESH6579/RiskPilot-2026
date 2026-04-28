@@ -13,6 +13,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import java.time.LocalTime;
+import java.time.ZoneId;
+
 @Slf4j
 @SpringBootApplication
 @EnableConfigurationProperties(RiskPilotProperties.class)
@@ -23,18 +26,23 @@ public class RiskPilotApplication {
     private final StrictValidationService strictValidationService;
     private final KillSwitchEngine killSwitchEngine;
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
+    private final RiskPilotProperties riskPilotProperties;
 
     public static void main(String[] args) {
         normalizeDatasourceEnvironment();
         SpringApplication.run(RiskPilotApplication.class, args);
-        log.info("RiskPilot shadow execution engine live");
     }
 
     @PostConstruct
     public void run() {
         strictValidationService.validateSystem();
         adaptiveRegimeEngine.initialize();
-        log.info("RiskPilot system ready in shadow mode");
+        log.info(
+            "RiskPilot runtime ready mode={} marketOpen={} enforceStrictTiming={}",
+            riskPilotProperties.getMode(),
+            isMarketOpen(),
+            riskPilotProperties.isEnforceStrictTiming()
+        );
     }
 
     @Scheduled(fixedDelay = 30000)
@@ -87,5 +95,10 @@ public class RiskPilotApplication {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private boolean isMarketOpen() {
+        LocalTime now = LocalTime.now(ZoneId.of("Asia/Kolkata"));
+        return !now.isBefore(LocalTime.of(9, 15)) && !now.isAfter(LocalTime.of(15, 30));
     }
 }

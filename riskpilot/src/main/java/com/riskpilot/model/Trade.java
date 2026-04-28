@@ -29,12 +29,33 @@ public class Trade {
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal entryPrice;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal expectedEntryPrice;
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal stopLoss;
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal targetPrice;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal expectedExitPrice;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal actualExitPrice;
+
+    @Column
+    private Long entryLatencyMs;
+
+    @Column
+    private Long exitLatencyMs;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal entrySlippage;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal exitSlippage;
     
     @Column(nullable = false, precision = 5, scale = 2)
     private BigDecimal positionSize;

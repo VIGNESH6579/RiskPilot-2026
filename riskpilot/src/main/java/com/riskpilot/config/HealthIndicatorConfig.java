@@ -1,7 +1,7 @@
 package com.riskpilot.config;
 
-import com.riskpilot.service.AngelOneMarketDataService;
 import com.riskpilot.service.HeartbeatMonitor;
+import com.riskpilot.service.MarketDataStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.health.contributor.Health;
@@ -16,12 +16,12 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class HealthIndicatorConfig {
 
-    private final AngelOneMarketDataService marketDataService;
+    private final MarketDataStateService marketDataStateService;
     private final HeartbeatMonitor heartbeatMonitor;
 
     @Bean
     public HealthIndicator marketDataHealth() {
-        return new MarketDataHealthIndicator(marketDataService);
+        return new MarketDataHealthIndicator(marketDataStateService);
     }
 
     @Bean
@@ -30,24 +30,29 @@ public class HealthIndicatorConfig {
     }
 
     public static class MarketDataHealthIndicator implements HealthIndicator {
-        private final AngelOneMarketDataService marketDataService;
+        private final MarketDataStateService marketDataStateService;
 
-        public MarketDataHealthIndicator(AngelOneMarketDataService marketDataService) {
-            this.marketDataService = marketDataService;
+        public MarketDataHealthIndicator(MarketDataStateService marketDataStateService) {
+            this.marketDataStateService = marketDataStateService;
         }
 
         @Override
         public Health health() {
             try {
-                boolean isConnected = marketDataService.getNiftyLtp().isPresent();
-                if (isConnected) {
+                var snapshot = marketDataStateService.snapshot();
+                boolean isConnected = snapshot.connected() && snapshot.subscribed() && !snapshot.feedBlocked();
+                if (isConnected && snapshot.lastTick() != null) {
                     return Health.up()
                             .withDetail("status", "Connected")
+                            .withDetail("transport", snapshot.transport())
+                            .withDetail("lastTickAt", snapshot.lastAcceptedAt())
+                            .withDetail("sourceAgeMs", snapshot.lastTick().sourceAgeMs())
                             .withDetail("lastCheck", LocalDateTime.now())
                             .build();
                 } else {
                     return Health.down()
                             .withDetail("status", "Disconnected")
+                            .withDetail("reason", snapshot.blockReason())
                             .withDetail("lastCheck", LocalDateTime.now())
                             .build();
                 }
@@ -73,17 +78,18 @@ public class HealthIndicatorConfig {
             try {
                 boolean isHealthy = heartbeatMonitor.isHealthy();
                 String lastHeartbeat = heartbeatMonitor.getLastHeartbeatTime();
+                String heartbeatDetail = lastHeartbeat == null ? "NEVER" : lastHeartbeat;
                 
                 if (isHealthy) {
                     return Health.up()
                             .withDetail("status", "Healthy")
-                            .withDetail("lastHeartbeat", lastHeartbeat)
+                            .withDetail("lastHeartbeat", heartbeatDetail)
                             .withDetail("lastCheck", LocalDateTime.now())
                             .build();
                 } else {
                     return Health.down()
                             .withDetail("status", "Unhealthy")
-                            .withDetail("lastHeartbeat", lastHeartbeat)
+                            .withDetail("lastHeartbeat", heartbeatDetail)
                             .withDetail("lastCheck", LocalDateTime.now())
                             .build();
                 }

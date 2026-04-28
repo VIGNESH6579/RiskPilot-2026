@@ -1,14 +1,13 @@
 package com.riskpilot.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,7 +22,7 @@ public class AdaptiveRegimeEngine {
     private static final int MIN_TRADES_FOR_ADAPTATION = 6;
     private static final double ALPHA = 0.3; // Smoothing factor
     
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
     private final AtomicReference<AdaptiveConfig> currentConfig = new AtomicReference<>();
     private final List<TradeResult> tradeWindow = new ArrayList<>();
     private volatile boolean freezeAdaptation = false;
@@ -101,8 +100,8 @@ public class AdaptiveRegimeEngine {
      * Initialize configuration from file or defaults
      */
     public void initialize() {
+        File configFile = new File(CONFIG_FILE);
         try {
-            File configFile = new File(CONFIG_FILE);
             if (configFile.exists()) {
                 AdaptiveConfig loaded = objectMapper.readValue(configFile, AdaptiveConfig.class);
                 currentConfig.set(loaded);
@@ -114,8 +113,10 @@ public class AdaptiveRegimeEngine {
                 log.info("📊 Created default adaptive config: {}", defaults);
             }
         } catch (Exception e) {
-            log.error("Failed to initialize adaptive config, using defaults", e);
-            currentConfig.set(new AdaptiveConfig());
+            log.error("Failed to initialize adaptive config, rebuilding defaults", e);
+            AdaptiveConfig defaults = new AdaptiveConfig();
+            currentConfig.set(defaults);
+            persistConfig(defaults);
         }
     }
 

@@ -13,7 +13,6 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.time.Duration;
 import java.time.LocalDateTime;
 
 @Service
@@ -22,7 +21,7 @@ public class LiveMetricsLogger {
 
     private static final Logger log = LoggerFactory.getLogger(LiveMetricsLogger.class);
     private static final String CSV_HEADER =
-        "signalTime,executionTime,latencySec,expectedEntry,actualEntry,entrySlippage," +
+        "signalTime,executionTime,latencySec,entryLatencyMs,exitLatencyMs,expectedEntry,actualEntry,entrySlippage," +
         "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR," +
         "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitTime";
 
@@ -37,10 +36,12 @@ public class LiveMetricsLogger {
     ) {
         ensureHeader();
         appendRow(String.format(
-            "%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
+            "%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
             signalTime,
             "",
             0,
+            "",
+            "",
             "",
             "",
             "",
@@ -63,6 +64,8 @@ public class LiveMetricsLogger {
         persistLog(TradeLog.builder()
             .signalTime(signalTime)
             .latencySec(0.0)
+            .entryLatencyMs(0L)
+            .exitLatencyMs(0L)
             .gateDecision("REJECT")
             .rejectReason(rejectReason)
             .regime(regime != null ? regime.name() : null)
@@ -74,6 +77,8 @@ public class LiveMetricsLogger {
     public synchronized void logShadowExecution(
         LocalDateTime signalTime,
         LocalDateTime executionTime,
+        long entryLatencyMs,
+        long exitLatencyMs,
         double expectedEntryPrice,
         double actualEntryPrice,
         double expectedExitPrice,
@@ -92,15 +97,17 @@ public class LiveMetricsLogger {
         LocalDateTime exitTime
     ) {
         ensureHeader();
-        long latencySec = Duration.between(signalTime, executionTime).getSeconds();
+        double latencySec = entryLatencyMs / 1000.0;
         double entrySlippage = actualEntryPrice - expectedEntryPrice;
         double exitSlippage = actualExitPrice - expectedExitPrice;
 
         appendRow(String.format(
-            "%s,%s,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s",
+            "%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s",
             signalTime,
             executionTime,
             latencySec,
+            entryLatencyMs,
+            exitLatencyMs,
             expectedEntryPrice,
             actualEntryPrice,
             entrySlippage,
@@ -124,7 +131,9 @@ public class LiveMetricsLogger {
         persistLog(TradeLog.builder()
             .signalTime(signalTime)
             .executionTime(executionTime)
-            .latencySec((double) latencySec)
+            .latencySec(latencySec)
+            .entryLatencyMs(entryLatencyMs)
+            .exitLatencyMs(exitLatencyMs)
             .expectedEntry(expectedEntryPrice)
             .actualEntry(actualEntryPrice)
             .entrySlippage(entrySlippage)

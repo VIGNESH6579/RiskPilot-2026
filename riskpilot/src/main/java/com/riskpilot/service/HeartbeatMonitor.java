@@ -1,5 +1,7 @@
 package com.riskpilot.service;
 
+import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.model.MarketTick;
 import com.riskpilot.model.TradingSessionSnapshot;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -11,34 +13,55 @@ public class HeartbeatMonitor {
 
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
+    private final MarketDataStateService marketDataStateService;
+    private final RiskPilotProperties properties;
     
-    private LocalDateTime lastTickReceivedTime = LocalDateTime.now();
+    private LocalDateTime lastFreshTickReceivedTime;
 
-    public HeartbeatMonitor(SessionStateManager stateManager, CandleAggregator candleAggregator) {
+    public HeartbeatMonitor(
+        SessionStateManager stateManager,
+        CandleAggregator candleAggregator,
+        MarketDataStateService marketDataStateService,
+        RiskPilotProperties properties
+    ) {
         this.stateManager = stateManager;
         this.candleAggregator = candleAggregator;
+        this.marketDataStateService = marketDataStateService;
+        this.properties = properties;
     }
 
-    public synchronized void registerTick() {
-        lastTickReceivedTime = LocalDateTime.now();
+    public synchronized void registerFreshTick(MarketTick tick) {
+        lastFreshTickReceivedTime = tick.receivedAt();
     }
 
     public synchronized boolean isHealthy() {
-        long secondsSinceLastTick = java.time.Duration.between(lastTickReceivedTime, LocalDateTime.now()).getSeconds();
-        return secondsSinceLastTick < 45;
+        if (lastFreshTickReceivedTime == null) {
+            return false;
+        }
+        long silenceMs = java.time.Duration.between(lastFreshTickReceivedTime, LocalDateTime.now()).toMillis();
+        return silenceMs < properties.getInfra().getHeartbeat().getMaxSilenceMs();
     }
 
     public synchronized String getLastHeartbeatTime() {
-        return lastTickReceivedTime.toString();
+        return lastFreshTickReceivedTime == null ? null : lastFreshTickReceivedTime.toString();
+    }
+
+    public synchronized void reset() {
+        lastFreshTickReceivedTime = null;
     }
 
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
         LocalDateTime now = LocalDateTime.now();
-        long secondsSinceLastTick = java.time.Duration.between(lastTickReceivedTime, now).getSeconds();
+        long silenceMs = lastFreshTickReceivedTime == null
+            ? Long.MAX_VALUE
+            : java.time.Duration.between(lastFreshTickReceivedTime, now).toMillis();
+        long unstableMs = properties.getInfra().getFeed().getInstabilityTimeoutSec() * 1000L;
+        long heartbeatMs = properties.getInfra().getHeartbeat().getMaxSilenceMs();
 
-        if (secondsSinceLastTick >= 15 && secondsSinceLastTick < 45) {
+        if (silenceMs >= unstableMs && silenceMs < heartbeatMs) {
             candleAggregator.markUnstable();
+            marketDataStateService.markFeedFailure("FEED_UNSTABLE", marketDataStateService.snapshot().transport());
             stateManager.update(current -> new TradingSessionSnapshot(
                 current.sessionActive(),
                 current.regime(),
@@ -54,9 +77,9 @@ public class HeartbeatMonitor {
                 current.activeTradeReference(),
                 "FEED_UNSTABLE"
             ));
-        } else if (secondsSinceLastTick >= 45) {
+        } else if (silenceMs >= heartbeatMs) {
             candleAggregator.markUnstable();
-            TradingSessionSnapshot state = stateManager.getSnapshot();
+            marketDataStateService.markHalted("HEARTBEAT_TIMEOUT", marketDataStateService.snapshot().transport());
             stateManager.update(current -> new TradingSessionSnapshot(
                 current.sessionActive(),
                 current.regime(),

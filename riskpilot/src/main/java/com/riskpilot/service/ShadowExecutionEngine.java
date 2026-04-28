@@ -1,6 +1,5 @@
 package com.riskpilot.service;
 
-import com.riskpilot.config.PlainWebSocketConfig;
 import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
@@ -13,6 +12,7 @@ import com.riskpilot.event.CandleClosedEvent;
 import com.riskpilot.model.ActiveTradeExecution;
 import com.riskpilot.model.Candle;
 import com.riskpilot.model.GateDecision;
+import com.riskpilot.model.MarketTick;
 import com.riskpilot.model.Regime;
 import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
@@ -46,9 +46,9 @@ public class ShadowExecutionEngine {
     private final RiskGateEngine riskGateEngine;
     private final KillSwitchEngine killSwitchEngine;
     private final SessionStateManager stateManager;
+    private final MarketDataStateService marketDataStateService;
     private final CandleAggregator candleAggregator;
     private final TrapEngine trapEngine;
-    private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
     private final VolatilityNormalizer volatilityNormalizer;
@@ -59,34 +59,46 @@ public class ShadowExecutionEngine {
     private final StrictValidationService strictValidationService;
     private final NtfyNotificationService ntfyNotificationService;
     private final TradeRepository tradeRepository;
+    private final MarketSessionService marketSessionService;
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
+    private LocalDateTime activeExecutionTime;
     private double activeExpectedEntry;
+    private long activeEntryLatencyMs;
     private Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
 
-    public synchronized void evaluateTick(double currentPrice) {
+    public synchronized void evaluateTick(MarketTick tick) {
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.warn("Kill switch active, ignoring tick");
             return;
         }
+
+        log.debug(
+            "ExecutionEngine trigger seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+            tick.sequenceId(),
+            tick.price(),
+            tick.exchangeTimestamp(),
+            tick.receivedAt(),
+            tick.sourceAgeMs()
+        );
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (!state.tradeActive() || state.activeTradeReference() == null) {
             return;
         }
 
-        ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), currentPrice);
-        trade = ActiveTradeExecution.fromTickTP1(trade, currentPrice);
+        ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), tick.price());
+        trade = ActiveTradeExecution.fromTickTP1(trade, tick.price());
 
-        TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
+        TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, tick.price());
         if (exit.triggered()) {
-            closeTrade(trade, exit);
+            closeTrade(trade, exit, tick);
             return;
         }
 
-        updateActiveTradeState(trade, state.lastRejectReason(), currentPrice);
+        updateActiveTradeState(trade, state.lastRejectReason(), tick.price());
     }
 
     @EventListener
@@ -95,6 +107,10 @@ public class ShadowExecutionEngine {
     }
 
     public synchronized void evaluateCandle(Candle candle) {
+        if (!marketSessionService.isMarketOpen(candle.timestamp())) {
+            log.info("ShadowExecutionEngine skipping candle evaluation outside market session timestamp={}", candle.timestamp());
+            return;
+        }
         volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
 
         List<Candle> history = candleAggregator.getValidHistory();
@@ -115,7 +131,8 @@ public class ShadowExecutionEngine {
         if (state.tradeActive() && state.activeTradeReference() != null) {
             ActiveTradeExecution trade = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), candle);
             if (riskGateEngine.shouldForceLateSessionExit(state)) {
-                closeTrade(trade, exitAtPrice(trade, candle.close, "TIME_CUTOFF_EXIT"));
+                MarketTick exitTick = requireLiveTick("TIME_CUTOFF_EXIT");
+                closeTrade(trade, exitAtPrice(trade, exitTick.price(), "TIME_CUTOFF_EXIT"), exitTick);
                 return;
             }
             updateActiveTradeState(trade, state.lastRejectReason(), candle.close);
@@ -142,7 +159,9 @@ public class ShadowExecutionEngine {
         edgeTracker.reset();
         lastTriggeredCandleTime = "";
         activeSignalTime = null;
+        activeExecutionTime = null;
         activeExpectedEntry = 0.0;
+        activeEntryLatencyMs = 0L;
         activeTradeId = null;
         lastRegimeConfidenceScore = null;
         broadcastCurrentSessionState();
@@ -174,30 +193,41 @@ public class ShadowExecutionEngine {
         double localResistance = priorCandles.stream().mapToDouble(c -> c.high).max().orElse(latest.high);
         double localSupport = priorCandles.stream().mapToDouble(c -> c.low).min().orElse(latest.low);
 
-        Signal signal = trapEngine.detectTrap(history, localSupport, localResistance, vixService.getIndiaVix());
+        Signal signal = trapEngine.detectTrap(history, localSupport, localResistance);
         if (signal == null) {
             return;
         }
 
+        MarketTick entryTick;
+        try {
+            entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
+            strictValidationService.validateFreshTick(entryTick);
+        } catch (Exception e) {
+            logReject(state, e.getMessage());
+            return;
+        }
+
+        double entrySlippage = Math.abs(entryTick.price() - signal.getEntry());
+        long entryLatencyMs = entryTick.sourceAgeMs();
+
         try {
             strictValidationService.validateRegime(state.regime().name());
             strictValidationService.validateTimePhase(latest.timestamp().toLocalTime());
-            strictValidationService.validateLatency(0L);
-            strictValidationService.validateSlippage("ENTRY", 0.0);
+            strictValidationService.validateEntryExecution(signal.getEntry(), entryTick.price(), entryLatencyMs);
         } catch (Exception e) {
             logReject(state, e.getMessage());
             return;
         }
 
         double orRange = currentOrRange(state);
-        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, 0.0, 0L);
-        riskGateEngine.logDecision(state, orRange, 0L, 0.0, decision);
+        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, entrySlippage, entryLatencyMs);
+        riskGateEngine.logDecision(state, orRange, entryLatencyMs, entrySlippage, decision);
         if (!decision.allowed()) {
             logReject(state, decision.reason());
             return;
         }
 
-        openTrade(signal, state);
+        openTrade(signal, state, latest.timestamp(), entryTick);
         lastTriggeredCandleTime = candleId;
     }
 
@@ -274,21 +304,22 @@ public class ShadowExecutionEngine {
         return TimePhase.LATE;
     }
 
-    private void openTrade(Signal signal, TradingSessionSnapshot state) {
-        LocalDateTime now = LocalDateTime.now();
+    private void openTrade(Signal signal, TradingSessionSnapshot state, LocalDateTime signalTime, MarketTick entryTick) {
+        LocalDateTime executionTime = entryTick.receivedAt();
+        double actualEntryPrice = entryTick.price();
         double tp1Distance = Math.max(1.0, volatilityNormalizer.getCurrentTP1());
         double tp1Level = "SHORT".equalsIgnoreCase(signal.getDirection())
-            ? signal.getEntry() - tp1Distance
-            : signal.getEntry() + tp1Distance;
+            ? actualEntryPrice - tp1Distance
+            : actualEntryPrice + tp1Distance;
         double positionScale = switch (state.timePhase()) {
             case MID -> config.getTimePhase().getMid().getPositionScale();
             case LATE -> 0.0;
             default -> config.getTimePhase().getEarly().getPositionScale();
         };
-        double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - signal.getEntry()));
+        double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
-            signal.getEntry(),
+            actualEntryPrice,
             signal.getStopLoss(),
             tp1Level,
             initialRisk,
@@ -307,9 +338,11 @@ public class ShadowExecutionEngine {
             signal.getStopLoss()
         );
 
-        activeSignalTime = now;
+        activeSignalTime = signalTime;
+        activeExecutionTime = executionTime;
         activeExpectedEntry = signal.getEntry();
-        persistOpenedTrade(signal, trade, now);
+        activeEntryLatencyMs = entryTick.sourceAgeMs();
+        persistOpenedTrade(signal, trade, executionTime, entryTick);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -331,7 +364,7 @@ public class ShadowExecutionEngine {
         broadcastCurrentSessionState();
     }
 
-    private void closeTrade(ActiveTradeExecution trade, TradeExit exit) {
+    private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         double riskPoints = Math.max(1.0, trade.initialRisk());
         double realizedR = exit.pnlPoints() / riskPoints;
@@ -341,15 +374,22 @@ public class ShadowExecutionEngine {
         double exitSlip = Math.abs(exit.exitPrice() - expectedExit);
 
         try {
-            strictValidationService.validateSlippage(trade.tp1Hit() ? "RUNNER" : "PANIC_EXIT", exitSlip);
+            strictValidationService.validateExitExecution(
+                trade.tp1Hit() ? "RUNNER" : "PANIC_EXIT",
+                expectedExit,
+                exit.exitPrice(),
+                exitTick.sourceAgeMs()
+            );
         } catch (Exception e) {
             log.warn("Exit slippage validation triggered: {}", e.getMessage());
         }
 
-        if (activeSignalTime != null) {
+        if (activeSignalTime != null && activeExecutionTime != null) {
             liveMetricsLogger.logShadowExecution(
                 activeSignalTime,
-                LocalDateTime.now(),
+                activeExecutionTime,
+                activeEntryLatencyMs,
+                exitTick.sourceAgeMs(),
                 activeExpectedEntry,
                 trade.entryPrice(),
                 expectedExit,
@@ -368,7 +408,7 @@ public class ShadowExecutionEngine {
                 LocalDateTime.now()
             );
 
-            broadcastTradeData(activeSignalTime, trade, exit, realizedR);
+            broadcastTradeData(activeSignalTime, activeExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitTick.sourceAgeMs());
         }
 
         edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(), entrySlip, exitSlip);
@@ -390,7 +430,7 @@ public class ShadowExecutionEngine {
         );
         strictValidationService.recordTradeExecution(realizedR);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
-        finalizePersistedTrade(trade, exit, finalRealizedPnL);
+        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitTick.sourceAgeMs(), exitSlip);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -409,7 +449,9 @@ public class ShadowExecutionEngine {
         ));
 
         activeSignalTime = null;
+        activeExecutionTime = null;
         activeExpectedEntry = 0.0;
+        activeEntryLatencyMs = 0L;
         activeTradeId = null;
         broadcastCurrentSessionState();
     }
@@ -479,25 +521,40 @@ public class ShadowExecutionEngine {
         payload.put("lastRejectReason", state.lastRejectReason());
         payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
+        MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
+        payload.put("transport", marketDataSnapshot.transport() != null ? marketDataSnapshot.transport().name() : null);
+        payload.put("sourceAgeMs", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().sourceAgeMs() : null);
+        payload.put("feedBlocked", marketDataSnapshot.feedBlocked());
+        payload.put("feedBlockReason", marketDataSnapshot.blockReason());
         RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
         payload.put("regimeFilterScore", regimeMetrics != null ? regimeMetrics.getRegimeScore() : null);
         payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
         payload.put("regimeConfidenceReason", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getReason() : null);
         payload.put("reducedMode", lastRegimeConfidenceScore != null && lastRegimeConfidenceScore.isReducedMode());
         webSocketService.sendSessionState(payload);
-        PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastSessionState(payload);
     }
 
-    private void broadcastTradeData(LocalDateTime signalTime, ActiveTradeExecution trade, TradeExit exit, double realizedR) {
+    private void broadcastTradeData(
+        LocalDateTime signalTime,
+        LocalDateTime executionTime,
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double realizedR,
+        long entryLatencyMs,
+        long exitLatencyMs
+    ) {
         Map<String, Object> tradeData = new LinkedHashMap<>();
         tradeData.put("id", signalTime + "_" + trade.entryPrice());
         tradeData.put("signalTime", signalTime.toString());
+        tradeData.put("executionTime", executionTime.toString());
         tradeData.put("direction", trade.tp1Level() < trade.entryPrice() ? "SHORT" : "LONG");
         tradeData.put("expectedEntry", activeExpectedEntry);
         tradeData.put("actualEntry", trade.entryPrice());
         tradeData.put("quantity", trade.quantity());
         tradeData.put("remainingQuantity", trade.remainingQuantity());
-        tradeData.put("latencySec", Duration.between(signalTime, LocalDateTime.now()).toMillis() / 1000.0);
+        tradeData.put("latencySec", entryLatencyMs / 1000.0);
+        tradeData.put("entryLatencyMs", entryLatencyMs);
+        tradeData.put("exitLatencyMs", exitLatencyMs);
         tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
         tradeData.put("mfe", trade.mfe());
         tradeData.put("mae", trade.mae());
@@ -507,7 +564,6 @@ public class ShadowExecutionEngine {
         tradeData.put("exitReason", exit.reason());
         tradeData.put("exitTime", LocalDateTime.now().toString());
 
-        PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastTradeData(tradeData);
         webSocketService.sendTradeExecution(tradeData);
     }
 
@@ -554,15 +610,17 @@ public class ShadowExecutionEngine {
         return !Double.isInfinite(value) && !Double.isNaN(value);
     }
 
-    private void persistOpenedTrade(Signal signal, ActiveTradeExecution trade, LocalDateTime entryTime) {
+    private void persistOpenedTrade(Signal signal, ActiveTradeExecution trade, LocalDateTime entryTime, MarketTick entryTick) {
         try {
             cancelPersistedActiveTrade("STALE_RECOVERY");
             Trade persistedTrade = Trade.builder()
                 .symbol(resolveSignalSymbol(signal))
                 .direction(resolveTradeDirection(trade))
                 .entryPrice(decimal(trade.entryPrice()))
+                .expectedEntryPrice(decimal(signal.getEntry()))
                 .stopLoss(decimal(trade.stopLoss()))
                 .targetPrice(decimal(trade.tp1Level()))
+                .expectedExitPrice(decimal(trade.tp1Level()))
                 .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
                 .remainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())))
                 .realizedPnL(decimal(trade.realizedPnL()))
@@ -573,6 +631,8 @@ public class ShadowExecutionEngine {
                 .runnerActive(trade.runnerActive())
                 .tailHalfLocked(trade.tailHalfLocked())
                 .trailingStopLoss(decimal(trade.trailingSL()))
+                .entryLatencyMs(entryTick.sourceAgeMs())
+                .entrySlippage(decimal(Math.abs(trade.entryPrice() - signal.getEntry())))
                 .status("ACTIVE")
                 .exitReason("OPEN")
                 .entryTime(entryTime)
@@ -594,6 +654,7 @@ public class ShadowExecutionEngine {
             Trade entity = persistedTrade.get();
             entity.setStopLoss(decimal(trade.stopLoss()));
             entity.setTargetPrice(decimal(trade.tp1Level()));
+            entity.setExpectedExitPrice(decimal(trade.tp1Level()));
             entity.setRemainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())));
             entity.setRealizedPnL(decimal(trade.realizedPnL()));
             entity.setUnrealizedPnL(decimal(calculateUnrealizedPnL(trade, currentPrice)));
@@ -612,7 +673,14 @@ public class ShadowExecutionEngine {
         }
     }
 
-    private void finalizePersistedTrade(ActiveTradeExecution trade, TradeExit exit, double finalRealizedPnL) {
+    private void finalizePersistedTrade(
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double finalRealizedPnL,
+        double expectedExit,
+        long exitLatencyMs,
+        double exitSlippage
+    ) {
         try {
             Optional<Trade> persistedTrade = findPersistedActiveTrade();
             if (persistedTrade.isEmpty()) {
@@ -622,6 +690,10 @@ public class ShadowExecutionEngine {
             Trade entity = persistedTrade.get();
             entity.setStopLoss(decimal(trade.stopLoss()));
             entity.setTargetPrice(decimal(trade.tp1Level()));
+            entity.setExpectedExitPrice(decimal(expectedExit));
+            entity.setActualExitPrice(decimal(exit.exitPrice()));
+            entity.setExitLatencyMs(exitLatencyMs);
+            entity.setExitSlippage(decimal(exitSlippage));
             entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setRealizedPnL(decimal(finalRealizedPnL));
             entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
@@ -689,5 +761,10 @@ public class ShadowExecutionEngine {
 
     private BigDecimal decimal(double value) {
         return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private MarketTick requireLiveTick(String reason) {
+        return marketDataStateService.lastAcceptedTick()
+            .orElseThrow(() -> new IllegalStateException(reason));
     }
 }

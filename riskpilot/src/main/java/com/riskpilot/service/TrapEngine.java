@@ -20,7 +20,7 @@ public class TrapEngine {
         this.lotSize = Math.max(1, lotSize);
     }
 
-    public Signal detectTrap(List<Candle> history, double localSupport, double localResistance, double vix) {
+    public Signal detectTrap(List<Candle> history, double localSupport, double localResistance) {
         if (history.size() < 7) {
             return null;
         }
@@ -39,11 +39,6 @@ public class TrapEngine {
             return null;
         }
 
-        int vixConfidence = vixConfidence(vix);
-        if (vixConfidence == 0) {
-            return null;
-        }
-
         if (t1.high > localResistance) {
             double breakoutDepth = t1.high - localResistance;
             if (breakoutDepth >= 6.0) {
@@ -53,7 +48,7 @@ public class TrapEngine {
                     double stopLoss = t1.high + 10.0;
                     double distanceToStop = Math.abs(stopLoss - entry);
                     if (distanceToStop <= 120.0) {
-                        return buildSignal("SHORT", entry, stopLoss, vixConfidence, distanceToStop);
+                        return buildSignal("SHORT", entry, stopLoss, distanceToStop);
                     }
                 }
             }
@@ -68,7 +63,7 @@ public class TrapEngine {
                     double stopLoss = t1.low - 10.0;
                     double distanceToStop = Math.abs(entry - stopLoss);
                     if (distanceToStop <= 120.0) {
-                        return buildSignal("LONG", entry, stopLoss, vixConfidence, distanceToStop);
+                        return buildSignal("LONG", entry, stopLoss, distanceToStop);
                     }
                 }
             }
@@ -77,14 +72,14 @@ public class TrapEngine {
         return null;
     }
 
-    private Signal buildSignal(String direction, double entry, double stopLoss, int vixConfidence, double distanceToStop) {
+    private Signal buildSignal(String direction, double entry, double stopLoss, double distanceToStop) {
         Signal signal = new Signal();
         signal.setSymbol("NIFTY");
         signal.setDirection(direction);
         signal.setEntry(entry);
         signal.setStopLoss(stopLoss);
         signal.setTarget(0.0);
-        signal.setConfidence(vixConfidence);
+        signal.setConfidence(100);
         signal.setQuantity(calculateQuantity(distanceToStop));
         return signal;
     }
@@ -97,21 +92,5 @@ public class TrapEngine {
         int rawUnits = Math.max(lotSize, (int) Math.floor(riskCapital / distanceToStop));
         int lots = (int) Math.ceil(rawUnits / (double) lotSize);
         return Math.max(lotSize, lots * lotSize);
-    }
-
-    private int vixConfidence(double vix) {
-        if (Double.isNaN(vix)) {
-            return 50;
-        }
-        if (vix < 11.0 || vix > 28.0) {
-            return 0;
-        }
-        if (vix < 13.0 || vix > 22.0) {
-            return 30;
-        }
-        if (vix < 15.0 || vix > 20.0) {
-            return 70;
-        }
-        return 100;
     }
 }

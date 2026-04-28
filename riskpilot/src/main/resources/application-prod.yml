@@ -22,8 +22,9 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
 
 riskpilot:
-  mode: SHADOW
+  mode: LIVE
   strict-mode: true
+  enforce-strict-timing: true
   session:
     timezone: Asia/Kolkata
     start: "09:15"
@@ -89,15 +90,16 @@ riskpilot:
       instability-timeout-sec: 15
       real-time-only: true
       data-source: angelone-live
+      transport: WEBSOCKET
+      max-source-age-ms: 1500
+      max-clock-skew-ms: 2000
+      startup-valid-tick-timeout-ms: 10000
+      startup-fail-fast: true
     heartbeat:
       enabled: true
       panic-exit-on-failure: true
       timeout-sec: 30
-    market-data:
-      cache-ttl-seconds: 5
-      refresh-interval-seconds: 2
-      fallback-disabled: true
-      mock-disabled: true
+      max-silence-ms: 3000
   logging:
     csv:
       enabled: true

@@ -1,7 +1,10 @@
 package com.riskpilot.service;
 
 import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.exception.MarketDataException;
 import com.riskpilot.exception.TradingException;
+import com.riskpilot.model.MarketDataTransport;
+import com.riskpilot.model.MarketTick;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class StrictValidationService {
 
     private final RiskPilotProperties properties;
+    private final MarketSessionService marketSessionService;
     private final AtomicInteger dailyTradeCount = new AtomicInteger(0);
     private final AtomicInteger consecutiveLosses = new AtomicInteger(0);
 
@@ -33,6 +37,9 @@ public class StrictValidationService {
     }
 
     public void validateSystem() {
+        if (!properties.isLiveMode()) {
+            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE");
+        }
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
         }
@@ -45,12 +52,16 @@ public class StrictValidationService {
         if (!properties.getInfra().getFeed().isRealTimeOnly()) {
             throw new IllegalStateException("REAL_TIME_REQUIRED: System must use real-time data only");
         }
-        if (!properties.getInfra().getMarketData().isFallbackDisabled()) {
-            throw new IllegalStateException("FALLBACKS_DISABLED: Fallback data sources must be disabled");
+        if (properties.isLiveMode()
+            && properties.getInfra().getFeed().getTransport() != MarketDataTransport.WEBSOCKET) {
+            throw new IllegalStateException("WEBSOCKET_REQUIRED: LIVE mode requires Angel websocket streaming");
         }
-        if (!properties.getInfra().getMarketData().isMockDisabled()) {
-            throw new IllegalStateException("MOCKS_DISABLED: Mock data sources must be disabled");
-        }
+        log.info(
+            "Runtime mode={} marketOpen={} enforceStrictTiming={}",
+            properties.getMode(),
+            marketSessionService.isMarketOpen(),
+            properties.isEnforceStrictTiming()
+        );
     }
 
     public void validateTradingParameters() {
@@ -78,7 +89,7 @@ public class StrictValidationService {
         if (dailyLossR <= -properties.getRisk().getMaxDailyLossR()) {
             return false;
         }
-        return !isInLatePhase(LocalTime.now());
+        return !isInLatePhase(marketSessionService.nowIst().toLocalTime());
     }
 
     public void recordTradeExecution(double pnlR) {
@@ -136,6 +147,100 @@ public class StrictValidationService {
                 actualLatencyMs, latency.getHardBlockMs()
             ));
         }
+    }
+
+    public MarketTick validateFreshTick(MarketTick tick) {
+        if (tick == null) {
+            throw new MarketDataException("LIVE_TICK_MISSING");
+        }
+        if (tick.exchangeTimestamp() == null) {
+            throw new MarketDataException("LIVE_TICK_TIMESTAMP_MISSING");
+        }
+        if (tick.price() <= 0.0) {
+            throw new MarketDataException("LIVE_TICK_PRICE_INVALID");
+        }
+
+        LocalDateTime now = marketSessionService.nowIst();
+        boolean marketOpen = marketSessionService.isMarketOpen(now);
+        long ageMs = Math.max(0L, java.time.Duration.between(tick.exchangeTimestamp(), now).toMillis());
+        long skewMs = Math.abs(java.time.Duration.between(tick.exchangeTimestamp(), now).toMillis());
+        log.info(
+            "Tick validation seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} marketOpen={}",
+            tick.sequenceId(),
+            tick.price(),
+            tick.rawExchangeTime(),
+            tick.exchangeTimestamp(),
+            now,
+            ageMs,
+            marketOpen
+        );
+
+        if (!marketOpen) {
+            throw new MarketDataException("MARKET_CLOSED_TICK");
+        }
+
+        if (skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
+            log.warn(
+                "LIVE_REJECTED_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} clockSkewMs={} maxClockSkewMs={}",
+                tick.sequenceId(),
+                tick.price(),
+                tick.rawExchangeTime(),
+                tick.exchangeTimestamp(),
+                now,
+                ageMs,
+                skewMs,
+                properties.getInfra().getFeed().getMaxClockSkewMs()
+            );
+            throw new MarketDataException("LIVE_TICK_CLOCK_SKEW");
+        }
+
+        if (properties.isEnforceStrictTiming()
+            && ageMs > properties.getInfra().getFeed().getMaxSourceAgeMs()) {
+            log.warn(
+                "LIVE_REJECTED_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} maxAgeMs={}",
+                tick.sequenceId(),
+                tick.price(),
+                tick.rawExchangeTime(),
+                tick.exchangeTimestamp(),
+                now,
+                ageMs,
+                properties.getInfra().getFeed().getMaxSourceAgeMs()
+            );
+            throw new MarketDataException(String.format(
+                "LIVE_TICK_STALE: age=%dms max=%dms",
+                ageMs,
+                properties.getInfra().getFeed().getMaxSourceAgeMs()
+            ));
+        }
+
+        log.info(
+            "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={}",
+            tick.sequenceId(),
+            tick.price(),
+            tick.rawExchangeTime(),
+            tick.exchangeTimestamp(),
+            now,
+            ageMs
+        );
+        return MarketTick.of(
+            tick.symbol(),
+            tick.price(),
+            tick.exchangeTimestamp(),
+            now,
+            tick.transport(),
+            tick.sequenceId(),
+            tick.rawExchangeTime()
+        );
+    }
+
+    public void validateEntryExecution(double expectedEntryPrice, double actualEntryPrice, long latencyMs) {
+        validateLatency(latencyMs);
+        validateSlippage("ENTRY", Math.abs(actualEntryPrice - expectedEntryPrice));
+    }
+
+    public void validateExitExecution(String phase, double expectedExitPrice, double actualExitPrice, long latencyMs) {
+        validateLatency(latencyMs);
+        validateSlippage(phase, Math.abs(actualExitPrice - expectedExitPrice));
     }
 
     public void validateRegime(String currentRegime) {

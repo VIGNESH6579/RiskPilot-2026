@@ -32,8 +32,9 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
 
 riskpilot:
-  mode: SHADOW
+  mode: ${RISKPILOT_MODE:LIVE}
   strict-mode: true
+  enforce-strict-timing: ${RISKPILOT_ENFORCE_STRICT_TIMING:true}
   session:
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
     start: ${SESSION_START:09:15}
@@ -81,15 +82,16 @@ riskpilot:
       instability-timeout-sec: 15
       real-time-only: true
       data-source: angelone-live
+      transport: WEBSOCKET
+      max-source-age-ms: ${FEED_MAX_SOURCE_AGE_MS:1500}
+      max-clock-skew-ms: ${FEED_MAX_CLOCK_SKEW_MS:2000}
+      startup-valid-tick-timeout-ms: ${FEED_STARTUP_VALID_TICK_TIMEOUT_MS:10000}
+      startup-fail-fast: ${FEED_STARTUP_FAIL_FAST:true}
     heartbeat:
       enabled: true
       panic-exit-on-failure: true
       timeout-sec: 30
-    market-data:
-      cache-ttl-seconds: 5
-      refresh-interval-seconds: 2
-      fallback-disabled: true
-      mock-disabled: true
+      max-silence-ms: 3000
   notification:
     ntfy-enabled: ${NTFY_ENABLED:false}
     ntfy-topic: ${NTFY_TOPIC:riskpilot_shadow_alerts}

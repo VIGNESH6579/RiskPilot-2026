@@ -1,5 +1,8 @@
 package com.riskpilot.service;
 
+import com.riskpilot.exception.MarketDataException;
+import com.riskpilot.model.MarketDataTransport;
+import com.riskpilot.model.MarketTick;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -17,6 +20,11 @@ import org.springframework.web.client.RestTemplate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 @Service
 public class AngelOneMarketDataService {
@@ -28,12 +36,21 @@ public class AngelOneMarketDataService {
     private final AngelAuthService authService;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+    private static final DateTimeFormatter[] FEED_TIME_FORMATS = new DateTimeFormatter[] {
+        DateTimeFormatter.ofPattern("dd-MMM-yyyy HH:mm:ss").withZone(IST),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(IST)
+    };
 
     public AngelOneMarketDataService(AngelAuthService authService) {
         this.authService = authService;
     }
 
     public Optional<Double> getNiftyLtp() {
+        return fetchFreshNiftyTick().map(MarketTick::price);
+    }
+
+    public Optional<MarketTick> fetchFreshNiftyTick() {
         try {
             if (!ensureAuth()) {
                 return Optional.empty();
@@ -41,7 +58,7 @@ public class AngelOneMarketDataService {
             String jwt = authService.getJwtToken();
             if (jwt == null || jwt.isBlank()) return Optional.empty();
 
-            Optional<Double> firstTry = fetchLtpWithJwt(jwt);
+            Optional<MarketTick> firstTry = fetchTickWithJwt(jwt);
             if (firstTry.isPresent()) {
                 return firstTry;
             }
@@ -54,7 +71,7 @@ public class AngelOneMarketDataService {
             if (refreshedJwt == null || refreshedJwt.isBlank()) {
                 return Optional.empty();
             }
-            return fetchLtpWithJwt(refreshedJwt);
+            return fetchTickWithJwt(refreshedJwt);
         } catch (HttpStatusCodeException e) {
             if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {
                 log.warn("Angel quote unauthorized: {}", e.getStatusCode());
@@ -81,7 +98,7 @@ public class AngelOneMarketDataService {
         return true;
     }
 
-    private Optional<Double> fetchLtpWithJwt(String jwt) throws Exception {
+    private Optional<MarketTick> fetchTickWithJwt(String jwt) throws Exception {
         HttpHeaders headers = baseHeaders(jwt);
         Map<String, Object> payload = Map.of(
             "mode", "LTP",
@@ -101,7 +118,19 @@ public class AngelOneMarketDataService {
         JsonNode first = fetched.get(0);
 
         double ltp = first.path("ltp").asDouble(0.0);
-        return ltp > 0.0 ? Optional.of(ltp) : Optional.empty();
+        LocalDateTime exchangeTimestamp = resolveExchangeTimestamp(first);
+        if (ltp <= 0.0 || exchangeTimestamp == null) {
+            return Optional.empty();
+        }
+
+        return Optional.of(MarketTick.of(
+            "NIFTY",
+            ltp,
+            exchangeTimestamp,
+            LocalDateTime.now(),
+            MarketDataTransport.WEBSOCKET,
+            System.currentTimeMillis()
+        ));
     }
 
     private HttpHeaders baseHeaders(String jwt) {
@@ -113,6 +142,51 @@ public class AngelOneMarketDataService {
         headers.set("X-PrivateKey", authService.getApiKey());
         headers.set("Authorization", "Bearer " + jwt);
         return headers;
+    }
+
+    private LocalDateTime resolveExchangeTimestamp(JsonNode first) {
+        if (first == null || first.isMissingNode()) {
+            return null;
+        }
+
+        JsonNode epochNode = first.path("exchangeFeedTimeEpochMillis");
+        if (epochNode.canConvertToLong() && epochNode.asLong() > 0L) {
+            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochNode.asLong()), IST);
+        }
+
+        JsonNode epochSecondsNode = first.path("exchangeFeedTime");
+        if (epochSecondsNode.canConvertToLong() && epochSecondsNode.asLong() > 0L) {
+            long raw = epochSecondsNode.asLong();
+            long epochMillis = raw > 9_999_999_999L ? raw : raw * 1000L;
+            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), IST);
+        }
+
+        for (String field : List.of("exchFeedTime", "exchangeTime", "lastUpdateTime")) {
+            String raw = first.path(field).asText("");
+            LocalDateTime parsed = parseTimestamp(raw);
+            if (parsed != null) {
+                return parsed;
+            }
+        }
+
+        throw new MarketDataException("ANGEL_QUOTE_TIMESTAMP_MISSING");
+    }
+
+    private LocalDateTime parseTimestamp(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDateTime.ofInstant(Instant.parse(raw), IST);
+        } catch (DateTimeParseException ignored) {
+        }
+        for (DateTimeFormatter formatter : FEED_TIME_FORMATS) {
+            try {
+                return LocalDateTime.parse(raw, formatter);
+            } catch (DateTimeParseException ignored) {
+            }
+        }
+        return null;
     }
 }
 

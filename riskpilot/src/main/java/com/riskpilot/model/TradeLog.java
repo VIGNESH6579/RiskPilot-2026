@@ -27,6 +27,8 @@ public class TradeLog {
     private LocalDateTime signalTime;
     private LocalDateTime executionTime;
     private Double latencySec;
+    private Long entryLatencyMs;
+    private Long exitLatencyMs;
     private Double expectedEntry;
     private Double actualEntry;
     private Double entrySlippage;

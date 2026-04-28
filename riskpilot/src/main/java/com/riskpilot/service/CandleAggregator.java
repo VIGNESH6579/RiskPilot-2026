@@ -1,7 +1,11 @@
 package com.riskpilot.service;
 
+import com.riskpilot.config.RiskPilotProperties;
+import com.riskpilot.exception.MarketDataException;
 import com.riskpilot.event.CandleClosedEvent;
 import com.riskpilot.model.Candle;
+import com.riskpilot.model.MarketTick;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
@@ -11,11 +15,13 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+@Slf4j
 @Service
 public class CandleAggregator {
     private static final DateTimeFormatter CANDLE_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final ApplicationEventPublisher publisher;
+    private final RiskPilotProperties properties;
 
     private final List<Candle> historicalBuffer = new ArrayList<>();
     private Candle currentBuildingCandle = null;
@@ -24,21 +30,40 @@ public class CandleAggregator {
     
     private boolean feedUnstable = false;
 
-    public CandleAggregator(ApplicationEventPublisher publisher) {
+    public CandleAggregator(ApplicationEventPublisher publisher, RiskPilotProperties properties) {
         this.publisher = publisher;
+        this.properties = properties;
     }
 
-    // Triggered externally by the WebSocket Client parsing JSON
-    public synchronized void processTick(LocalDateTime tickTime, double price, long volume) {
-        processTick(tickTime, price, volume, 0L);
-    }
+    public synchronized void processTick(MarketTick tick) {
+        if (tick.exchangeTimestamp() == null) {
+            throw new MarketDataException("LIVE_TICK_TIMESTAMP_MISSING");
+        }
+        if (tick.sourceAgeMs() > properties.getInfra().getFeed().getMaxSourceAgeMs()) {
+            feedUnstable = true;
+            throw new MarketDataException(String.format(
+                "LIVE_TICK_STALE: age=%dms max=%dms",
+                tick.sourceAgeMs(),
+                properties.getInfra().getFeed().getMaxSourceAgeMs()
+            ));
+        }
 
-    public synchronized void processTick(LocalDateTime tickTime, double price, long volume, long sourceAgeMs) {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime tickTime = tick.exchangeTimestamp();
+        double price = tick.price();
+        long volume = 1L;
+        LocalDateTime now = tick.receivedAt();
         long arrivalGapMs = lastArrivalTime == null ? 0L : java.time.Duration.between(lastArrivalTime, now).toMillis();
-        feedUnstable = sourceAgeMs > 1500L || (lastArrivalTime != null && arrivalGapMs > 4500L);
+        feedUnstable = (lastArrivalTime != null && arrivalGapMs > 4500L);
         lastTickTime = tickTime;
         lastArrivalTime = now;
+        log.debug(
+            "CandleAggregator input seq={} price={} exchangeTs={} receivedAt={} ageMs={}",
+            tick.sequenceId(),
+            price,
+            tickTime,
+            now,
+            tick.sourceAgeMs()
+        );
 
         // 5-minute alignment logic securely
         int minute = tickTime.getMinute();
@@ -104,6 +129,7 @@ public class CandleAggregator {
     public synchronized void clearHistory() {
         historicalBuffer.clear();
         currentBuildingCandle = null;
+        lastTickTime = LocalDateTime.now();
         lastArrivalTime = null;
         feedUnstable = false;
     }

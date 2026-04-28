@@ -26,6 +26,11 @@ logging:
     org.hibernate.SQL: DEBUG
 
 riskpilot:
+  mode: LIVE
+  enforce-strict-timing: true
+  infra:
+    feed:
+      startup-fail-fast: false
   risk:
     max-trades-per-day: 2
   execution:
@@ -35,3 +40,5 @@ riskpilot:
       soft-block-ms: 500
   notification:
     ntfy-enabled: false
+
+
