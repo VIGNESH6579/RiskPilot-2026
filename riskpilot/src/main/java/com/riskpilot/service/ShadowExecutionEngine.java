@@ -21,6 +21,7 @@ import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.repository.TradeRepository;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -210,6 +211,11 @@ public class ShadowExecutionEngine {
         } finally {
             tradeStateLock.unlock();
         }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        broadcastExecutor.shutdownNow();
     }
 
     @Scheduled(cron = "0 0 9 * * ?")
@@ -821,6 +827,9 @@ public class ShadowExecutionEngine {
     private MarketTick requireLiveTick(String reason) {
         MarketTick tick = marketDataStateService.lastAcceptedTick()
             .orElseThrow(() -> new IllegalStateException(reason));
+        if (tick.afterHours()) {
+            throw new StaleFeedException("FEED_STALE_EXIT");
+        }
         long silenceMs = marketDataStateService.silenceMs(Instant.now());
         if (silenceMs > config.getInfra().getHeartbeat().getMaxSilenceMs()) {
             throw new StaleFeedException("FEED_STALE_EXIT");
