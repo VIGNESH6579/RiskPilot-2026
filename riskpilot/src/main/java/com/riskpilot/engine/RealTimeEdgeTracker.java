@@ -16,6 +16,7 @@ public class RealTimeEdgeTracker {
 
     private static final int WINDOW_SIZE = 8;
     private static final int INTRADAY_WINDOW = 5;
+    private static final int MIN_SAMPLE_SIZE = 5;
     private static final int DECAY_THRESHOLD = 4;
     private static final double EXPECTANCY_MIN = 0.05;
     private static final double TP1_RATE_MIN = 0.6;
@@ -173,7 +174,7 @@ public class RealTimeEdgeTracker {
      * Check for immediate kill conditions
      */
     private void checkImmediateKillConditions(EdgeMetrics metrics) {
-        if (metrics.getWindowSize() < 5) {
+        if (metrics.getWindowSize() < MIN_SAMPLE_SIZE) {
             return;
         }
         List<String> killReasons = new ArrayList<>();
@@ -208,7 +209,7 @@ public class RealTimeEdgeTracker {
      */
     private boolean hasIntradayLossCluster() {
         List<TradeResult> last5 = new ArrayList<>(intradayWindow);
-        if (last5.size() < 5) return false;
+        if (last5.size() < MIN_SAMPLE_SIZE) return false;
 
         long losses = last5.stream().mapToLong(t -> t.getRealizedR() < 0 ? 1 : 0).sum();
         return losses >= 4;
