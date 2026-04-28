@@ -42,6 +42,7 @@ public class AngelTickStreamClient {
     private static final int PACKET_TYPE_LTP = 1;
     private static final int RAW_PACKET_LOG_BYTES = 128;
     private static final long EPOCH_SECONDS_THRESHOLD = 10_000_000_000L;
+    private static final long MIN_REASONABLE_EPOCH_MILLIS = 1_500_000_000_000L;
     private static final int MIN_VALID_YEAR = 2020;
 
     private final CandleAggregator candleAggregator;
@@ -246,13 +247,14 @@ public class AngelTickStreamClient {
     }
 
     private MarketTick parseTick(ByteBuffer data) {
-        String rawPacket = toHexPreview(data);
-        if (data.remaining() < MIN_PACKET_LENGTH) {
+        byte[] payload = toPayload(data);
+        String rawPacket = toHexPreview(payload);
+        if (payload.length < MIN_PACKET_LENGTH) {
             throw new MarketDataException("ANGEL_WS_PACKET_TOO_SHORT");
         }
 
         try {
-            ByteBuffer buffer = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
             int packetType = Byte.toUnsignedInt(buffer.get(0));
             if (packetType != PACKET_TYPE_LTP) {
                 throw new MarketDataException("ANGEL_WS_UNSUPPORTED_PACKET_TYPE");
@@ -328,7 +330,14 @@ public class AngelTickStreamClient {
         if (rawValue <= 0L) {
             throw new MarketDataException("INVALID_EXCHANGE_TIMESTAMP");
         }
-        long epochMillis = rawValue < EPOCH_SECONDS_THRESHOLD ? rawValue * 1000L : rawValue;
+        long epochMillis;
+        if (rawValue < EPOCH_SECONDS_THRESHOLD) {
+            epochMillis = rawValue * 1000L;
+        } else if (rawValue < MIN_REASONABLE_EPOCH_MILLIS) {
+            throw new MarketDataException("INVALID_EXCHANGE_TIMESTAMP");
+        } else {
+            epochMillis = rawValue;
+        }
         Instant instant = Instant.ofEpochMilli(epochMillis);
         if (instant.atZone(ZoneOffset.UTC).getYear() < MIN_VALID_YEAR) {
             throw new MarketDataException("INVALID_EXCHANGE_TIMESTAMP");
@@ -336,11 +345,17 @@ public class AngelTickStreamClient {
         return epochMillis;
     }
 
-    private String toHexPreview(ByteBuffer data) {
-        ByteBuffer preview = data.duplicate();
-        int size = Math.min(preview.remaining(), RAW_PACKET_LOG_BYTES);
+    private byte[] toPayload(ByteBuffer data) {
+        ByteBuffer duplicate = data.duplicate();
+        byte[] payload = new byte[duplicate.remaining()];
+        duplicate.get(payload);
+        return payload;
+    }
+
+    private String toHexPreview(byte[] payload) {
+        int size = Math.min(payload.length, RAW_PACKET_LOG_BYTES);
         byte[] bytes = new byte[size];
-        preview.get(bytes, 0, size);
+        System.arraycopy(payload, 0, bytes, 0, size);
         return HexFormat.of().formatHex(bytes);
     }
 
@@ -372,7 +387,7 @@ public class AngelTickStreamClient {
             } catch (Exception e) {
                 marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
                 candleAggregator.markUnstable();
-                log.error("Angel websocket tick rejected reason={} rawPacket={}", e.getMessage(), toHexPreview(data), e);
+                log.error("Angel websocket tick rejected reason={} rawPacket={}", e.getMessage(), toHexPreview(toPayload(data)), e);
             }
             webSocket.request(1);
             return null;
