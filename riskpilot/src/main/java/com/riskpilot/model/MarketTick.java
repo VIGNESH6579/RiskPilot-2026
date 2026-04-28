@@ -10,7 +10,8 @@ public record MarketTick(
     long sourceAgeMs,
     MarketDataTransport transport,
     long sequenceId,
-    long rawExchangeTime
+    long rawExchangeTime,
+    boolean afterHours
 ) {
     public MarketTick {
         if (receivedAt == null) {
@@ -38,10 +39,33 @@ public record MarketTick(
         long sequenceId,
         long rawExchangeTime
     ) {
+        return of(symbol, price, exchangeTimestamp, receivedAt, transport, sequenceId, rawExchangeTime, false);
+    }
+
+    public static MarketTick of(
+        String symbol,
+        double price,
+        Instant exchangeTimestamp,
+        Instant receivedAt,
+        MarketDataTransport transport,
+        long sequenceId,
+        long rawExchangeTime,
+        boolean afterHours
+    ) {
         Instant effectiveReceivedAt = receivedAt == null ? Instant.now() : receivedAt;
         long ageMs = exchangeTimestamp == null
             ? Long.MAX_VALUE
             : Math.max(0L, effectiveReceivedAt.toEpochMilli() - exchangeTimestamp.toEpochMilli());
-        return new MarketTick(symbol, price, exchangeTimestamp, effectiveReceivedAt, ageMs, transport, sequenceId, rawExchangeTime);
+        return new MarketTick(
+            symbol,
+            price,
+            exchangeTimestamp,
+            effectiveReceivedAt,
+            ageMs,
+            transport,
+            sequenceId,
+            rawExchangeTime,
+            afterHours
+        );
     }
 }

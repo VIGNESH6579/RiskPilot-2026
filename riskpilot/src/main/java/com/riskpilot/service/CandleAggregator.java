@@ -45,7 +45,7 @@ public class CandleAggregator {
         if (tick.exchangeTimestamp() == null) {
             throw new MarketDataException("LIVE_TICK_TIMESTAMP_MISSING");
         }
-        if (tick.sourceAgeMs() > properties.getInfra().getFeed().getMaxSourceAgeMs()) {
+        if (!tick.afterHours() && tick.sourceAgeMs() > properties.getInfra().getFeed().getMaxSourceAgeMs()) {
             feedUnstable = true;
             throw new MarketDataException(String.format(
                 "LIVE_TICK_STALE: age=%dms max=%dms",

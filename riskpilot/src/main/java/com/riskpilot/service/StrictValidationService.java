@@ -175,7 +175,7 @@ public class StrictValidationService {
             marketOpen
         );
 
-        if (skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
+        if (marketOpen && skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
             log.warn(
                 "LIVE_REJECTED_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} clockSkewMs={} maxClockSkewMs={}",
                 tick.sequenceId(),
@@ -190,7 +190,8 @@ public class StrictValidationService {
             throw new MarketDataException("LIVE_TICK_CLOCK_SKEW");
         }
 
-        if (properties.isEnforceStrictTiming()
+        if (marketOpen
+            && properties.isEnforceStrictTiming()
             && ageMs > properties.getInfra().getFeed().getMaxSourceAgeMs()) {
             log.warn(
                 "LIVE_REJECTED_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} maxAgeMs={}",
@@ -209,16 +210,28 @@ public class StrictValidationService {
             ));
         }
 
-        log.info(
-            "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} allowExecution={}",
-            tick.sequenceId(),
-            tick.price(),
-            tick.rawExchangeTime(),
-            marketSessionService.toMarketTime(tick.exchangeTimestamp()),
-            marketSessionService.toMarketTime(now),
-            ageMs,
-            marketOpen
-        );
+        if (!marketOpen) {
+            log.info(
+                "AFTER_HOURS_TICK seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={}",
+                tick.sequenceId(),
+                tick.price(),
+                tick.rawExchangeTime(),
+                marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(now),
+                ageMs
+            );
+        } else {
+            log.info(
+                "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} allowExecution={}",
+                tick.sequenceId(),
+                tick.price(),
+                tick.rawExchangeTime(),
+                marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(now),
+                ageMs,
+                true
+            );
+        }
         MarketTick acceptedTick = MarketTick.of(
             tick.symbol(),
             tick.price(),
@@ -226,7 +239,8 @@ public class StrictValidationService {
             now,
             tick.transport(),
             tick.sequenceId(),
-            tick.rawExchangeTime()
+            tick.rawExchangeTime(),
+            !marketOpen
         );
         return new ValidationResult(true, marketOpen, acceptedTick);
     }
