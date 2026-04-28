@@ -13,9 +13,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
-import java.time.LocalTime;
-import java.time.ZoneId;
-
 @Slf4j
 @SpringBootApplication
 @EnableConfigurationProperties(RiskPilotProperties.class)
@@ -98,7 +95,9 @@ public class RiskPilotApplication {
     }
 
     private boolean isMarketOpen() {
-        LocalTime now = LocalTime.now(ZoneId.of("Asia/Kolkata"));
-        return !now.isBefore(LocalTime.of(9, 15)) && !now.isAfter(LocalTime.of(15, 30));
+        var now = java.time.LocalTime.now(java.time.ZoneId.of(riskPilotProperties.getMarket().getZone()));
+        var open = java.time.LocalTime.parse(riskPilotProperties.getMarket().getOpen());
+        var close = java.time.LocalTime.parse(riskPilotProperties.getMarket().getClose());
+        return !now.isBefore(open) && !now.isAfter(close);
     }
 }

@@ -68,7 +68,9 @@ public class MarketDataStateService {
 
     public synchronized int markRejectedTick(String reason, MarketDataTransport transport) {
         MarketDataSnapshot current = snapshotRef.get();
-        int rejected = current.consecutiveRejectedTicks() + 1;
+        int rejected = shouldCountRejectedTick(reason)
+            ? current.consecutiveRejectedTicks() + 1
+            : current.consecutiveRejectedTicks();
         snapshotRef.set(new MarketDataSnapshot(
             current.connected(),
             current.subscribed(),
@@ -142,6 +144,10 @@ public class MarketDataStateService {
             return Long.MAX_VALUE;
         }
         return Math.max(0L, Duration.between(current.lastAcceptedAt(), now).toMillis());
+    }
+
+    private boolean shouldCountRejectedTick(String reason) {
+        return reason == null || !"MARKET_CLOSED_TICK".equals(reason);
     }
 
     public record MarketDataSnapshot(

@@ -14,6 +14,7 @@ public class RiskPilotProperties {
     private boolean enforceStrictTiming = true;
 
     private Session session = new Session();
+    private Market market = new Market();
     private Filters filters = new Filters();
     private TimePhase timePhase = new TimePhase();
     private Risk risk = new Risk();
@@ -31,6 +32,13 @@ public class RiskPilotProperties {
         private String start = "09:15";
         private String end = "15:30";
         private String openingRangeEnd = "09:45";
+    }
+
+    @Data
+    public static class Market {
+        private String open = "09:15";
+        private String close = "15:30";
+        private String zone = "Asia/Kolkata";
     }
 
     @Data

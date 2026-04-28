@@ -69,20 +69,34 @@ public class ShadowExecutionEngine {
     private Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
 
-    public synchronized void evaluateTick(MarketTick tick) {
+    public synchronized void evaluateTick(StrictValidationService.TickValidationResult validationResult) {
+        MarketTick tick = validationResult.tick();
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.warn("Kill switch active, ignoring tick");
             return;
         }
 
         log.debug(
-            "ExecutionEngine trigger seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+            "ExecutionEngine trigger seq={} price={} exchangeTs={} receiveTs={} ageMs={} allowExecution={}",
             tick.sequenceId(),
             tick.price(),
             tick.exchangeTimestamp(),
             tick.receivedAt(),
-            tick.sourceAgeMs()
+            tick.sourceAgeMs(),
+            validationResult.allowExecution()
         );
+
+        if (!validationResult.allowExecution()) {
+            log.info(
+                "EXECUTION_SKIPPED_MARKET_CLOSED seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+                tick.sequenceId(),
+                tick.price(),
+                tick.exchangeTimestamp(),
+                tick.receivedAt(),
+                tick.sourceAgeMs()
+            );
+            return;
+        }
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (!state.tradeActive() || state.activeTradeReference() == null) {
@@ -201,7 +215,12 @@ public class ShadowExecutionEngine {
         MarketTick entryTick;
         try {
             entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
-            strictValidationService.validateFreshTick(entryTick);
+            StrictValidationService.TickValidationResult validationResult = strictValidationService.validateFreshTick(entryTick);
+            if (!validationResult.allowExecution()) {
+                logReject(state, "MARKET_CLOSED_EXECUTION_BLOCK");
+                return;
+            }
+            entryTick = validationResult.tick();
         } catch (Exception e) {
             logReject(state, e.getMessage());
             return;

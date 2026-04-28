@@ -25,6 +25,10 @@ riskpilot:
   mode: LIVE
   strict-mode: true
   enforce-strict-timing: true
+  market:
+    open: "09:15"
+    close: "15:30"
+    zone: Asia/Kolkata
   session:
     timezone: Asia/Kolkata
     start: "09:15"

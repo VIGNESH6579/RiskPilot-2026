@@ -149,7 +149,7 @@ public class StrictValidationService {
         }
     }
 
-    public MarketTick validateFreshTick(MarketTick tick) {
+    public TickValidationResult validateFreshTick(MarketTick tick) {
         if (tick == null) {
             throw new MarketDataException("LIVE_TICK_MISSING");
         }
@@ -174,10 +174,6 @@ public class StrictValidationService {
             ageMs,
             marketOpen
         );
-
-        if (!marketOpen) {
-            throw new MarketDataException("MARKET_CLOSED_TICK");
-        }
 
         if (skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
             log.warn(
@@ -214,15 +210,16 @@ public class StrictValidationService {
         }
 
         log.info(
-            "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={}",
+            "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} allowExecution={}",
             tick.sequenceId(),
             tick.price(),
             tick.rawExchangeTime(),
             tick.exchangeTimestamp(),
             now,
-            ageMs
+            ageMs,
+            marketOpen
         );
-        return MarketTick.of(
+        MarketTick acceptedTick = MarketTick.of(
             tick.symbol(),
             tick.price(),
             tick.exchangeTimestamp(),
@@ -231,6 +228,7 @@ public class StrictValidationService {
             tick.sequenceId(),
             tick.rawExchangeTime()
         );
+        return new TickValidationResult(acceptedTick, marketOpen);
     }
 
     public void validateEntryExecution(double expectedEntryPrice, double actualEntryPrice, long latencyMs) {
@@ -330,5 +328,10 @@ public class StrictValidationService {
         double maxAllowedLossR,
         int maxAllowedConsecutiveLosses,
         boolean strictMode
+    ) {}
+
+    public record TickValidationResult(
+        MarketTick tick,
+        boolean allowExecution
     ) {}
 }

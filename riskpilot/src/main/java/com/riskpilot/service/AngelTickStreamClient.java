@@ -153,16 +153,28 @@ public class AngelTickStreamClient {
                 tick.receivedAt(),
                 tick.sourceAgeMs()
             );
-            MarketTick acceptedTick = strictValidationService.validateFreshTick(tick);
+            StrictValidationService.TickValidationResult validationResult = strictValidationService.validateFreshTick(tick);
+            MarketTick acceptedTick = validationResult.tick();
             marketDataStateService.recordAcceptedTick(acceptedTick);
             heartbeatMonitor.registerFreshTick(acceptedTick);
             candleAggregator.processTick(acceptedTick);
-            shadowExecutionEngine.evaluateTick(acceptedTick);
+            if (!validationResult.allowExecution()) {
+                log.info(
+                    "After-hours tick accepted for analytics seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+                    acceptedTick.sequenceId(),
+                    acceptedTick.price(),
+                    acceptedTick.exchangeTimestamp(),
+                    acceptedTick.receivedAt(),
+                    acceptedTick.sourceAgeMs()
+                );
+            }
+            shadowExecutionEngine.evaluateTick(validationResult);
             firstValidTickLatch.countDown();
             log.info(
-                "Tick accepted mode={} marketOpen={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+                "INGESTION_ACCEPTED mode={} marketOpen={} allowExecution={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                 properties.getMode(),
                 marketSessionService.isMarketOpen(),
+                validationResult.allowExecution(),
                 acceptedTick.sequenceId(),
                 acceptedTick.price(),
                 acceptedTick.exchangeTimestamp(),
