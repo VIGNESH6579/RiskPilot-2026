@@ -43,6 +43,8 @@ public class MonitoringController {
         payload.put("feedBlockReason", marketData.blockReason());
         payload.put("halted", marketData.halted());
         payload.put("consecutiveRejectedTicks", marketData.consecutiveRejectedTicks());
+        payload.put("parseFailureCount", marketData.parseFailureCount());
+        payload.put("ready", marketData.ready());
         return payload;
     }
 }

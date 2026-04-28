@@ -46,5 +46,6 @@ public class TradeLog {
     private String timePhase;
     private Boolean feedStable;
     private String exitReason;
+    private String exitType;
     private LocalDateTime exitTime;
 }

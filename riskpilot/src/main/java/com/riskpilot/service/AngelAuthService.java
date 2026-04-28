@@ -5,6 +5,7 @@ import dev.samstevens.totp.code.HashingAlgorithm;
 import dev.samstevens.totp.exceptions.CodeGenerationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -46,9 +47,14 @@ public class AngelAuthService {
     private String configuredMac;
 
     private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectProvider<AngelTickStreamClient> tickStreamClientProvider;
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
+
+    public AngelAuthService(ObjectProvider<AngelTickStreamClient> tickStreamClientProvider) {
+        this.tickStreamClientProvider = tickStreamClientProvider;
+    }
 
     public synchronized boolean authenticate() {
         if (!hasCredentials()) {
@@ -128,6 +134,12 @@ public class AngelAuthService {
         log.info("Pre-market auth starting");
         invalidateSession();
         boolean success = authenticate();
+        if (success) {
+            AngelTickStreamClient client = tickStreamClientProvider.getIfAvailable();
+            if (client != null) {
+                client.reconnectAfterAuthentication();
+            }
+        }
         log.info("Pre-market auth result: {}", success);
     }
 

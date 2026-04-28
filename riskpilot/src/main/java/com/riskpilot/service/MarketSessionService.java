@@ -4,6 +4,7 @@ import com.riskpilot.config.RiskPilotProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -19,21 +20,29 @@ public class MarketSessionService {
         return isMarketOpen(now());
     }
 
-    public boolean isMarketOpen(LocalDateTime timestamp) {
-        LocalTime localTime = timestamp.toLocalTime();
+    public boolean isMarketOpen(Instant timestamp) {
+        LocalTime localTime = toMarketTime(timestamp).toLocalTime();
         return !localTime.isBefore(marketOpen()) && !localTime.isAfter(marketClose());
     }
 
-    public LocalDateTime nowIst() {
-        return now();
+    public boolean isMarketOpen(LocalDateTime timestamp) {
+        return isMarketOpen(timestamp.atZone(zoneId()).toInstant());
+    }
+
+    public Instant now() {
+        return Instant.now();
+    }
+
+    public ZonedDateTime nowIst() {
+        return toMarketTime(now());
     }
 
     public ZoneId zoneId() {
         return ZoneId.of(properties.getMarket().getZone());
     }
 
-    private LocalDateTime now() {
-        return ZonedDateTime.now(zoneId()).toLocalDateTime();
+    public ZonedDateTime toMarketTime(Instant timestamp) {
+        return ZonedDateTime.ofInstant(timestamp, zoneId());
     }
 
     private LocalTime marketOpen() {

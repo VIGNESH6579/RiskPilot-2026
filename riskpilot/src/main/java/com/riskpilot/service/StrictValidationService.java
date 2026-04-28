@@ -11,8 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.Locale;
@@ -37,8 +37,8 @@ public class StrictValidationService {
     }
 
     public void validateSystem() {
-        if (!properties.isLiveMode()) {
-            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE");
+        if (!properties.isLiveMode() && !properties.isPaperMode()) {
+            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE or PAPER");
         }
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
@@ -149,7 +149,7 @@ public class StrictValidationService {
         }
     }
 
-    public TickValidationResult validateFreshTick(MarketTick tick) {
+    public ValidationResult validateFreshTick(MarketTick tick) {
         if (tick == null) {
             throw new MarketDataException("LIVE_TICK_MISSING");
         }
@@ -160,17 +160,17 @@ public class StrictValidationService {
             throw new MarketDataException("LIVE_TICK_PRICE_INVALID");
         }
 
-        LocalDateTime now = marketSessionService.nowIst();
+        Instant now = marketSessionService.now();
         boolean marketOpen = marketSessionService.isMarketOpen(now);
-        long ageMs = Math.max(0L, java.time.Duration.between(tick.exchangeTimestamp(), now).toMillis());
-        long skewMs = Math.abs(java.time.Duration.between(tick.exchangeTimestamp(), now).toMillis());
+        long ageMs = Math.max(0L, now.toEpochMilli() - tick.exchangeTimestamp().toEpochMilli());
+        long skewMs = Math.abs(now.toEpochMilli() - tick.exchangeTimestamp().toEpochMilli());
         log.info(
             "Tick validation seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} marketOpen={}",
             tick.sequenceId(),
             tick.price(),
             tick.rawExchangeTime(),
-            tick.exchangeTimestamp(),
-            now,
+            marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+            marketSessionService.toMarketTime(now),
             ageMs,
             marketOpen
         );
@@ -181,8 +181,8 @@ public class StrictValidationService {
                 tick.sequenceId(),
                 tick.price(),
                 tick.rawExchangeTime(),
-                tick.exchangeTimestamp(),
-                now,
+                marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(now),
                 ageMs,
                 skewMs,
                 properties.getInfra().getFeed().getMaxClockSkewMs()
@@ -197,8 +197,8 @@ public class StrictValidationService {
                 tick.sequenceId(),
                 tick.price(),
                 tick.rawExchangeTime(),
-                tick.exchangeTimestamp(),
-                now,
+                marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(now),
                 ageMs,
                 properties.getInfra().getFeed().getMaxSourceAgeMs()
             );
@@ -214,8 +214,8 @@ public class StrictValidationService {
             tick.sequenceId(),
             tick.price(),
             tick.rawExchangeTime(),
-            tick.exchangeTimestamp(),
-            now,
+            marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+            marketSessionService.toMarketTime(now),
             ageMs,
             marketOpen
         );
@@ -228,7 +228,7 @@ public class StrictValidationService {
             tick.sequenceId(),
             tick.rawExchangeTime()
         );
-        return new TickValidationResult(acceptedTick, marketOpen);
+        return new ValidationResult(true, marketOpen, acceptedTick);
     }
 
     public void validateEntryExecution(double expectedEntryPrice, double actualEntryPrice, long latencyMs) {
@@ -330,8 +330,9 @@ public class StrictValidationService {
         boolean strictMode
     ) {}
 
-    public record TickValidationResult(
-        MarketTick tick,
-        boolean allowExecution
+    public record ValidationResult(
+        boolean valid,
+        boolean allowExecution,
+        MarketTick tick
     ) {}
 }

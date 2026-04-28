@@ -9,6 +9,7 @@ import com.riskpilot.engine.RegimeFilter;
 import com.riskpilot.engine.RiskGateEngine;
 import com.riskpilot.engine.VolatilityNormalizer;
 import com.riskpilot.event.CandleClosedEvent;
+import com.riskpilot.exception.StaleFeedException;
 import com.riskpilot.model.ActiveTradeExecution;
 import com.riskpilot.model.Candle;
 import com.riskpilot.model.GateDecision;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -35,6 +37,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Service
@@ -60,6 +65,8 @@ public class ShadowExecutionEngine {
     private final NtfyNotificationService ntfyNotificationService;
     private final TradeRepository tradeRepository;
     private final MarketSessionService marketSessionService;
+    private final ReentrantLock tradeStateLock = new ReentrantLock();
+    private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor();
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
@@ -69,7 +76,9 @@ public class ShadowExecutionEngine {
     private Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
 
-    public synchronized void evaluateTick(StrictValidationService.TickValidationResult validationResult) {
+    public void evaluateTick(StrictValidationService.ValidationResult validationResult) {
+        tradeStateLock.lock();
+        try {
         MarketTick tick = validationResult.tick();
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.warn("Kill switch active, ignoring tick");
@@ -113,14 +122,19 @@ public class ShadowExecutionEngine {
         }
 
         updateActiveTradeState(trade, state.lastRejectReason(), tick.price());
+        } finally {
+            tradeStateLock.unlock();
+        }
     }
 
     @EventListener
-    public synchronized void onCandleClosed(CandleClosedEvent event) {
+    public void onCandleClosed(CandleClosedEvent event) {
         evaluateCandle(event.candle());
     }
 
-    public synchronized void evaluateCandle(Candle candle) {
+    public void evaluateCandle(Candle candle) {
+        tradeStateLock.lock();
+        try {
         if (!marketSessionService.isMarketOpen(candle.timestamp())) {
             log.info("ShadowExecutionEngine skipping candle evaluation outside market session timestamp={}", candle.timestamp());
             return;
@@ -134,7 +148,7 @@ public class ShadowExecutionEngine {
             candle.high,
             candle.low,
             candle.close,
-            candle.volume(),
+            candle.tickCount(),
             candle.timestamp(),
             atr
         );
@@ -145,8 +159,12 @@ public class ShadowExecutionEngine {
         if (state.tradeActive() && state.activeTradeReference() != null) {
             ActiveTradeExecution trade = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), candle);
             if (riskGateEngine.shouldForceLateSessionExit(state)) {
-                MarketTick exitTick = requireLiveTick("TIME_CUTOFF_EXIT");
-                closeTrade(trade, exitAtPrice(trade, exitTick.price(), "TIME_CUTOFF_EXIT"), exitTick);
+                try {
+                    MarketTick exitTick = requireLiveTick("TIME_CUTOFF_EXIT");
+                    closeTrade(trade, exitAtPrice(trade, exitTick.price(), "TIME_CUTOFF_EXIT", "REAL"), exitTick);
+                } catch (StaleFeedException staleFeedException) {
+                    closeTrade(trade, exitAtPrice(trade, candle.close, "FEED_STALE_EXIT", "ESTIMATED"), null);
+                }
                 return;
             }
             updateActiveTradeState(trade, state.lastRejectReason(), candle.close);
@@ -154,17 +172,27 @@ public class ShadowExecutionEngine {
         }
 
         maybeOpenTrade(state, history);
+        } finally {
+            tradeStateLock.unlock();
+        }
     }
 
-    public synchronized void evaluateCandleClose() {
+    public void evaluateCandleClose() {
+        tradeStateLock.lock();
+        try {
         List<Candle> history = candleAggregator.getValidHistory();
         if (history.isEmpty()) {
             return;
         }
         evaluateCandle(history.get(history.size() - 1));
+        } finally {
+            tradeStateLock.unlock();
+        }
     }
 
-    public synchronized void restart() {
+    public void restart() {
+        tradeStateLock.lock();
+        try {
         cancelPersistedActiveTrade("ENGINE_RESTART");
         stateManager.resetDaily();
         candleAggregator.clearHistory();
@@ -179,6 +207,9 @@ public class ShadowExecutionEngine {
         activeTradeId = null;
         lastRegimeConfidenceScore = null;
         broadcastCurrentSessionState();
+        } finally {
+            tradeStateLock.unlock();
+        }
     }
 
     @Scheduled(cron = "0 0 9 * * ?")
@@ -215,7 +246,7 @@ public class ShadowExecutionEngine {
         MarketTick entryTick;
         try {
             entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
-            StrictValidationService.TickValidationResult validationResult = strictValidationService.validateFreshTick(entryTick);
+            StrictValidationService.ValidationResult validationResult = strictValidationService.validateFreshTick(entryTick);
             if (!validationResult.allowExecution()) {
                 logReject(state, "MARKET_CLOSED_EXECUTION_BLOCK");
                 return;
@@ -324,7 +355,7 @@ public class ShadowExecutionEngine {
     }
 
     private void openTrade(Signal signal, TradingSessionSnapshot state, LocalDateTime signalTime, MarketTick entryTick) {
-        LocalDateTime executionTime = entryTick.receivedAt();
+        LocalDateTime executionTime = toLocalDateTime(entryTick.receivedAt());
         double actualEntryPrice = entryTick.price();
         double tp1Distance = Math.max(1.0, volatilityNormalizer.getCurrentTP1());
         double tp1Level = "SHORT".equalsIgnoreCase(signal.getDirection())
@@ -391,13 +422,14 @@ public class ShadowExecutionEngine {
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double entrySlip = activeSignalTime != null ? Math.abs(trade.entryPrice() - activeExpectedEntry) : 0.0;
         double exitSlip = Math.abs(exit.exitPrice() - expectedExit);
+        long exitLatencyMs = exitTick != null ? exitTick.sourceAgeMs() : config.getInfra().getHeartbeat().getMaxSilenceMs();
 
         try {
             strictValidationService.validateExitExecution(
                 trade.tp1Hit() ? "RUNNER" : "PANIC_EXIT",
                 expectedExit,
                 exit.exitPrice(),
-                exitTick.sourceAgeMs()
+                exitLatencyMs
             );
         } catch (Exception e) {
             log.warn("Exit slippage validation triggered: {}", e.getMessage());
@@ -408,7 +440,7 @@ public class ShadowExecutionEngine {
                 activeSignalTime,
                 activeExecutionTime,
                 activeEntryLatencyMs,
-                exitTick.sourceAgeMs(),
+                exitLatencyMs,
                 activeExpectedEntry,
                 trade.entryPrice(),
                 expectedExit,
@@ -427,7 +459,7 @@ public class ShadowExecutionEngine {
                 LocalDateTime.now()
             );
 
-            broadcastTradeData(activeSignalTime, activeExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitTick.sourceAgeMs());
+            broadcastTradeData(activeSignalTime, activeExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitLatencyMs);
         }
 
         edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(), entrySlip, exitSlip);
@@ -449,7 +481,7 @@ public class ShadowExecutionEngine {
         );
         strictValidationService.recordTradeExecution(realizedR);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
-        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitTick.sourceAgeMs(), exitSlip);
+        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -550,7 +582,7 @@ public class ShadowExecutionEngine {
         payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
         payload.put("regimeConfidenceReason", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getReason() : null);
         payload.put("reducedMode", lastRegimeConfidenceScore != null && lastRegimeConfidenceScore.isReducedMode());
-        webSocketService.sendSessionState(payload);
+        broadcastExecutor.execute(() -> webSocketService.sendSessionState(payload));
     }
 
     private void broadcastTradeData(
@@ -583,15 +615,15 @@ public class ShadowExecutionEngine {
         tradeData.put("exitReason", exit.reason());
         tradeData.put("exitTime", LocalDateTime.now().toString());
 
-        webSocketService.sendTradeExecution(tradeData);
+        broadcastExecutor.execute(() -> webSocketService.sendTradeExecution(tradeData));
     }
 
-    private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason) {
+    private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason, String exitType) {
         double points = trade.tp1Level() < trade.entryPrice()
             ? trade.entryPrice() - price
             : price - trade.entryPrice();
         double size = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
-        return new TradeExit(true, points * size, reason, price);
+        return new TradeExit(true, points * size, reason, price, exitType);
     }
 
     private double currentOrRange(TradingSessionSnapshot state) {
@@ -654,6 +686,7 @@ public class ShadowExecutionEngine {
                 .entrySlippage(decimal(Math.abs(trade.entryPrice() - signal.getEntry())))
                 .status("ACTIVE")
                 .exitReason("OPEN")
+                .exitType("REAL")
                 .entryTime(entryTime)
                 .build();
             persistedTrade = tradeRepository.save(persistedTrade);
@@ -685,6 +718,7 @@ public class ShadowExecutionEngine {
             entity.setTrailingStopLoss(decimal(trade.trailingSL()));
             entity.setStatus("ACTIVE");
             entity.setExitReason("OPEN");
+            entity.setExitType("REAL");
             tradeRepository.save(entity);
             activeTradeId = entity.getId();
         } catch (Exception e) {
@@ -724,6 +758,7 @@ public class ShadowExecutionEngine {
             entity.setTrailingStopLoss(decimal(trade.trailingSL()));
             entity.setStatus("CLOSED");
             entity.setExitReason(exit.reason());
+            entity.setExitType(exit.exitType());
             entity.setExitTime(LocalDateTime.now());
             tradeRepository.save(entity);
         } catch (Exception e) {
@@ -741,6 +776,7 @@ public class ShadowExecutionEngine {
             Trade entity = persistedTrade.get();
             entity.setStatus("CANCELLED");
             entity.setExitReason(reason);
+            entity.setExitType("ESTIMATED");
             entity.setExitTime(LocalDateTime.now());
             entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
@@ -783,7 +819,16 @@ public class ShadowExecutionEngine {
     }
 
     private MarketTick requireLiveTick(String reason) {
-        return marketDataStateService.lastAcceptedTick()
+        MarketTick tick = marketDataStateService.lastAcceptedTick()
             .orElseThrow(() -> new IllegalStateException(reason));
+        long silenceMs = marketDataStateService.silenceMs(Instant.now());
+        if (silenceMs > config.getInfra().getHeartbeat().getMaxSilenceMs()) {
+            throw new StaleFeedException("FEED_STALE_EXIT");
+        }
+        return tick;
+    }
+
+    private LocalDateTime toLocalDateTime(Instant instant) {
+        return marketSessionService.toMarketTime(instant).toLocalDateTime();
     }
 }

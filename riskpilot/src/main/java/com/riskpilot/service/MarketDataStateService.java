@@ -5,7 +5,7 @@ import com.riskpilot.model.MarketTick;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -21,34 +21,17 @@ public class MarketDataStateService {
 
     public synchronized void markConnected(MarketDataTransport transport) {
         MarketDataSnapshot current = snapshotRef.get();
-        snapshotRef.set(new MarketDataSnapshot(
-            true,
-            current.subscribed(),
-            current.feedBlocked(),
-            current.blockReason(),
-            current.halted(),
-            current.consecutiveRejectedTicks(),
-            transport,
-            current.lastTick(),
-            current.lastAcceptedAt(),
-            current.lastSequenceId()
-        ));
+        snapshotRef.set(current.withConnection(true, current.subscribed(), transport));
     }
 
     public synchronized void markSubscribed(MarketDataTransport transport) {
         MarketDataSnapshot current = snapshotRef.get();
-        snapshotRef.set(new MarketDataSnapshot(
-            true,
-            true,
-            current.feedBlocked(),
-            current.blockReason(),
-            current.halted(),
-            current.consecutiveRejectedTicks(),
-            transport,
-            current.lastTick(),
-            current.lastAcceptedAt(),
-            current.lastSequenceId()
-        ));
+        snapshotRef.set(current.withConnection(true, true, transport));
+    }
+
+    public synchronized void markReady(MarketDataTransport transport) {
+        MarketDataSnapshot current = snapshotRef.get();
+        snapshotRef.set(current.withReady(true, transport));
     }
 
     public synchronized void recordAcceptedTick(MarketTick tick) {
@@ -59,6 +42,8 @@ public class MarketDataStateService {
             null,
             false,
             0,
+            snapshotRef.get().parseFailureCount(),
+            true,
             tick.transport(),
             tick,
             tick.receivedAt(),
@@ -78,12 +63,32 @@ public class MarketDataStateService {
             reason,
             current.halted(),
             rejected,
+            current.parseFailureCount(),
+            current.ready(),
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
             current.lastSequenceId()
         ));
         return rejected;
+    }
+
+    public synchronized void recordParseFailure(String reason, MarketDataTransport transport) {
+        MarketDataSnapshot current = snapshotRef.get();
+        snapshotRef.set(new MarketDataSnapshot(
+            current.connected(),
+            current.subscribed(),
+            true,
+            reason,
+            current.halted(),
+            current.consecutiveRejectedTicks(),
+            current.parseFailureCount() + 1,
+            current.ready(),
+            transport != null ? transport : current.transport(),
+            current.lastTick(),
+            current.lastAcceptedAt(),
+            current.lastSequenceId()
+        ));
     }
 
     public synchronized void markFeedFailure(String reason, MarketDataTransport transport) {
@@ -95,6 +100,8 @@ public class MarketDataStateService {
             reason,
             current.halted(),
             current.consecutiveRejectedTicks(),
+            current.parseFailureCount(),
+            current.ready(),
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
@@ -111,6 +118,8 @@ public class MarketDataStateService {
             reason,
             current.halted(),
             current.consecutiveRejectedTicks(),
+            current.parseFailureCount(),
+            false,
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
@@ -127,6 +136,8 @@ public class MarketDataStateService {
             reason,
             true,
             current.consecutiveRejectedTicks(),
+            current.parseFailureCount(),
+            false,
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
@@ -138,7 +149,7 @@ public class MarketDataStateService {
         return Optional.ofNullable(snapshotRef.get().lastTick());
     }
 
-    public long silenceMs(LocalDateTime now) {
+    public long silenceMs(Instant now) {
         MarketDataSnapshot current = snapshotRef.get();
         if (current.lastAcceptedAt() == null) {
             return Long.MAX_VALUE;
@@ -157,9 +168,11 @@ public class MarketDataStateService {
         String blockReason,
         boolean halted,
         int consecutiveRejectedTicks,
+        int parseFailureCount,
+        boolean ready,
         MarketDataTransport transport,
         MarketTick lastTick,
-        LocalDateTime lastAcceptedAt,
+        Instant lastAcceptedAt,
         long lastSequenceId
     ) {
         public static MarketDataSnapshot initial() {
@@ -170,10 +183,46 @@ public class MarketDataStateService {
                 "LIVE_FEED_NOT_STARTED",
                 false,
                 0,
+                0,
+                false,
                 null,
                 null,
                 null,
                 -1L
+            );
+        }
+
+        private MarketDataSnapshot withConnection(boolean connected, boolean subscribed, MarketDataTransport transport) {
+            return new MarketDataSnapshot(
+                connected,
+                subscribed,
+                feedBlocked,
+                blockReason,
+                halted,
+                consecutiveRejectedTicks,
+                parseFailureCount,
+                ready,
+                transport != null ? transport : this.transport,
+                lastTick,
+                lastAcceptedAt,
+                lastSequenceId
+            );
+        }
+
+        private MarketDataSnapshot withReady(boolean ready, MarketDataTransport transport) {
+            return new MarketDataSnapshot(
+                connected,
+                subscribed,
+                feedBlocked,
+                blockReason,
+                halted,
+                consecutiveRejectedTicks,
+                parseFailureCount,
+                ready,
+                transport != null ? transport : this.transport,
+                lastTick,
+                lastAcceptedAt,
+                lastSequenceId
             );
         }
     }

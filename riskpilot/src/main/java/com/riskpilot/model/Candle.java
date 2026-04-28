@@ -15,24 +15,24 @@ public class Candle {
     public volatile double high;
     public volatile double low;
     public volatile double close;
-    public final long volume;
+    public final long tickCount;
 
     public Candle(String date, String time, double open, double high, double low, double close) {
         this(date, time, open, high, low, close, 0);
     }
 
-    public Candle(String date, String time, double open, double high, double low, double close, long volume) {
+    public Candle(String date, String time, double open, double high, double low, double close, long tickCount) {
         this.date = date;
         this.time = time;
         this.open = open;
         this.high = high;
         this.low = low;
         this.close = close;
-        this.volume = volume;
+        this.tickCount = tickCount;
     }
 
     public Candle copy() {
-        return new Candle(date, time, open, high, low, close, volume);
+        return new Candle(date, time, open, high, low, close, tickCount);
     }
 
     public synchronized void applyTick(double price) {
@@ -53,7 +53,7 @@ public class Candle {
         }
     }
 
-    public long volume() {
-        return volume;
+    public long tickCount() {
+        return tickCount;
     }
 }

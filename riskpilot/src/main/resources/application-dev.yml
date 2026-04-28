@@ -26,7 +26,7 @@ logging:
     org.hibernate.SQL: DEBUG
 
 riskpilot:
-  mode: LIVE
+  mode: PAPER
   enforce-strict-timing: true
   market:
     open: "09:15"
@@ -35,6 +35,8 @@ riskpilot:
   infra:
     feed:
       startup-fail-fast: false
+    paper:
+      enabled: true
   risk:
     max-trades-per-day: 2
   execution:

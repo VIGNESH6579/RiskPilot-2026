@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -118,7 +117,7 @@ public class AngelOneMarketDataService {
         JsonNode first = fetched.get(0);
 
         double ltp = first.path("ltp").asDouble(0.0);
-        LocalDateTime exchangeTimestamp = resolveExchangeTimestamp(first);
+        Instant exchangeTimestamp = resolveExchangeTimestamp(first);
         if (ltp <= 0.0 || exchangeTimestamp == null) {
             return Optional.empty();
         }
@@ -127,7 +126,7 @@ public class AngelOneMarketDataService {
             "NIFTY",
             ltp,
             exchangeTimestamp,
-            LocalDateTime.now(),
+            Instant.now(),
             MarketDataTransport.WEBSOCKET,
             System.currentTimeMillis()
         ));
@@ -144,26 +143,26 @@ public class AngelOneMarketDataService {
         return headers;
     }
 
-    private LocalDateTime resolveExchangeTimestamp(JsonNode first) {
+    private Instant resolveExchangeTimestamp(JsonNode first) {
         if (first == null || first.isMissingNode()) {
             return null;
         }
 
         JsonNode epochNode = first.path("exchangeFeedTimeEpochMillis");
         if (epochNode.canConvertToLong() && epochNode.asLong() > 0L) {
-            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochNode.asLong()), IST);
+            return Instant.ofEpochMilli(epochNode.asLong());
         }
 
         JsonNode epochSecondsNode = first.path("exchangeFeedTime");
         if (epochSecondsNode.canConvertToLong() && epochSecondsNode.asLong() > 0L) {
             long raw = epochSecondsNode.asLong();
             long epochMillis = raw > 9_999_999_999L ? raw : raw * 1000L;
-            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), IST);
+            return Instant.ofEpochMilli(epochMillis);
         }
 
         for (String field : List.of("exchFeedTime", "exchangeTime", "lastUpdateTime")) {
             String raw = first.path(field).asText("");
-            LocalDateTime parsed = parseTimestamp(raw);
+            Instant parsed = parseTimestamp(raw);
             if (parsed != null) {
                 return parsed;
             }
@@ -172,17 +171,17 @@ public class AngelOneMarketDataService {
         throw new MarketDataException("ANGEL_QUOTE_TIMESTAMP_MISSING");
     }
 
-    private LocalDateTime parseTimestamp(String raw) {
+    private Instant parseTimestamp(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
         try {
-            return LocalDateTime.ofInstant(Instant.parse(raw), IST);
+            return Instant.parse(raw);
         } catch (DateTimeParseException ignored) {
         }
         for (DateTimeFormatter formatter : FEED_TIME_FORMATS) {
             try {
-                return LocalDateTime.parse(raw, formatter);
+                return Instant.from(formatter.parse(raw));
             } catch (DateTimeParseException ignored) {
             }
         }

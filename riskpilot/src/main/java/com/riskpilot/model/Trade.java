@@ -91,6 +91,9 @@ public class Trade {
     
     @Column(nullable = false, length = 50)
     private String exitReason;
+
+    @Column(nullable = false, length = 20)
+    private String exitType;
     
     @Column(nullable = false)
     private LocalDateTime entryTime;
@@ -109,6 +112,7 @@ public class Trade {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
         if (status == null) status = "ACTIVE";
+        if (exitType == null) exitType = "REAL";
         if (realizedPnL == null) realizedPnL = BigDecimal.ZERO;
         if (unrealizedPnL == null) unrealizedPnL = BigDecimal.ZERO;
         if (tp1Hit == null) tp1Hit = false;

@@ -6,7 +6,7 @@ import com.riskpilot.model.TradingSessionSnapshot;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Service
 public class HeartbeatMonitor {
@@ -16,7 +16,7 @@ public class HeartbeatMonitor {
     private final MarketDataStateService marketDataStateService;
     private final RiskPilotProperties properties;
     
-    private LocalDateTime lastFreshTickReceivedTime;
+    private Instant lastFreshTickReceivedTime;
 
     public HeartbeatMonitor(
         SessionStateManager stateManager,
@@ -38,7 +38,7 @@ public class HeartbeatMonitor {
         if (lastFreshTickReceivedTime == null) {
             return false;
         }
-        long silenceMs = java.time.Duration.between(lastFreshTickReceivedTime, LocalDateTime.now()).toMillis();
+        long silenceMs = java.time.Duration.between(lastFreshTickReceivedTime, Instant.now()).toMillis();
         return silenceMs < properties.getInfra().getHeartbeat().getMaxSilenceMs();
     }
 
@@ -52,7 +52,7 @@ public class HeartbeatMonitor {
 
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         long silenceMs = lastFreshTickReceivedTime == null
             ? Long.MAX_VALUE
             : java.time.Duration.between(lastFreshTickReceivedTime, now).toMillis();

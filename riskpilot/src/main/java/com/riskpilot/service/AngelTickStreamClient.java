@@ -17,30 +17,32 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
 public class AngelTickStreamClient {
     private static final String SMART_STREAM_URI = "wss://smartapisocket.angelone.in/smart-stream";
     private static final String NIFTY_SMART_STREAM_TOKEN = "26000";
-    private static final int EXCHANGE_TYPE_NSE_CM = 1;
     private static final int TOKEN_START_OFFSET = 2;
     private static final int TOKEN_LENGTH = 25;
     private static final int SEQUENCE_NUMBER_OFFSET = 27;
     private static final int EXCHANGE_FEED_TIME_OFFSET = 35;
     private static final int LAST_TRADED_PRICE_OFFSET = 43;
-    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
-    private static final long EPOCH_MILLIS_THRESHOLD = 1_000_000_000_000L;
-    private static final int RAW_PACKET_LOG_BYTES = 64;
+    private static final int MIN_PACKET_LENGTH = 51;
+    private static final int PACKET_TYPE_LTP = 1;
+    private static final int RAW_PACKET_LOG_BYTES = 128;
+    private static final long EPOCH_SECONDS_THRESHOLD = 10_000_000_000L;
+    private static final int MIN_VALID_YEAR = 2020;
 
     private final CandleAggregator candleAggregator;
     private final HeartbeatMonitor heartbeatMonitor;
@@ -52,11 +54,14 @@ public class AngelTickStreamClient {
     private final MarketSessionService marketSessionService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
-    private final CountDownLatch firstValidTickLatch = new CountDownLatch(1);
+    private final AtomicInteger parseFailureCounter = new AtomicInteger(0);
+    private final AtomicLong paperSequence = new AtomicLong(1L);
+    private final AtomicBoolean paperFeedStarted = new AtomicBoolean(false);
 
     private volatile WebSocket webSocket;
+    private volatile double paperPrice;
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
@@ -76,17 +81,19 @@ public class AngelTickStreamClient {
         this.angelAuthService = angelAuthService;
         this.properties = properties;
         this.marketSessionService = marketSessionService;
+        this.paperPrice = properties.getInfra().getPaper().getStartingPrice();
     }
 
     @PostConstruct
     public void init() {
+        if (properties.isPaperMode()) {
+            startPaperFeed();
+            return;
+        }
+
         if (!angelAuthService.hasCredentials()) {
             marketDataStateService.markFeedFailure("ANGEL_CREDENTIALS_MISSING", MarketDataTransport.WEBSOCKET);
-            if (properties.getInfra().getFeed().isStartupFailFast()) {
-                throw new IllegalStateException("ANGEL_CREDENTIALS_MISSING");
-            }
-            log.warn("Angel live feed not started: credentials missing");
-            return;
+            throw new IllegalStateException("ANGEL_CREDENTIALS_MISSING");
         }
 
         if (properties.getInfra().getFeed().getTransport() != MarketDataTransport.WEBSOCKET) {
@@ -94,36 +101,83 @@ public class AngelTickStreamClient {
         }
 
         connectWebSocket();
-        if (properties.getInfra().getFeed().isStartupFailFast()) {
-            awaitFirstValidTick();
-        }
     }
 
     @PreDestroy
     public void shutdown() {
-        try {
-            if (webSocket != null) {
-                webSocket.abort();
-            }
-        } catch (Exception ignored) {
-        }
+        disconnect();
         executor.shutdownNow();
     }
 
+    public void reconnectAfterAuthentication() {
+        executor.execute(() -> {
+            disconnect();
+            connectWebSocket();
+        });
+    }
+
+    private void startPaperFeed() {
+        if (!paperFeedStarted.compareAndSet(false, true)) {
+            return;
+        }
+        marketDataStateService.markConnected(MarketDataTransport.PAPER);
+        marketDataStateService.markSubscribed(MarketDataTransport.PAPER);
+        marketDataStateService.markReady(MarketDataTransport.PAPER);
+        long intervalMs = Math.max(250L, properties.getInfra().getPaper().getTickIntervalMs());
+        executor.scheduleWithFixedDelay(() -> {
+            try {
+                Instant now = Instant.now();
+                double delta = ThreadLocalRandom.current()
+                    .nextDouble(-properties.getInfra().getPaper().getMaxStepPoints(), properties.getInfra().getPaper().getMaxStepPoints());
+                paperPrice = Math.max(1.0, paperPrice + delta);
+                MarketTick tick = MarketTick.of(
+                    "NIFTY",
+                    paperPrice,
+                    now,
+                    now,
+                    MarketDataTransport.PAPER,
+                    paperSequence.getAndIncrement(),
+                    now.toEpochMilli()
+                );
+                ingestTick(tick);
+            } catch (Exception e) {
+                log.error("Paper tick generation failed", e);
+            }
+        }, 0L, intervalMs, TimeUnit.MILLISECONDS);
+    }
+
     private void connectWebSocket() {
-        try {
-            String feedToken = requireFeedToken();
-            marketDataStateService.markConnected(MarketDataTransport.WEBSOCKET);
-            log.info("Connecting Angel websocket to {}", SMART_STREAM_URI);
-            httpClient.newWebSocketBuilder()
-                .header("x-client-code", angelAuthService.getClientCode())
-                .header("x-feed-token", feedToken)
-                .header("x-client-lib", "JAVA")
-                .buildAsync(URI.create(SMART_STREAM_URI), new AngelWebSocketListener())
-                .join();
-        } catch (Exception e) {
-            marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
-            scheduleReconnect();
+        executor.execute(() -> {
+            try {
+                String feedToken = requireFeedToken();
+                marketDataStateService.markConnected(MarketDataTransport.WEBSOCKET);
+                log.info("Connecting Angel websocket to {}", SMART_STREAM_URI);
+                httpClient.newWebSocketBuilder()
+                    .header("x-client-code", angelAuthService.getClientCode())
+                    .header("x-feed-token", feedToken)
+                    .header("x-client-lib", "JAVA")
+                    .buildAsync(URI.create(SMART_STREAM_URI), new AngelWebSocketListener())
+                    .exceptionally(error -> {
+                        marketDataStateService.markFeedFailure(error.getMessage(), MarketDataTransport.WEBSOCKET);
+                        scheduleReconnect();
+                        return null;
+                    });
+            } catch (Exception e) {
+                marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
+                scheduleReconnect();
+            }
+        });
+    }
+
+    public void disconnect() {
+        WebSocket current = this.webSocket;
+        this.webSocket = null;
+        if (current != null) {
+            try {
+                current.sendClose(WebSocket.NORMAL_CLOSURE, "reconnect");
+            } catch (Exception ignored) {
+                current.abort();
+            }
         }
     }
 
@@ -143,19 +197,20 @@ public class AngelTickStreamClient {
     private void ingestTick(MarketTick tick) {
         try {
             log.debug(
-                "Ingress tick mode={} marketOpen={} transport={} seq={} price={} exchangeTs={} receivedAt={} ageMs={}",
+                "INGESTION_RECEIVED mode={} marketOpen={} transport={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                 properties.getMode(),
                 marketSessionService.isMarketOpen(),
                 tick.transport(),
                 tick.sequenceId(),
                 tick.price(),
-                tick.exchangeTimestamp(),
-                tick.receivedAt(),
+                marketSessionService.toMarketTime(tick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(tick.receivedAt()),
                 tick.sourceAgeMs()
             );
-            StrictValidationService.TickValidationResult validationResult = strictValidationService.validateFreshTick(tick);
+            StrictValidationService.ValidationResult validationResult = strictValidationService.validateFreshTick(tick);
             MarketTick acceptedTick = validationResult.tick();
             marketDataStateService.recordAcceptedTick(acceptedTick);
+            marketDataStateService.markReady(acceptedTick.transport());
             heartbeatMonitor.registerFreshTick(acceptedTick);
             candleAggregator.processTick(acceptedTick);
             if (!validationResult.allowExecution()) {
@@ -163,13 +218,12 @@ public class AngelTickStreamClient {
                     "After-hours tick accepted for analytics seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                     acceptedTick.sequenceId(),
                     acceptedTick.price(),
-                    acceptedTick.exchangeTimestamp(),
-                    acceptedTick.receivedAt(),
+                    marketSessionService.toMarketTime(acceptedTick.exchangeTimestamp()),
+                    marketSessionService.toMarketTime(acceptedTick.receivedAt()),
                     acceptedTick.sourceAgeMs()
                 );
             }
             shadowExecutionEngine.evaluateTick(validationResult);
-            firstValidTickLatch.countDown();
             log.info(
                 "INGESTION_ACCEPTED mode={} marketOpen={} allowExecution={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                 properties.getMode(),
@@ -177,8 +231,8 @@ public class AngelTickStreamClient {
                 validationResult.allowExecution(),
                 acceptedTick.sequenceId(),
                 acceptedTick.price(),
-                acceptedTick.exchangeTimestamp(),
-                acceptedTick.receivedAt(),
+                marketSessionService.toMarketTime(acceptedTick.exchangeTimestamp()),
+                marketSessionService.toMarketTime(acceptedTick.receivedAt()),
                 acceptedTick.sourceAgeMs()
             );
         } catch (Exception e) {
@@ -192,70 +246,70 @@ public class AngelTickStreamClient {
     }
 
     private MarketTick parseTick(ByteBuffer data) {
-        ByteBuffer buffer = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-        byte[] tokenBytes = new byte[TOKEN_LENGTH];
-        for (int i = 0; i < TOKEN_LENGTH; i++) {
-            tokenBytes[i] = buffer.get(TOKEN_START_OFFSET + i);
-        }
-        String token = new String(tokenBytes, StandardCharsets.UTF_8).trim().replace("\u0000", "");
-        if (!NIFTY_SMART_STREAM_TOKEN.equals(token)) {
-            throw new MarketDataException("ANGEL_TOKEN_MISMATCH");
+        String rawPacket = toHexPreview(data);
+        if (data.remaining() < MIN_PACKET_LENGTH) {
+            throw new MarketDataException("ANGEL_WS_PACKET_TOO_SHORT");
         }
 
-        long sequenceNumber = buffer.getLong(SEQUENCE_NUMBER_OFFSET);
-        long exchangeFeedRaw = buffer.getLong(EXCHANGE_FEED_TIME_OFFSET);
-        long exchangeFeedEpochMs = normalizeExchangeFeedEpochMs(exchangeFeedRaw);
-        long rawLtp = buffer.getLong(LAST_TRADED_PRICE_OFFSET);
-        if (exchangeFeedEpochMs <= 0L || rawLtp <= 0L) {
-            log.warn(
-                "Angel websocket payload invalid token={} seq={} rawExchangeTime={} rawLtp={} rawPacket={}",
+        try {
+            ByteBuffer buffer = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            int packetType = Byte.toUnsignedInt(buffer.get(0));
+            if (packetType != PACKET_TYPE_LTP) {
+                throw new MarketDataException("ANGEL_WS_UNSUPPORTED_PACKET_TYPE");
+            }
+
+            byte[] tokenBytes = new byte[TOKEN_LENGTH];
+            for (int i = 0; i < TOKEN_LENGTH; i++) {
+                tokenBytes[i] = buffer.get(TOKEN_START_OFFSET + i);
+            }
+            String token = new String(tokenBytes, StandardCharsets.UTF_8).trim().replace("\u0000", "");
+            if (!NIFTY_SMART_STREAM_TOKEN.equals(token)) {
+                throw new MarketDataException("ANGEL_TOKEN_MISMATCH");
+            }
+
+            long sequenceNumber = buffer.getLong(SEQUENCE_NUMBER_OFFSET);
+            long exchangeFeedRaw = buffer.getLong(EXCHANGE_FEED_TIME_OFFSET);
+            long exchangeFeedEpochMs = normalizeExchangeFeedEpochMs(exchangeFeedRaw);
+            long rawLtp = buffer.getLong(LAST_TRADED_PRICE_OFFSET);
+            if (rawLtp <= 0L) {
+                throw new MarketDataException("ANGEL_WS_PAYLOAD_INVALID");
+            }
+
+            Instant exchangeTimestamp = Instant.ofEpochMilli(exchangeFeedEpochMs);
+            Instant receivedAt = Instant.now();
+            double price = rawLtp / 100.0;
+            long computedAgeMs = Math.max(0L, receivedAt.toEpochMilli() - exchangeFeedEpochMs);
+            log.info(
+                "Angel WS tick token={} seq={} price={} rawExchangeTime={} normalizedExchangeTime={} exchangeTs={} receiveTs={} ageMs={} rawPacket={}",
                 token,
                 sequenceNumber,
+                price,
                 exchangeFeedRaw,
-                rawLtp,
-                toHexPreview(data)
+                exchangeFeedEpochMs,
+                marketSessionService.toMarketTime(exchangeTimestamp),
+                marketSessionService.toMarketTime(receivedAt),
+                computedAgeMs,
+                rawPacket
             );
-            throw new MarketDataException("ANGEL_WS_PAYLOAD_INVALID");
-        }
-
-        LocalDateTime exchangeTimestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(exchangeFeedEpochMs), IST);
-        double price = rawLtp / 100.0;
-        long nowEpochMs = System.currentTimeMillis();
-        long computedAgeMs = Math.max(0L, nowEpochMs - exchangeFeedEpochMs);
-        log.info(
-            "Angel WS tick token={} seq={} price={} rawExchangeTime={} normalizedExchangeTime={} exchangeTs={} receiveTs={} ageMs={} rawPacket={}",
-            token,
-            sequenceNumber,
-            price,
-            exchangeFeedRaw,
-            exchangeFeedEpochMs,
-            exchangeTimestamp,
-            Instant.ofEpochMilli(nowEpochMs).atZone(IST).toLocalDateTime(),
-            computedAgeMs,
-            toHexPreview(data)
-        );
-        return MarketTick.of(
-            "NIFTY",
-            price,
-            exchangeTimestamp,
-            LocalDateTime.now(),
-            MarketDataTransport.WEBSOCKET,
-            sequenceNumber,
-            exchangeFeedRaw
-        );
-    }
-
-    private void awaitFirstValidTick() {
-        try {
-            boolean received = firstValidTickLatch.await(properties.getInfra().getFeed().getStartupValidTickTimeoutMs(), TimeUnit.MILLISECONDS);
-            if (!received) {
-                marketDataStateService.markHalted("FIRST_VALID_TICK_TIMEOUT", MarketDataTransport.WEBSOCKET);
-                throw new IllegalStateException("FIRST_VALID_TICK_TIMEOUT");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            marketDataStateService.markHalted("FIRST_VALID_TICK_INTERRUPTED", MarketDataTransport.WEBSOCKET);
-            throw new IllegalStateException("FIRST_VALID_TICK_INTERRUPTED", e);
+            return MarketTick.of(
+                "NIFTY",
+                price,
+                exchangeTimestamp,
+                receivedAt,
+                MarketDataTransport.WEBSOCKET,
+                sequenceNumber,
+                exchangeFeedRaw
+            );
+        } catch (MarketDataException e) {
+            int failures = parseFailureCounter.incrementAndGet();
+            marketDataStateService.recordParseFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
+            log.error("ANGEL_WS_PARSE_FAILURE count={} reason={} rawPacket={}", failures, e.getMessage(), rawPacket, e);
+            throw e;
+        } catch (RuntimeException e) {
+            int failures = parseFailureCounter.incrementAndGet();
+            marketDataStateService.recordParseFailure("ANGEL_WS_PARSE_FAILURE", MarketDataTransport.WEBSOCKET);
+            log.error("ANGEL_WS_PARSE_FAILURE count={} reason={} rawPacket={}", failures, e.getMessage(), rawPacket, e);
+            throw new MarketDataException("ANGEL_WS_PARSE_FAILURE");
         }
     }
 
@@ -272,14 +326,14 @@ public class AngelTickStreamClient {
 
     private long normalizeExchangeFeedEpochMs(long rawValue) {
         if (rawValue <= 0L) {
-            return rawValue;
+            throw new MarketDataException("INVALID_EXCHANGE_TIMESTAMP");
         }
-        if (rawValue < EPOCH_MILLIS_THRESHOLD) {
-            long normalized = rawValue * 1000L;
-            log.warn("Angel websocket exchange time looked like seconds, normalizing {} -> {}", rawValue, normalized);
-            return normalized;
+        long epochMillis = rawValue < EPOCH_SECONDS_THRESHOLD ? rawValue * 1000L : rawValue;
+        Instant instant = Instant.ofEpochMilli(epochMillis);
+        if (instant.atZone(ZoneOffset.UTC).getYear() < MIN_VALID_YEAR) {
+            throw new MarketDataException("INVALID_EXCHANGE_TIMESTAMP");
         }
-        return rawValue;
+        return epochMillis;
     }
 
     private String toHexPreview(ByteBuffer data) {
@@ -291,7 +345,7 @@ public class AngelTickStreamClient {
     }
 
     private void scheduleReconnect() {
-        if (!reconnectScheduled.compareAndSet(false, true)) {
+        if (properties.isPaperMode() || !reconnectScheduled.compareAndSet(false, true)) {
             return;
         }
         executor.schedule(() -> {
@@ -318,7 +372,7 @@ public class AngelTickStreamClient {
             } catch (Exception e) {
                 marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
                 candleAggregator.markUnstable();
-                log.warn("Angel websocket tick rejected: {}", e.getMessage());
+                log.error("Angel websocket tick rejected reason={} rawPacket={}", e.getMessage(), toHexPreview(data), e);
             }
             webSocket.request(1);
             return null;

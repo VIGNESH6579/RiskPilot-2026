@@ -27,7 +27,7 @@ public class HealthController {
     public ResponseEntity<Map<String, Object>> getHealthState() {
         Map<String, Object> healthStatus = new HashMap<>();
         var snapshot = marketDataStateService.snapshot();
-        boolean healthy = snapshot.connected() && snapshot.subscribed() && !snapshot.feedBlocked() && !snapshot.halted() && heartbeatMonitor.isHealthy();
+        boolean healthy = snapshot.connected() && snapshot.subscribed() && snapshot.ready() && !snapshot.feedBlocked() && !snapshot.halted() && heartbeatMonitor.isHealthy();
         
         healthStatus.put("status", healthy ? "healthy" : "unhealthy");
         healthStatus.put("timestamp", Instant.now());
@@ -39,6 +39,8 @@ public class HealthController {
         healthStatus.put("feedBlockReason", snapshot.blockReason());
         healthStatus.put("halted", snapshot.halted());
         healthStatus.put("consecutiveRejectedTicks", snapshot.consecutiveRejectedTicks());
+        healthStatus.put("parseFailureCount", snapshot.parseFailureCount());
+        healthStatus.put("ready", snapshot.ready());
         healthStatus.put("transport", snapshot.transport() != null ? snapshot.transport().name() : null);
         healthStatus.put("sourceAgeMs", snapshot.lastTick() != null ? snapshot.lastTick().sourceAgeMs() : null);
         healthStatus.put("lastFreshTickAt", snapshot.lastAcceptedAt());
@@ -58,7 +60,7 @@ public class HealthController {
         Map<String, Object> details = new HashMap<>();
         var snapshot = marketDataStateService.snapshot();
         
-        details.put("status", heartbeatMonitor.isHealthy() && !snapshot.feedBlocked() && !snapshot.halted() ? "operational" : "degraded");
+        details.put("status", heartbeatMonitor.isHealthy() && snapshot.ready() && !snapshot.feedBlocked() && !snapshot.halted() ? "operational" : "degraded");
         details.put("uptime", "N/A");
         details.put("angelOneConnection", snapshot.connected());
         details.put("angelOneAuthenticated", angelAuthService.getJwtToken() != null);
@@ -67,6 +69,8 @@ public class HealthController {
         details.put("webSocketConnected", snapshot.connected());
         details.put("halted", snapshot.halted());
         details.put("consecutiveRejectedTicks", snapshot.consecutiveRejectedTicks());
+        details.put("parseFailureCount", snapshot.parseFailureCount());
+        details.put("ready", snapshot.ready());
         details.put("transport", snapshot.transport() != null ? snapshot.transport().name() : null);
         details.put("sourceAgeMs", snapshot.lastTick() != null ? snapshot.lastTick().sourceAgeMs() : null);
         details.put("lastFreshTickAt", snapshot.lastAcceptedAt());

@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -39,8 +39,10 @@ public class EngineController {
         health.put("sourceAgeMs", marketData.lastTick() != null ? marketData.lastTick().sourceAgeMs() : null);
         health.put("halted", marketData.halted());
         health.put("consecutiveRejectedTicks", marketData.consecutiveRejectedTicks());
+        health.put("parseFailureCount", marketData.parseFailureCount());
+        health.put("ready", marketData.ready());
         health.put("marketOpen", marketSessionService.isMarketOpen());
-        health.put("timestamp", LocalDateTime.now().toString());
+        health.put("timestamp", Instant.now().toString());
         return health;
     }
 
@@ -54,8 +56,10 @@ public class EngineController {
         state.put("sourceAgeMs", marketData.lastTick() != null ? marketData.lastTick().sourceAgeMs() : null);
         state.put("halted", marketData.halted());
         state.put("consecutiveRejectedTicks", marketData.consecutiveRejectedTicks());
+        state.put("parseFailureCount", marketData.parseFailureCount());
+        state.put("ready", marketData.ready());
         state.put("marketOpen", marketSessionService.isMarketOpen());
-        state.put("timestamp", LocalDateTime.now().toString());
+        state.put("timestamp", Instant.now().toString());
         return state;
     }
 
@@ -63,7 +67,7 @@ public class EngineController {
     public Map<String, Object> getCandleHistory() {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("candleHistorySize", candleAggregator.getValidHistory().size());
-        response.put("timestamp", LocalDateTime.now().toString());
+        response.put("timestamp", Instant.now().toString());
         return response;
     }
 

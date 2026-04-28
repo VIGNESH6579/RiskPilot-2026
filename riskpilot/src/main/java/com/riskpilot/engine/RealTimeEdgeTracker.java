@@ -173,6 +173,9 @@ public class RealTimeEdgeTracker {
      * Check for immediate kill conditions
      */
     private void checkImmediateKillConditions(EdgeMetrics metrics) {
+        if (metrics.getWindowSize() < 5) {
+            return;
+        }
         List<String> killReasons = new ArrayList<>();
 
         // Immediate failures

@@ -173,10 +173,6 @@
         <div id="source" class="value small muted">--</div>
       </div>
       <div class="card">
-        <div class="label">India VIX</div>
-        <div id="vix" class="value">--</div>
-      </div>
-      <div class="card">
         <div class="label">Session Active</div>
         <div id="session" class="value small">--</div>
       </div>
@@ -230,7 +226,6 @@
     const spotEl = document.getElementById("spot");
     const expiryEl = document.getElementById("expiry");
     const sourceEl = document.getElementById("source");
-    const vixEl = document.getElementById("vix");
     const sessionEl = document.getElementById("session");
     const feedEl = document.getElementById("feed");
     const tradesEl = document.getElementById("trades");
@@ -325,8 +320,6 @@
         expiryEl.textContent = health.expiryDate || health.expiry || "--";
         sourceEl.textContent = health.source || health.optionChainSource || "--";
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
-        vixEl.textContent = health.vix !== null && health.vix !== undefined ? formatNum(health.vix) : "--";
-
         applySessionState(state);
 
         if (Array.isArray(history) && history.length > 0) {

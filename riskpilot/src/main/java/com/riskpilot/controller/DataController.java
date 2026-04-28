@@ -34,9 +34,11 @@ public class DataController {
         payload.put("spot", snapshot.lastTick() != null && snapshot.lastTick().price() > 0.0 ? snapshot.lastTick().price() : null);
         payload.put("sourceAgeMs", snapshot.lastTick() != null ? snapshot.lastTick().sourceAgeMs() : null);
         payload.put("lastFreshTickAt", snapshot.lastAcceptedAt());
-        payload.put("healthy", snapshot.connected() && snapshot.subscribed() && !snapshot.feedBlocked() && snapshot.lastTick() != null);
+        payload.put("healthy", snapshot.connected() && snapshot.subscribed() && snapshot.ready() && !snapshot.feedBlocked() && snapshot.lastTick() != null);
         payload.put("feedBlocked", snapshot.feedBlocked());
         payload.put("feedBlockReason", snapshot.blockReason());
+        payload.put("ready", snapshot.ready());
+        payload.put("parseFailureCount", snapshot.parseFailureCount());
         payload.put("timestamp", Instant.now().toString());
         return payload;
     }

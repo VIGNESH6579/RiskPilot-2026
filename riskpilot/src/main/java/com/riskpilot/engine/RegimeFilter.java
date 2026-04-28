@@ -40,16 +40,16 @@ public class RegimeFilter {
         private final double high;
         private final double low;
         private final double close;
-        private final double volume;
+        private final double tickCount;
         private final LocalDateTime timestamp;
         private final double atr;
 
-        public CandleData(double open, double high, double low, double close, double volume, LocalDateTime timestamp, double atr) {
+        public CandleData(double open, double high, double low, double close, double tickCount, LocalDateTime timestamp, double atr) {
             this.open = open;
             this.high = high;
             this.low = low;
             this.close = close;
-            this.volume = volume;
+            this.tickCount = tickCount;
             this.timestamp = timestamp;
             this.atr = atr;
         }
@@ -103,11 +103,11 @@ public class RegimeFilter {
         double high,
         double low,
         double close,
-        double volume,
+        double tickCount,
         LocalDateTime timestamp,
         double atr
     ) {
-        CandleData candle = new CandleData(open, high, low, close, volume, timestamp, atr);
+        CandleData candle = new CandleData(open, high, low, close, tickCount, timestamp, atr);
         candleHistory.offer(candle);
         if (candleHistory.size() > 20) {
             candleHistory.poll();

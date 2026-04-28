@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS trading_sessions (
     id BIGSERIAL PRIMARY KEY,
-    session_date DATE NOT NULL UNIQUE,
+    session_date DATE NOT NULL,
     symbol VARCHAR(20) NOT NULL,
     daily_open NUMERIC(10, 2) NOT NULL,
     or_high NUMERIC(10, 2) NOT NULL,
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS trading_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_symbol_date ON trading_sessions (symbol, session_date);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_sessions_date_symbol ON trading_sessions (session_date, symbol);
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON trading_sessions (session_active);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON trading_sessions (session_date);
 
@@ -97,7 +98,7 @@ CREATE TABLE IF NOT EXISTS candles (
     high_price NUMERIC(10, 2) NOT NULL,
     low_price NUMERIC(10, 2) NOT NULL,
     close_price NUMERIC(10, 2) NOT NULL,
-    volume BIGINT NOT NULL,
+    tick_count BIGINT NOT NULL,
     price_range NUMERIC(10, 2) NOT NULL,
     timeframe INTEGER NOT NULL,
     is_bullish BOOLEAN NOT NULL DEFAULT FALSE,

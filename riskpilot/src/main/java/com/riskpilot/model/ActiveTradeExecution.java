@@ -100,7 +100,7 @@ public record ActiveTradeExecution(
 
         double exitSize = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
         double pnl = pnlPoints(trade, currentPrice) * exitSize;
-        return new TradeExit(true, pnl, "STOP_LOSS", currentPrice);
+        return new TradeExit(true, pnl, "STOP_LOSS", currentPrice, "REAL");
     }
 
     public static ActiveTradeExecution updateExcursions(ActiveTradeExecution trade, double price) {

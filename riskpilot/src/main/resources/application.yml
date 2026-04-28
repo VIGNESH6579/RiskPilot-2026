@@ -96,6 +96,11 @@ riskpilot:
       panic-exit-on-failure: true
       timeout-sec: 30
       max-silence-ms: 3000
+    paper:
+      enabled: true
+      tick-interval-ms: ${PAPER_TICK_INTERVAL_MS:1000}
+      starting-price: ${PAPER_STARTING_PRICE:24000}
+      max-step-points: ${PAPER_MAX_STEP_POINTS:8}
   notification:
     ntfy-enabled: ${NTFY_ENABLED:false}
     ntfy-topic: ${NTFY_TOPIC:riskpilot_shadow_alerts}
