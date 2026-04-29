@@ -22,12 +22,12 @@ public class LiveMetricsLogger {
     private static final Logger log = LoggerFactory.getLogger(LiveMetricsLogger.class);
     private static final String CSV_HEADER =
         "signalTime,executionTime,direction,latencySec,entryLatencyMs,exitLatencyMs,expectedEntry,actualEntry,entrySlippage," +
-        "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR," +
+        "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR,quantity,remainingQuantity,recovery," +
         "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitType,exitTime";
 
     private final TradeLogRepository tradeLogRepository;
 
-    public synchronized void logReject(
+    public synchronized TradeLog logReject(
         LocalDateTime signalTime,
         String rejectReason,
         Regime regime,
@@ -37,10 +37,10 @@ public class LiveMetricsLogger {
         LocalDateTime effectiveSignalTime = signalTime != null ? signalTime : LocalDateTime.now();
         ensureHeader();
         appendRow(String.format(
-            "%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
+            "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
             effectiveSignalTime,
             "",
-            0,
+            "NA",
             "",
             "",
             "",
@@ -54,6 +54,9 @@ public class LiveMetricsLogger {
             "",
             "",
             "",
+            "",
+            "",
+            false,
             escapeCsv(rejectReason),
             regime,
             timePhase,
@@ -62,11 +65,15 @@ public class LiveMetricsLogger {
             ""
         ));
 
-        persistLog(TradeLog.builder()
+        return persistLog(TradeLog.builder()
             .signalTime(effectiveSignalTime)
             .latencySec(0.0)
             .entryLatencyMs(0L)
             .exitLatencyMs(0L)
+            .direction("NA")
+            .quantity(0)
+            .remainingQuantity(0)
+            .recovery(false)
             .gateDecision("REJECT")
             .rejectReason(rejectReason)
             .regime(regime != null ? regime.name() : null)
@@ -75,9 +82,10 @@ public class LiveMetricsLogger {
             .build());
     }
 
-    public synchronized void logShadowExecution(
+    public synchronized TradeLog logShadowExecution(
         LocalDateTime signalTime,
         LocalDateTime executionTime,
+        String direction,
         long entryLatencyMs,
         long exitLatencyMs,
         double expectedEntryPrice,
@@ -89,6 +97,8 @@ public class LiveMetricsLogger {
         double mfe,
         double mae,
         double realizedR,
+        int quantity,
+        int remainingQuantity,
         String gateDecision,
         String rejectReason,
         Regime regime,
@@ -96,6 +106,7 @@ public class LiveMetricsLogger {
         boolean feedStable,
         String exitReason,
         String exitType,
+        boolean recovery,
         LocalDateTime exitTime
     ) {
         LocalDateTime effectiveSignalTime = signalTime != null ? signalTime : LocalDateTime.now();
@@ -103,12 +114,11 @@ public class LiveMetricsLogger {
         LocalDateTime effectiveExitTime = exitTime != null ? exitTime : effectiveExecutionTime;
         ensureHeader();
         double latencySec = entryLatencyMs / 1000.0;
-        double entrySlippage = actualEntryPrice - expectedEntryPrice;
-        double exitSlippage = actualExitPrice - expectedExitPrice;
-        String direction = actualEntryPrice > expectedEntryPrice ? "LONG" : "SHORT";
+        double entrySlippage = calculateEntrySlippage(direction, expectedEntryPrice, actualEntryPrice);
+        double exitSlippage = calculateExitSlippage(direction, expectedExitPrice, actualExitPrice);
 
         appendRow(String.format(
-            "%s,%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s,%s",
+            "%s,%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%d,%d,%b,%s,%s,%s,%s,%b,%s,%s,%s",
             effectiveSignalTime,
             effectiveExecutionTime,
             direction,
@@ -126,6 +136,9 @@ public class LiveMetricsLogger {
             mfe,
             mae,
             realizedR,
+            quantity,
+            remainingQuantity,
+            recovery,
             gateDecision,
             escapeCsv(rejectReason),
             regime,
@@ -136,7 +149,7 @@ public class LiveMetricsLogger {
             effectiveExitTime
         ));
 
-        persistLog(TradeLog.builder()
+        return persistLog(TradeLog.builder()
             .signalTime(effectiveSignalTime)
             .executionTime(effectiveExecutionTime)
             .latencySec(latencySec)
@@ -154,6 +167,9 @@ public class LiveMetricsLogger {
             .mae(mae)
             .realizedR(realizedR)
             .direction(direction)
+            .quantity(quantity)
+            .remainingQuantity(remainingQuantity)
+            .recovery(recovery)
             .gateDecision(gateDecision)
             .rejectReason(rejectReason)
             .regime(regime != null ? regime.name() : null)
@@ -165,11 +181,26 @@ public class LiveMetricsLogger {
             .build());
     }
 
-    private void persistLog(TradeLog tradeLog) {
+    private double calculateEntrySlippage(String direction, double expectedEntryPrice, double actualEntryPrice) {
+        if ("SHORT".equalsIgnoreCase(direction)) {
+            return expectedEntryPrice - actualEntryPrice;
+        }
+        return actualEntryPrice - expectedEntryPrice;
+    }
+
+    private double calculateExitSlippage(String direction, double expectedExitPrice, double actualExitPrice) {
+        if ("SHORT".equalsIgnoreCase(direction)) {
+            return actualExitPrice - expectedExitPrice;
+        }
+        return expectedExitPrice - actualExitPrice;
+    }
+
+    private TradeLog persistLog(TradeLog tradeLog) {
         try {
-            tradeLogRepository.save(tradeLog);
+            return tradeLogRepository.save(tradeLog);
         } catch (Exception e) {
             log.error("CRITICAL: Trade log persistence failed", e);
+            return tradeLog;
         }
     }
 

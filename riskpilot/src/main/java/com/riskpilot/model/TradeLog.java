@@ -41,6 +41,9 @@ public class TradeLog {
     private Double mae;
     private Double realizedR;
     private String direction;
+    private Integer quantity;
+    private Integer remainingQuantity;
+    private Boolean recovery;
     private String gateDecision;
     private String rejectReason;
     private String regime;

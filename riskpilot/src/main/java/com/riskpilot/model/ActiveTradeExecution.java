@@ -1,6 +1,7 @@
 package com.riskpilot.model;
 
 public record ActiveTradeExecution(
+    String direction,
     double entryPrice,
     double stopLoss,
     double tp1Level,
@@ -36,6 +37,7 @@ public record ActiveTradeExecution(
         double pnl = pnlPoints(trade, currentPrice) * tp1Size;
 
         return new ActiveTradeExecution(
+            trade.direction(),
             trade.entryPrice(),
             trade.entryPrice(),
             trade.tp1Level(),
@@ -70,6 +72,7 @@ public record ActiveTradeExecution(
             : Math.max(trade.trailingSL(), candidateTrailingSl);
 
         return new ActiveTradeExecution(
+            trade.direction(),
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
@@ -109,6 +112,7 @@ public record ActiveTradeExecution(
         double risk = trade.initialRisk() <= 0.0 ? 1.0 : trade.initialRisk();
 
         return new ActiveTradeExecution(
+            trade.direction(),
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
@@ -130,7 +134,7 @@ public record ActiveTradeExecution(
     }
 
     private static boolean isShort(ActiveTradeExecution trade) {
-        return trade.tp1Level() < trade.entryPrice();
+        return "SHORT".equalsIgnoreCase(trade.direction());
     }
 
     private static double pnlPoints(ActiveTradeExecution trade, double price) {

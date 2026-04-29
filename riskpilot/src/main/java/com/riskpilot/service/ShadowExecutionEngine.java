@@ -19,6 +19,8 @@ import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
+import com.riskpilot.model.TradeLog;
+import com.riskpilot.model.TradeView;
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.repository.TradeRepository;
 import jakarta.annotation.PreDestroy;
@@ -38,8 +40,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
@@ -68,6 +73,9 @@ public class ShadowExecutionEngine {
     private final MarketSessionService marketSessionService;
     private final ReentrantLock tradeStateLock = new ReentrantLock();
     private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor();
+    private final ConcurrentHashMap<String, AtomicInteger> rejectReasonCounts = new ConcurrentHashMap<>();
+    private final AtomicLong signalOpportunityCount = new AtomicLong();
+    private final AtomicLong rejectedSignalCount = new AtomicLong();
 
     private String lastTriggeredCandleTime = "";
     private LocalDateTime activeSignalTime;
@@ -200,6 +208,9 @@ public class ShadowExecutionEngine {
         volatilityNormalizer.reset();
         regimeFilter.reset();
         edgeTracker.reset();
+        rejectReasonCounts.clear();
+        signalOpportunityCount.set(0L);
+        rejectedSignalCount.set(0L);
         lastTriggeredCandleTime = "";
         activeSignalTime = null;
         activeExecutionTime = null;
@@ -233,6 +244,7 @@ public class ShadowExecutionEngine {
         if (candleId.equals(lastTriggeredCandleTime)) {
             return;
         }
+        signalOpportunityCount.incrementAndGet();
 
         if (!strictValidationService.canExecuteNewTrade()) {
             logReject(state, "STRICT_LIMIT_BLOCK");
@@ -375,6 +387,7 @@ public class ShadowExecutionEngine {
         double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
+            normalizeDirection(signal.getDirection()),
             actualEntryPrice,
             signal.getStopLoss(),
             tp1Level,
@@ -426,8 +439,10 @@ public class ShadowExecutionEngine {
         double realizedR = exit.pnlPoints() / riskPoints;
         double finalRealizedPnL = trade.realizedPnL() + exit.pnlPoints();
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
-        double entrySlip = activeSignalTime != null ? Math.abs(trade.entryPrice() - activeExpectedEntry) : 0.0;
-        double exitSlip = Math.abs(exit.exitPrice() - expectedExit);
+        boolean recovery = activeSignalTime == null || activeExecutionTime == null;
+        String effectiveExitType = recovery ? "RECOVERED" : exit.exitType();
+        double entrySlip = calculateEntrySlippage(trade.direction(), activeExpectedEntry, trade.entryPrice());
+        double exitSlip = calculateExitSlippage(trade.direction(), expectedExit, exit.exitPrice());
         long exitLatencyMs = exitTick != null ? exitTick.sourceAgeMs() : config.getInfra().getHeartbeat().getMaxSilenceMs();
 
         try {
@@ -443,7 +458,7 @@ public class ShadowExecutionEngine {
 
         LocalDateTime effectiveSignalTime = activeSignalTime != null ? activeSignalTime : LocalDateTime.now();
         LocalDateTime effectiveExecutionTime = activeExecutionTime != null ? activeExecutionTime : effectiveSignalTime;
-        if (activeSignalTime == null || activeExecutionTime == null) {
+        if (recovery) {
             log.warn(
                 "STATE_RECOVERY_MODE activeSignalTime={} activeExecutionTime={} exitReason={}",
                 activeSignalTime,
@@ -452,9 +467,10 @@ public class ShadowExecutionEngine {
             );
         }
 
-        liveMetricsLogger.logShadowExecution(
+        TradeLog executionLog = liveMetricsLogger.logShadowExecution(
             effectiveSignalTime,
             effectiveExecutionTime,
+            trade.direction(),
             activeEntryLatencyMs,
             exitLatencyMs,
             activeExpectedEntry,
@@ -466,17 +482,20 @@ public class ShadowExecutionEngine {
             trade.mfe(),
             trade.mae(),
             realizedR,
+            trade.quantity(),
+            trade.remainingQuantity(),
             "ALLOW",
             "",
             state.regime(),
             state.timePhase(),
             state.feedStable(),
             exit.reason(),
-            exit.exitType(),
+            effectiveExitType,
+            recovery,
             LocalDateTime.now()
         );
 
-        broadcastTradeData(effectiveSignalTime, effectiveExecutionTime, trade, exit, realizedR, activeEntryLatencyMs, exitLatencyMs);
+        broadcastTradeData(TradeView.fromTradeLog(executionLog));
 
         edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(), entrySlip, exitSlip);
         RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
@@ -497,7 +516,7 @@ public class ShadowExecutionEngine {
         );
         strictValidationService.recordTradeExecution(realizedR);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
-        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip);
+        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip, effectiveExitType);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -545,6 +564,8 @@ public class ShadowExecutionEngine {
     }
 
     private void logReject(TradingSessionSnapshot state, String reason) {
+        rejectedSignalCount.incrementAndGet();
+        rejectReasonCounts.computeIfAbsent(reason == null ? "UNKNOWN" : reason, ignored -> new AtomicInteger()).incrementAndGet();
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
             current.regime(),
@@ -590,14 +611,17 @@ public class ShadowExecutionEngine {
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
         MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
         boolean marketOpen = marketSessionService.isMarketOpen();
-        String priceSource = marketOpen ? "LIVE" : "MARKET_CLOSED";
+        String priceSource = marketDataStateService.resolvePriceSource(marketOpen, config.getInfra().getHeartbeat().getMaxSilenceMs());
         payload.put("transport", marketDataSnapshot.transport() != null ? marketDataSnapshot.transport().name() : null);
         payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
         payload.put("priceSource", priceSource);
+        payload.put("sessionActive", marketOpen && state.sessionActive());
         payload.put("lastPrice", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().price() : null);
         payload.put("sourceAgeMs", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().sourceAgeMs() : null);
         payload.put("feedBlocked", marketDataSnapshot.feedBlocked());
         payload.put("feedBlockReason", marketDataSnapshot.blockReason());
+        payload.put("rejectReasonCounts", getTopRejectReasons());
+        payload.put("operationalStatus", isOperationallyBlocked() ? "OPERATIONALLY_BLOCKED" : "ACTIVE");
         RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
         payload.put("regimeFilterScore", regimeMetrics != null ? regimeMetrics.getRegimeScore() : null);
         payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
@@ -606,38 +630,8 @@ public class ShadowExecutionEngine {
         broadcastExecutor.execute(() -> webSocketService.sendSessionState(payload));
     }
 
-    private void broadcastTradeData(
-        LocalDateTime signalTime,
-        LocalDateTime executionTime,
-        ActiveTradeExecution trade,
-        TradeExit exit,
-        double realizedR,
-        long entryLatencyMs,
-        long exitLatencyMs
-    ) {
-        Map<String, Object> tradeData = new LinkedHashMap<>();
-        tradeData.put("id", signalTime + "_" + trade.entryPrice());
-        tradeData.put("signalTime", signalTime.toString());
-        tradeData.put("executionTime", executionTime.toString());
-        tradeData.put("direction", trade.tp1Level() < trade.entryPrice() ? "SHORT" : "LONG");
-        tradeData.put("expectedEntry", activeExpectedEntry);
-        tradeData.put("actualEntry", trade.entryPrice());
-        tradeData.put("quantity", trade.quantity());
-        tradeData.put("remainingQuantity", trade.remainingQuantity());
-        tradeData.put("latencySec", entryLatencyMs / 1000.0);
-        tradeData.put("entryLatencyMs", entryLatencyMs);
-        tradeData.put("exitLatencyMs", exitLatencyMs);
-        tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
-        tradeData.put("mfe", trade.mfe());
-        tradeData.put("mae", trade.mae());
-        tradeData.put("tp1Hit", trade.tp1Hit());
-        tradeData.put("runnerCaptured", trade.runnerActive());
-        tradeData.put("realizedR", realizedR);
-        tradeData.put("exitReason", exit.reason());
-        tradeData.put("exitType", exit.exitType());
-        tradeData.put("exitTime", LocalDateTime.now().toString());
-
-        broadcastExecutor.execute(() -> webSocketService.sendTradeExecution(tradeData));
+    private void broadcastTradeData(TradeView tradeView) {
+        broadcastExecutor.execute(() -> webSocketService.sendTradeExecution(tradeView.toMap()));
     }
 
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason, String exitType) {
@@ -688,7 +682,7 @@ public class ShadowExecutionEngine {
             cancelPersistedActiveTrade("STALE_RECOVERY");
             Trade persistedTrade = Trade.builder()
                 .symbol(resolveSignalSymbol(signal))
-                .direction(resolveTradeDirection(trade))
+                .direction(trade.direction())
                 .entryPrice(decimal(trade.entryPrice()))
                 .expectedEntryPrice(decimal(signal.getEntry()))
                 .stopLoss(decimal(trade.stopLoss()))
@@ -705,7 +699,7 @@ public class ShadowExecutionEngine {
                 .tailHalfLocked(trade.tailHalfLocked())
                 .trailingStopLoss(decimal(trade.trailingSL()))
                 .entryLatencyMs(entryTick.sourceAgeMs())
-                .entrySlippage(decimal(Math.abs(trade.entryPrice() - signal.getEntry())))
+                .entrySlippage(decimal(calculateEntrySlippage(trade.direction(), signal.getEntry(), trade.entryPrice())))
                 .status("ACTIVE")
                 .exitReason("OPEN")
                 .exitType("REAL")
@@ -754,7 +748,8 @@ public class ShadowExecutionEngine {
         double finalRealizedPnL,
         double expectedExit,
         long exitLatencyMs,
-        double exitSlippage
+        double exitSlippage,
+        String effectiveExitType
     ) {
         try {
             Optional<Trade> persistedTrade = findPersistedActiveTrade();
@@ -780,7 +775,7 @@ public class ShadowExecutionEngine {
             entity.setTrailingStopLoss(decimal(trade.trailingSL()));
             entity.setStatus("CLOSED");
             entity.setExitReason(exit.reason());
-            entity.setExitType(exit.exitType());
+            entity.setExitType(effectiveExitType);
             entity.setExitTime(LocalDateTime.now());
             tradeRepository.save(entity);
         } catch (Exception e) {
@@ -826,7 +821,7 @@ public class ShadowExecutionEngine {
     }
 
     private String resolveTradeDirection(ActiveTradeExecution trade) {
-        return trade.tp1Level() < trade.entryPrice() ? "SHORT" : "LONG";
+        return trade.direction();
     }
 
     private double calculateUnrealizedPnL(ActiveTradeExecution trade, double currentPrice) {
@@ -855,5 +850,38 @@ public class ShadowExecutionEngine {
 
     private LocalDateTime toLocalDateTime(Instant instant) {
         return marketSessionService.toMarketTime(instant).toLocalDateTime();
+    }
+
+    public Map<String, Integer> getTopRejectReasons() {
+        return rejectReasonCounts.entrySet().stream()
+            .sorted((left, right) -> Integer.compare(right.getValue().get(), left.getValue().get()))
+            .limit(5)
+            .collect(LinkedHashMap::new, (map, entry) -> map.put(entry.getKey(), entry.getValue().get()), LinkedHashMap::putAll);
+    }
+
+    public boolean isOperationallyBlocked() {
+        long opportunities = signalOpportunityCount.get();
+        if (opportunities == 0L) {
+            return false;
+        }
+        return rejectedSignalCount.get() * 100L > opportunities * 90L;
+    }
+
+    private String normalizeDirection(String direction) {
+        return "SHORT".equalsIgnoreCase(direction) ? "SHORT" : "LONG";
+    }
+
+    private double calculateEntrySlippage(String direction, double expectedEntry, double actualEntry) {
+        if ("SHORT".equalsIgnoreCase(direction)) {
+            return expectedEntry - actualEntry;
+        }
+        return actualEntry - expectedEntry;
+    }
+
+    private double calculateExitSlippage(String direction, double expectedExit, double actualExit) {
+        if ("SHORT".equalsIgnoreCase(direction)) {
+            return actualExit - expectedExit;
+        }
+        return expectedExit - actualExit;
     }
 }
