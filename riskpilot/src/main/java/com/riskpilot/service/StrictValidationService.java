@@ -41,8 +41,8 @@ public class StrictValidationService {
         if (!properties.isLiveMode() && !properties.isShadowMode()) {
             throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE or SHADOW");
         }
-        if (properties.getRisk().getMaxTradesPerDay() > 2) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
+        if (properties.getRisk().getMaxTradesPerDay() < 1) {
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day must be at least 1");
         }
         if (properties.getExecution().getSlippage().getEntryMax() > 3.0) {
             throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high");

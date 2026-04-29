@@ -63,6 +63,8 @@ public class RiskPilotProperties {
         private String symbol = "NIFTY";
         private int lotSize = 75;
         private double pointValue = 1.0;
+        // NIFTY weekly expiry day. Adjust here when the exchange schedule changes.
+        private String expiryDayOfWeek = "THURSDAY";
     }
 
     @Data
@@ -116,7 +118,9 @@ public class RiskPilotProperties {
 
     @Data
     public static class Risk {
-        private int maxTradesPerDay = 2;
+        // No artificial cap on trades per day — the strategy/risk gate decides.
+        // Kept as a sane upper bound to prevent runaway loops; configurable via env.
+        private int maxTradesPerDay = 100;
         private boolean oneTradeAtATime = true;
         private double maxDailyLossR = 1.5;
         private int maxConsecutiveLosses = 3;

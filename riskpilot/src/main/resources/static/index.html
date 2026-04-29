@@ -161,8 +161,9 @@
 
     <div class="grid">
       <div class="card">
-        <div class="label">NIFTY Spot</div>
+        <div class="label">NIFTY Spot <span id="spotTag" class="muted small"></span></div>
         <div id="spot" class="value">--</div>
+        <div id="spotMeta" class="value small muted"></div>
       </div>
       <div class="card">
         <div class="label">Expiry Date</div>
@@ -188,6 +189,11 @@
         <div class="label">Last Reject</div>
         <div id="reject" class="value small muted">--</div>
       </div>
+    </div>
+
+    <div id="activeTradePanel" class="card" style="display:none; margin-bottom:18px;">
+      <div class="label">Active Trade Execution</div>
+      <div id="activeTradeBody" class="value small"></div>
     </div>
 
     <div class="table-wrap">
@@ -224,12 +230,16 @@
     const clockEl = document.getElementById("clock");
     const rowsEl = document.getElementById("rows");
     const spotEl = document.getElementById("spot");
+    const spotTagEl = document.getElementById("spotTag");
+    const spotMetaEl = document.getElementById("spotMeta");
     const expiryEl = document.getElementById("expiry");
     const sourceEl = document.getElementById("source");
     const sessionEl = document.getElementById("session");
     const feedEl = document.getElementById("feed");
     const tradesEl = document.getElementById("trades");
     const rejectEl = document.getElementById("reject");
+    const activeTradePanel = document.getElementById("activeTradePanel");
+    const activeTradeBody = document.getElementById("activeTradeBody");
 
     function formatNum(value, digits = 2) {
       return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
@@ -304,6 +314,63 @@
       renderTrades();
     }
 
+    function renderSpot(health) {
+      if (!health) {
+        spotEl.textContent = "--";
+        spotTagEl.textContent = "";
+        spotMetaEl.textContent = "";
+        return;
+      }
+      const live = typeof health.spot === "number" && Number.isFinite(health.spot);
+      const lastClose = typeof health.lastPrice === "number" && Number.isFinite(health.lastPrice);
+      if (live) {
+        spotEl.textContent = formatNum(health.spot);
+        spotTagEl.textContent = "(LIVE)";
+        spotTagEl.className = "small good";
+        spotMetaEl.textContent = "";
+      } else if (lastClose) {
+        spotEl.textContent = formatNum(health.lastPrice);
+        spotTagEl.textContent = "(last close)";
+        spotTagEl.className = "small muted";
+        const at = health.lastPriceAt
+          ? new Date(health.lastPriceAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+          : null;
+        spotMetaEl.textContent = at ? "as of " + at : (health.marketStatus === "CLOSED" ? "Market closed" : "");
+      } else {
+        spotEl.textContent = "--";
+        spotTagEl.textContent = health.marketStatus === "CLOSED" ? "(market closed)" : "";
+        spotTagEl.className = "small muted";
+        spotMetaEl.textContent = "";
+      }
+    }
+
+    function renderActiveTrade(trade) {
+      if (!trade || !trade.active) {
+        activeTradePanel.style.display = "none";
+        activeTradeBody.innerHTML = "";
+        return;
+      }
+      const dirClass = trade.direction === "LONG" ? "good" : "bad";
+      const pnl = typeof trade.unrealizedPnl === "number" ? trade.unrealizedPnl : trade.realizedPnl;
+      const pnlClass = (pnl ?? 0) >= 0 ? "good" : "bad";
+      activeTradePanel.style.display = "block";
+      activeTradeBody.innerHTML = `
+        <div style="display:flex; flex-wrap:wrap; gap:18px;">
+          <div><span class="muted">Direction:</span> <span class="${dirClass}">${trade.direction || "--"}</span></div>
+          <div><span class="muted">Entry:</span> ${formatNum(trade.entryPrice)}</div>
+          <div><span class="muted">SL:</span> ${formatNum(trade.stopLoss)}</div>
+          <div><span class="muted">Trail SL:</span> ${formatNum(trade.trailingStopLoss)}</div>
+          <div><span class="muted">TP1:</span> ${formatNum(trade.tp1Level)}</div>
+          <div><span class="muted">Lots:</span> ${trade.remainingLots ?? trade.quantityLots ?? "--"} / ${trade.quantityLots ?? "--"}</div>
+          <div><span class="muted">TP1 hit:</span> ${trade.tp1Hit ? "Yes" : "No"}</div>
+          <div><span class="muted">Runner:</span> ${trade.runnerActive ? "Yes" : "No"}</div>
+          <div><span class="muted">MFE:</span> ${formatNum(trade.mfe)}</div>
+          <div><span class="muted">MAE:</span> ${formatNum(trade.mae)}</div>
+          <div><span class="muted">P&amp;L:</span> <span class="${pnlClass}">₹${formatNum(pnl)}</span></div>
+        </div>
+      `;
+    }
+
     async function refreshDashboard() {
       try {
         const [healthResponse, stateResponse, historyResponse] = await Promise.all([
@@ -316,11 +383,12 @@
         const state = await stateResponse.json();
         const history = await historyResponse.json();
 
-        spotEl.textContent = formatNum(health.spot);
+        renderSpot(health);
         expiryEl.textContent = health.expiryDate || health.expiry || "--";
         sourceEl.textContent = health.priceSource || health.source || health.optionChainSource || "--";
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
         applySessionState(state);
+        renderActiveTrade(health.activeTrade);
 
         if (Array.isArray(history) && history.length > 0) {
           tradeRows = history.slice(0, MAX_ROWS).map((row) => ({

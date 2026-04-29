@@ -24,8 +24,12 @@ public class RiskGateEngine {
 
     @PostConstruct
     public void validate() {
-        if (config.getRisk().getMaxTradesPerDay() > 2) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
+        // Daily trade count is no longer artificially capped at 2 — the
+        // strategy + risk gates decide how many setups qualify each day.
+        // The configured maxTradesPerDay still acts as a runtime safety
+        // ceiling and is enforced inside evaluateEntry() below.
+        if (config.getRisk().getMaxTradesPerDay() < 1) {
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day must be at least 1");
         }
         if (config.getExecution().getSlippage().getEntryMax() > 3.0) {
             throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high");

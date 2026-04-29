@@ -76,7 +76,7 @@ riskpilot:
       allow-new-trades: false
       force-exit: true
   risk:
-    max-trades-per-day: ${MAX_TRADES_PER_DAY:2}
+    max-trades-per-day: ${MAX_TRADES_PER_DAY:100}
     one-trade-at-a-time: true
     max-daily-loss-r: 1.5
     max-consecutive-losses: 3
