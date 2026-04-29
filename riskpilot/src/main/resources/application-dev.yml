@@ -26,7 +26,7 @@ logging:
     org.hibernate.SQL: DEBUG
 
 riskpilot:
-  mode: PAPER
+  mode: SHADOW
   enforce-strict-timing: true
   account:
     initial-capital: 500000
@@ -42,9 +42,10 @@ riskpilot:
     force-exit: "15:25"
   infra:
     feed:
+      transport: WEBSOCKET
+      data-source: angelone-live
+      real-time-only: true
       startup-fail-fast: false
-    paper:
-      enabled: true
   risk:
     max-trades-per-day: 2
   execution:

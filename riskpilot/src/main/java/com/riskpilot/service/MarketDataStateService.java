@@ -184,9 +184,6 @@ public class MarketDataStateService {
         if (current.lastTick() == null) {
             return "STALE";
         }
-        if (current.transport() == MarketDataTransport.PAPER) {
-            return "SIMULATED";
-        }
         if (current.lastTick().afterHours() || !current.ready() || !marketOpen) {
             return "MARKET_CLOSED";
         }

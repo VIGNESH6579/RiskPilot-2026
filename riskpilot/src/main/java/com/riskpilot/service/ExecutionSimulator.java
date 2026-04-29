@@ -5,8 +5,16 @@ import com.riskpilot.model.MarketTick;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * Deterministic execution model.
+ *
+ * Latency, spread and slippage are derived from REAL measured inputs (the
+ * observed inter-tick gap from the live Angel One feed and the volatility of
+ * the most recent real candles). No random number generation is performed
+ * anywhere in this class — every value is a pure function of the live market
+ * data and the configured bounds.
+ */
 @Service
 public class ExecutionSimulator {
 
@@ -46,36 +54,53 @@ public class ExecutionSimulator {
         RiskPilotProperties.Execution.Simulation simulation = properties.getExecution().getSimulation();
         long minLatency = entry ? simulation.getEntryLatencyMinMs() : simulation.getExitLatencyMinMs();
         long maxLatency = entry ? simulation.getEntryLatencyMaxMs() : simulation.getExitLatencyMaxMs();
-        long latencyMs = randomLong(minLatency, maxLatency);
-        double spreadPoints = randomDouble(simulation.getSpreadMinPoints(), simulation.getSpreadMaxPoints());
+
+        // Latency = the actual measured inter-tick gap from the live feed,
+        // clamped to the configured operating envelope. No randomness.
+        long observedGap = Math.max(0L, tickGapMs);
+        long latencyMs = clampLong(observedGap, Math.min(minLatency, maxLatency), Math.max(minLatency, maxLatency));
+
+        // Spread = the midpoint of the configured operating range. The Angel
+        // SmartStream LTP feed does not publish bid/ask, so the configured
+        // midpoint is the only honest deterministic estimate available.
+        double spreadPoints = midpoint(simulation.getSpreadMinPoints(), simulation.getSpreadMaxPoints());
+
+        // Slippage = a deterministic function of REAL volatility and the REAL
+        // measured tick speed, clamped to the configured envelope.
         double volatilityComponent = Math.max(0.0, volatilityPoints) * simulation.getVolatilityWeight();
         double tickSpeedFactor = tickGapMs <= 0L
             ? 1.0
             : Math.min(2.0, 1000.0 / Math.max(1.0, tickGapMs));
-        double slippageCeiling = Math.min(
-            simulation.getSlippageMaxPoints(),
-            simulation.getSlippageMinPoints() + volatilityComponent + (tickSpeedFactor * simulation.getTickSpeedWeight())
+        double rawSlippage = simulation.getSlippageMinPoints()
+            + volatilityComponent
+            + (tickSpeedFactor * simulation.getTickSpeedWeight());
+        double slippagePoints = clampDouble(
+            rawSlippage,
+            simulation.getSlippageMinPoints(),
+            simulation.getSlippageMaxPoints()
         );
-        double slippagePoints = randomDouble(simulation.getSlippageMinPoints(), Math.max(simulation.getSlippageMinPoints(), slippageCeiling));
+
         return new ExecutionPlan(signalTime, latencyMs, signalTime.plusMillis(latencyMs), spreadPoints, slippagePoints);
     }
 
-    private long randomLong(long minInclusive, long maxInclusive) {
+    private static long clampLong(long value, long minInclusive, long maxInclusive) {
         long min = Math.min(minInclusive, maxInclusive);
         long max = Math.max(minInclusive, maxInclusive);
-        if (min == max) {
-            return min;
-        }
-        return ThreadLocalRandom.current().nextLong(min, max + 1);
+        if (value < min) return min;
+        if (value > max) return max;
+        return value;
     }
 
-    private double randomDouble(double minInclusive, double maxInclusive) {
+    private static double clampDouble(double value, double minInclusive, double maxInclusive) {
         double min = Math.min(minInclusive, maxInclusive);
         double max = Math.max(minInclusive, maxInclusive);
-        if (Double.compare(min, max) == 0) {
-            return min;
-        }
-        return ThreadLocalRandom.current().nextDouble(min, max);
+        if (value < min) return min;
+        if (value > max) return max;
+        return value;
+    }
+
+    private static double midpoint(double a, double b) {
+        return (a + b) / 2.0;
     }
 
     public record ExecutionPlan(

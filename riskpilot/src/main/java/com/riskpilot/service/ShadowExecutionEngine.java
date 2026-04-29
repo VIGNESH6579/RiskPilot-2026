@@ -1093,8 +1093,15 @@ public class ShadowExecutionEngine {
     }
 
     private long estimateTickGapMs() {
+        // Use the actual measured inter-arrival time from the live Angel One
+        // feed. If no tick has been observed yet (very first tick), fall back
+        // to the configured maxSilenceMs so the latency clamp behaves
+        // conservatively without requiring any synthetic constant.
         long interArrivalMs = marketDataStateService.lastInterArrivalMs();
-        return Math.max(1L, interArrivalMs == 0L ? config.getInfra().getPaper().getTickIntervalMs() : interArrivalMs);
+        if (interArrivalMs > 0L) {
+            return interArrivalMs;
+        }
+        return Math.max(1L, config.getInfra().getHeartbeat().getMaxSilenceMs());
     }
 
     private double pnlInr(ActiveTradeExecution trade, double price, int lots) {

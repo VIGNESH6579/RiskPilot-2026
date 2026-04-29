@@ -9,7 +9,7 @@ import com.riskpilot.model.MarketDataTransport;
 @ConfigurationProperties(prefix = "riskpilot")
 public class RiskPilotProperties {
 
-    private String mode = "SHADOW"; // LIVE | SHADOW | PAPER
+    private String mode = "SHADOW"; // LIVE | SHADOW
     private boolean strictMode = true;
     private boolean enforceStrictTiming = true;
 
@@ -28,10 +28,6 @@ public class RiskPilotProperties {
         return "LIVE".equalsIgnoreCase(mode);
     }
 
-    public boolean isPaperMode() {
-        return "PAPER".equalsIgnoreCase(mode);
-    }
-
     public boolean isShadowMode() {
         return "SHADOW".equalsIgnoreCase(mode);
     }
@@ -41,7 +37,7 @@ public class RiskPilotProperties {
     }
 
     public String dataSourceLabel() {
-        return isPaperMode() ? "SIMULATED" : "REAL";
+        return "REAL";
     }
 
     @Data
@@ -168,7 +164,6 @@ public class RiskPilotProperties {
     public static class Infra {
         private Feed feed = new Feed();
         private Heartbeat heartbeat = new Heartbeat();
-        private Paper paper = new Paper();
 
         @Data
         public static class Feed {
@@ -182,14 +177,6 @@ public class RiskPilotProperties {
             private long maxClockSkewMs = 2000L;
             private long startupValidTickTimeoutMs = 10000L;
             private boolean startupFailFast = true;
-        }
-
-        @Data
-        public static class Paper {
-            private boolean enabled = true;
-            private long tickIntervalMs = 1000L;
-            private double startingPrice = 24000.0;
-            private double maxStepPoints = 8.0;
         }
 
         @Data

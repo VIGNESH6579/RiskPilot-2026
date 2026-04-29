@@ -22,11 +22,9 @@ import java.util.HexFormat;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -58,11 +56,8 @@ public class AngelTickStreamClient {
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
     private final AtomicInteger parseFailureCounter = new AtomicInteger(0);
-    private final AtomicLong paperSequence = new AtomicLong(1L);
-    private final AtomicBoolean paperFeedStarted = new AtomicBoolean(false);
 
     private volatile WebSocket webSocket;
-    private volatile double paperPrice;
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
@@ -82,16 +77,10 @@ public class AngelTickStreamClient {
         this.angelAuthService = angelAuthService;
         this.properties = properties;
         this.marketSessionService = marketSessionService;
-        this.paperPrice = properties.getInfra().getPaper().getStartingPrice();
     }
 
     @PostConstruct
     public void init() {
-        if (properties.isPaperMode()) {
-            startPaperFeed();
-            return;
-        }
-
         if (!angelAuthService.hasCredentials()) {
             marketDataStateService.markFeedFailure("ANGEL_CREDENTIALS_MISSING", MarketDataTransport.WEBSOCKET);
             throw new IllegalStateException("ANGEL_CREDENTIALS_MISSING");
@@ -115,36 +104,6 @@ public class AngelTickStreamClient {
             disconnect();
             connectWebSocket();
         });
-    }
-
-    private void startPaperFeed() {
-        if (!paperFeedStarted.compareAndSet(false, true)) {
-            return;
-        }
-        marketDataStateService.markConnected(MarketDataTransport.PAPER);
-        marketDataStateService.markSubscribed(MarketDataTransport.PAPER);
-        marketDataStateService.markReady(MarketDataTransport.PAPER);
-        long intervalMs = Math.max(250L, properties.getInfra().getPaper().getTickIntervalMs());
-        executor.scheduleWithFixedDelay(() -> {
-            try {
-                Instant now = Instant.now();
-                double delta = ThreadLocalRandom.current()
-                    .nextDouble(-properties.getInfra().getPaper().getMaxStepPoints(), properties.getInfra().getPaper().getMaxStepPoints());
-                paperPrice = Math.max(1.0, paperPrice + delta);
-                MarketTick tick = MarketTick.of(
-                    "NIFTY",
-                    paperPrice,
-                    now,
-                    now,
-                    MarketDataTransport.PAPER,
-                    paperSequence.getAndIncrement(),
-                    now.toEpochMilli()
-                );
-                ingestTick(tick);
-            } catch (Exception e) {
-                log.error("Paper tick generation failed", e);
-            }
-        }, 0L, intervalMs, TimeUnit.MILLISECONDS);
     }
 
     private void connectWebSocket() {
@@ -360,7 +319,7 @@ public class AngelTickStreamClient {
     }
 
     private void scheduleReconnect() {
-        if (properties.isPaperMode() || !reconnectScheduled.compareAndSet(false, true)) {
+        if (!reconnectScheduled.compareAndSet(false, true)) {
             return;
         }
         executor.schedule(() -> {

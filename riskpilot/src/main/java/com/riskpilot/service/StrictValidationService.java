@@ -38,8 +38,8 @@ public class StrictValidationService {
     }
 
     public void validateSystem() {
-        if (!properties.isLiveMode() && !properties.isPaperMode() && !properties.isShadowMode()) {
-            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE, SHADOW or PAPER");
+        if (!properties.isLiveMode() && !properties.isShadowMode()) {
+            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE or SHADOW");
         }
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
