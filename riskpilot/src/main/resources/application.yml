@@ -39,6 +39,16 @@ riskpilot:
     open: ${MARKET_OPEN:09:15}
     close: ${MARKET_CLOSE:15:30}
     zone: ${MARKET_ZONE:Asia/Kolkata}
+  instrument:
+    symbol: ${TRADING_SYMBOL:NIFTY}
+    lot-size: ${INSTRUMENT_LOT_SIZE:75}
+    point-value: ${INSTRUMENT_POINT_VALUE:1.0}
+  account:
+    initial-capital: ${ACCOUNT_INITIAL_CAPITAL:500000}
+    risk-per-trade-pct: ${ACCOUNT_RISK_PER_TRADE_PCT:1.0}
+    daily-loss-limit-pct: ${ACCOUNT_DAILY_LOSS_LIMIT_PCT:2.0}
+    size-reduction-after-losses: ${ACCOUNT_SIZE_REDUCTION_AFTER_LOSSES:2}
+    reduced-risk-factor: ${ACCOUNT_REDUCED_RISK_FACTOR:0.5}
   session:
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
     start: ${SESSION_START:09:15}
@@ -80,6 +90,17 @@ riskpilot:
       soft-block-ms: 500
       hard-block-ms: 1500
       panic-ms: 5000
+    simulation:
+      entry-latency-min-ms: ${EXECUTION_ENTRY_LATENCY_MIN_MS:50}
+      entry-latency-max-ms: ${EXECUTION_ENTRY_LATENCY_MAX_MS:300}
+      exit-latency-min-ms: ${EXECUTION_EXIT_LATENCY_MIN_MS:50}
+      exit-latency-max-ms: ${EXECUTION_EXIT_LATENCY_MAX_MS:250}
+      spread-min-points: ${EXECUTION_SPREAD_MIN_POINTS:0.5}
+      spread-max-points: ${EXECUTION_SPREAD_MAX_POINTS:2.0}
+      slippage-min-points: ${EXECUTION_SLIPPAGE_MIN_POINTS:0.1}
+      slippage-max-points: ${EXECUTION_SLIPPAGE_MAX_POINTS:3.0}
+      volatility-weight: ${EXECUTION_VOLATILITY_WEIGHT:0.08}
+      tick-speed-weight: ${EXECUTION_TICK_SPEED_WEIGHT:0.35}
     reject-on-high-slippage: true
     reject-on-latency-breach: true
   infra:

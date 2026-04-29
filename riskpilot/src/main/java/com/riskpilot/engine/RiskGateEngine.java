@@ -5,6 +5,8 @@ import com.riskpilot.model.GateDecision;
 import com.riskpilot.model.Regime;
 import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.service.MarketSessionService;
+import com.riskpilot.service.RiskEngine;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,8 @@ public class RiskGateEngine {
 
     private final RiskPilotProperties config;
     private final KillSwitchEngine killSwitchEngine;
+    private final MarketSessionService marketSessionService;
+    private final RiskEngine riskEngine;
 
     @PostConstruct
     public void validate() {
@@ -68,6 +72,12 @@ public class RiskGateEngine {
         }
         if (state.cumulativeDailyLossR() <= -config.getRisk().getMaxDailyLossR()) {
             return reject("DAILY_LOSS_LIMIT");
+        }
+        if (riskEngine.snapshot().dailyLossLimitBreached()) {
+            return reject("ACCOUNT_DRAWDOWN_LIMIT");
+        }
+        if (!marketSessionService.canEnterNewTrade(marketSessionService.now())) {
+            return reject("ENTRY_WINDOW_CLOSED");
         }
         if (state.timePhase() == TimePhase.LATE && !config.getTimePhase().getLate().getAllowNewTrades()) {
             return reject("LATE_SESSION_BLOCK");

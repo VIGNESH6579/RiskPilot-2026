@@ -63,6 +63,15 @@ public class TradingSession {
     
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal totalPnL;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal realizedPnl;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal unrealizedPnl;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal accountEquity;
     
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal maxDrawdown;
@@ -104,6 +113,9 @@ public class TradingSession {
         if (tradesExecuted == null) tradesExecuted = 0;
         if (tradesRejected == null) tradesRejected = 0;
         if (totalPnL == null) totalPnL = BigDecimal.ZERO;
+        if (realizedPnl == null) realizedPnl = BigDecimal.ZERO;
+        if (unrealizedPnl == null) unrealizedPnl = BigDecimal.ZERO;
+        if (accountEquity == null) accountEquity = BigDecimal.ZERO;
         if (maxDrawdown == null) maxDrawdown = BigDecimal.ZERO;
         if (maxProfit == null) maxProfit = BigDecimal.ZERO;
         if (regimeLocked == null) regimeLocked = false;

@@ -25,6 +25,16 @@ riskpilot:
   mode: SHADOW
   strict-mode: true
   enforce-strict-timing: true
+  instrument:
+    symbol: "NIFTY"
+    lot-size: 75
+    point-value: 1.0
+  account:
+    initial-capital: 500000
+    risk-per-trade-pct: 1.0
+    daily-loss-limit-pct: 2.0
+    size-reduction-after-losses: 2
+    reduced-risk-factor: 0.5
   market:
     open: "09:15"
     close: "15:30"
@@ -70,6 +80,17 @@ riskpilot:
       soft-block-ms: 500
       hard-block-ms: 1500
       panic-ms: 5000
+    simulation:
+      entry-latency-min-ms: 50
+      entry-latency-max-ms: 300
+      exit-latency-min-ms: 50
+      exit-latency-max-ms: 250
+      spread-min-points: 0.5
+      spread-max-points: 2.0
+      slippage-min-points: 0.1
+      slippage-max-points: 3.0
+      volatility-weight: 0.08
+      tick-speed-weight: 0.35
     reject-on-high-slippage: true
     reject-on-latency-breach: true
   extraction:

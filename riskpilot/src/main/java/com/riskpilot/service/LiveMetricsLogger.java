@@ -22,7 +22,7 @@ public class LiveMetricsLogger {
     private static final Logger log = LoggerFactory.getLogger(LiveMetricsLogger.class);
     private static final String CSV_HEADER =
         "signalTime,executionTime,direction,latencySec,entryLatencyMs,exitLatencyMs,expectedEntry,actualEntry,entrySlippage," +
-        "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR,quantity,remainingQuantity,recovery," +
+        "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR,quantity,remainingQuantity,lotSize,pointValue,recovery," +
         "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitType,exitTime";
 
     private final TradeLogRepository tradeLogRepository;
@@ -36,9 +36,8 @@ public class LiveMetricsLogger {
     ) {
         LocalDateTime effectiveSignalTime = signalTime != null ? signalTime : LocalDateTime.now();
         ensureHeader();
-        appendRow(String.format(
-            "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
-            effectiveSignalTime,
+        appendRow(String.join(",",
+            effectiveSignalTime.toString(),
             "",
             "NA",
             "",
@@ -55,12 +54,17 @@ public class LiveMetricsLogger {
             "",
             "",
             "",
-            "",
-            false,
+            "0",
+            "0",
+            "0",
+            "0.0",
+            "false",
+            "REJECT",
             escapeCsv(rejectReason),
-            regime,
-            timePhase,
-            feedStable,
+            regime != null ? regime.name() : "",
+            timePhase != null ? timePhase.name() : "",
+            Boolean.toString(feedStable),
+            "",
             "",
             ""
         ));
@@ -73,6 +77,8 @@ public class LiveMetricsLogger {
             .direction("NA")
             .quantity(0)
             .remainingQuantity(0)
+            .lotSize(0)
+            .pointValue(0.0)
             .recovery(false)
             .gateDecision("REJECT")
             .rejectReason(rejectReason)
@@ -99,6 +105,8 @@ public class LiveMetricsLogger {
         double realizedR,
         int quantity,
         int remainingQuantity,
+        int lotSize,
+        double pointValue,
         String gateDecision,
         String rejectReason,
         Regime regime,
@@ -118,7 +126,7 @@ public class LiveMetricsLogger {
         double exitSlippage = calculateExitSlippage(direction, expectedExitPrice, actualExitPrice);
 
         appendRow(String.format(
-            "%s,%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%d,%d,%b,%s,%s,%s,%s,%b,%s,%s,%s",
+            "%s,%s,%s,%f,%d,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%d,%d,%d,%f,%b,%s,%s,%s,%s,%b,%s,%s,%s",
             effectiveSignalTime,
             effectiveExecutionTime,
             direction,
@@ -138,6 +146,8 @@ public class LiveMetricsLogger {
             realizedR,
             quantity,
             remainingQuantity,
+            lotSize,
+            pointValue,
             recovery,
             gateDecision,
             escapeCsv(rejectReason),
@@ -169,6 +179,8 @@ public class LiveMetricsLogger {
             .direction(direction)
             .quantity(quantity)
             .remainingQuantity(remainingQuantity)
+            .lotSize(lotSize)
+            .pointValue(pointValue)
             .recovery(recovery)
             .gateDecision(gateDecision)
             .rejectReason(rejectReason)

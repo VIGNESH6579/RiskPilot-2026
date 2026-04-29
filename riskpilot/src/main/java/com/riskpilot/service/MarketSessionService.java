@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -51,7 +52,7 @@ public class MarketSessionService {
 
     public boolean canEnterNewTrade(Instant timestamp) {
         LocalTime localTime = toMarketTime(timestamp).toLocalTime();
-        return !localTime.isBefore(entryStart()) && localTime.isBefore(lastEntryCutoff());
+        return isMarketOpen(timestamp) && !localTime.isBefore(entryStart()) && localTime.isBefore(lastEntryCutoff());
     }
 
     public boolean shouldForceExit() {
@@ -61,6 +62,19 @@ public class MarketSessionService {
     public boolean shouldForceExit(Instant timestamp) {
         LocalTime localTime = toMarketTime(timestamp).toLocalTime();
         return !localTime.isBefore(forceExitTime());
+    }
+
+    public boolean isTradingSessionActive(Instant timestamp) {
+        LocalTime localTime = toMarketTime(timestamp).toLocalTime();
+        return !localTime.isBefore(marketOpen()) && localTime.isBefore(sessionEnd());
+    }
+
+    public LocalDate sessionDate(Instant timestamp) {
+        return toMarketTime(timestamp).toLocalDate();
+    }
+
+    public Instant sessionStartInstant(LocalDate sessionDate) {
+        return sessionDate.atTime(marketOpen()).atZone(zoneId()).toInstant();
     }
 
     public String marketStatus() {
@@ -85,5 +99,9 @@ public class MarketSessionService {
 
     private LocalTime forceExitTime() {
         return LocalTime.parse(properties.getSession().getForceExit());
+    }
+
+    private LocalTime sessionEnd() {
+        return LocalTime.parse(properties.getSession().getEnd());
     }
 }

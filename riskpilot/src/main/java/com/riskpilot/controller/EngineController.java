@@ -50,7 +50,7 @@ public class EngineController {
     public Map<String, Object> getEngineState() {
         var marketData = marketDataStateService.snapshot();
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("sessionActive", true);
+        state.put("sessionActive", marketSessionService.isMarketOpen());
         state.put("feedHealthy", !candleAggregator.isFeedUnstable());
         state.put("transport", marketData.transport() != null ? marketData.transport().name() : null);
         state.put("sourceAgeMs", marketData.lastTick() != null ? marketData.lastTick().sourceAgeMs() : null);

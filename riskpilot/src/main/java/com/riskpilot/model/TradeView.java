@@ -26,6 +26,8 @@ public record TradeView(
     Boolean feedStable,
     Integer quantity,
     Integer remainingQuantity,
+    Integer lotSize,
+    Double pointValue,
     Boolean recovery,
     Long entryLatencyMs,
     Long exitLatencyMs,
@@ -57,6 +59,8 @@ public record TradeView(
             log.getFeedStable(),
             log.getQuantity(),
             log.getRemainingQuantity(),
+            log.getLotSize(),
+            log.getPointValue(),
             log.getRecovery(),
             log.getEntryLatencyMs(),
             log.getExitLatencyMs(),
@@ -90,6 +94,8 @@ public record TradeView(
         row.put("feedStable", feedStable);
         row.put("quantity", quantity);
         row.put("remainingQuantity", remainingQuantity);
+        row.put("lotSize", lotSize);
+        row.put("pointValue", pointValue);
         row.put("recovery", recovery);
         row.put("entryLatencyMs", entryLatencyMs);
         row.put("exitLatencyMs", exitLatencyMs);

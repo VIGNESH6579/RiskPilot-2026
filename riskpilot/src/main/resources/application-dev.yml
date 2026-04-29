@@ -28,6 +28,10 @@ logging:
 riskpilot:
   mode: PAPER
   enforce-strict-timing: true
+  account:
+    initial-capital: 500000
+    risk-per-trade-pct: 1.0
+    daily-loss-limit-pct: 2.0
   market:
     open: "09:15"
     close: "15:30"

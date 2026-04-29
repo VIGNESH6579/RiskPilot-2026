@@ -2,7 +2,7 @@ package com.riskpilot.model;
 
 public record TradeExit(
     boolean triggered,
-    double pnlPoints,
+    double pnlInr,
     String reason,
     double exitPrice,
     String exitType

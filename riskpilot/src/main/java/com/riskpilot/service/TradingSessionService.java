@@ -1,8 +1,10 @@
 package com.riskpilot.service;
 
+import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradingSignal;
 import com.riskpilot.model.TradingSession;
+import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.repository.TradeRepository;
 import com.riskpilot.repository.TradingSignalRepository;
 import com.riskpilot.repository.TradingSessionRepository;
@@ -26,6 +28,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class TradingSessionService {
 
+    private final RiskPilotProperties properties;
+    private final MarketSessionService marketSessionService;
     private final TradingSessionRepository sessionRepository;
     private final TradeRepository tradeRepository;
     private final TradingSignalRepository signalRepository;
@@ -40,13 +44,13 @@ public class TradingSessionService {
 
     @Transactional
     public TradingSession createNewSession(String symbol) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = currentSessionDate();
         TradingSession session = sessionRepository
             .findBySymbolAndSessionDate(symbol, today)
             .orElseGet(() -> sessionRepository.save(TradingSession.builder()
                 .sessionDate(today)
                 .symbol(symbol)
-                .sessionStart(LocalDateTime.now())
+                .sessionStart(LocalDateTime.of(today, sessionStartTime()))
                 .dailyOpen(BigDecimal.ZERO)
                 .orHigh(BigDecimal.ZERO)
                 .orLow(BigDecimal.ZERO)
@@ -58,6 +62,9 @@ public class TradingSessionService {
                 .tradesExecuted(0)
                 .tradesRejected(0)
                 .totalPnL(BigDecimal.ZERO)
+                .realizedPnl(BigDecimal.ZERO)
+                .unrealizedPnl(BigDecimal.ZERO)
+                .accountEquity(BigDecimal.valueOf(initialCapital()))
                 .maxDrawdown(BigDecimal.ZERO)
                 .maxProfit(BigDecimal.ZERO)
                 .sessionActive(true)
@@ -67,6 +74,22 @@ public class TradingSessionService {
 
         log.info("Resolved trading session for symbol: {} on date: {}", symbol, today);
         return session;
+    }
+
+    @Transactional
+    public void updateRuntimeState(String symbol, TradingSessionSnapshot snapshot, RiskEngine.EquitySnapshot equitySnapshot) {
+        TradingSession session = getCurrentSession(symbol);
+        session.setSessionActive(snapshot.sessionActive());
+        session.setRegime(snapshot.regime().name());
+        session.setTradesExecuted(snapshot.tradesTaken());
+        session.setTotalPnL(BigDecimal.valueOf(equitySnapshot.realizedPnlInr() + equitySnapshot.unrealizedPnlInr()).setScale(2, RoundingMode.HALF_UP));
+        session.setRealizedPnl(BigDecimal.valueOf(equitySnapshot.realizedPnlInr()).setScale(2, RoundingMode.HALF_UP));
+        session.setUnrealizedPnl(BigDecimal.valueOf(equitySnapshot.unrealizedPnlInr()).setScale(2, RoundingMode.HALF_UP));
+        session.setAccountEquity(BigDecimal.valueOf(equitySnapshot.currentEquity()).setScale(2, RoundingMode.HALF_UP));
+        session.setOrHigh(snapshot.orHigh() == Double.NEGATIVE_INFINITY ? BigDecimal.ZERO : BigDecimal.valueOf(snapshot.orHigh()).setScale(2, RoundingMode.HALF_UP));
+        session.setOrLow(snapshot.orLow() == Double.POSITIVE_INFINITY ? BigDecimal.ZERO : BigDecimal.valueOf(snapshot.orLow()).setScale(2, RoundingMode.HALF_UP));
+        session.setStatus(snapshot.heartbeatAlive() ? "ACTIVE" : "HALTED");
+        sessionRepository.save(session);
     }
 
     public List<Trade> getActiveTrades(String symbol) {
@@ -220,7 +243,7 @@ public class TradingSessionService {
     }
 
     private String resolveCurrentTimePhase() {
-        LocalTime now = LocalTime.now();
+        LocalTime now = marketSessionService != null ? marketSessionService.nowIst().toLocalTime() : LocalTime.now();
         if (now.isBefore(LocalTime.of(12, 0))) {
             return "EARLY";
         }
@@ -228,5 +251,26 @@ public class TradingSessionService {
             return "MID";
         }
         return "LATE";
+    }
+
+    private LocalDate currentSessionDate() {
+        if (marketSessionService != null) {
+            return marketSessionService.sessionDate(marketSessionService.now());
+        }
+        return LocalDate.now();
+    }
+
+    private LocalTime sessionStartTime() {
+        if (properties != null && properties.getSession() != null) {
+            return LocalTime.parse(properties.getSession().getStart());
+        }
+        return LocalTime.of(9, 15);
+    }
+
+    private double initialCapital() {
+        if (properties != null && properties.getAccount() != null) {
+            return properties.getAccount().getInitialCapital();
+        }
+        return 500000.0;
     }
 }

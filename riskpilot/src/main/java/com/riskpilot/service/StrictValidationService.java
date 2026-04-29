@@ -25,6 +25,7 @@ public class StrictValidationService {
 
     private final RiskPilotProperties properties;
     private final MarketSessionService marketSessionService;
+    private final RiskEngine riskEngine;
     private final AtomicInteger dailyTradeCount = new AtomicInteger(0);
     private final AtomicInteger consecutiveLosses = new AtomicInteger(0);
 
@@ -87,7 +88,7 @@ public class StrictValidationService {
         if (consecutiveLosses.get() >= properties.getRisk().getMaxConsecutiveLosses()) {
             return false;
         }
-        if (dailyLossR <= -properties.getRisk().getMaxDailyLossR()) {
+        if (riskEngine.snapshot().dailyLossLimitBreached()) {
             return false;
         }
         return true;
@@ -106,7 +107,7 @@ public class StrictValidationService {
         } else {
             consecutiveLosses.set(0);
         }
-        lastTradeDate = LocalDate.now();
+        lastTradeDate = marketSessionService.sessionDate(marketSessionService.now());
     }
 
     public void validateSlippage(String tradeType, double actualSlippage) {
@@ -287,14 +288,15 @@ public class StrictValidationService {
         );
     }
 
-    @Scheduled(cron = "0 1 0 * * *", zone = "Asia/Kolkata")
-    public void midnightReset() {
+    @Scheduled(cron = "0 15 9 * * *", zone = "Asia/Kolkata")
+    public void sessionStartReset() {
         refreshDailyCountersIfNeeded();
-        log.info("Daily counters reset at midnight");
+        riskEngine.resetForSessionStart();
+        log.info("Daily counters reset at session start");
     }
 
     private void refreshDailyCountersIfNeeded() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = marketSessionService.sessionDate(marketSessionService.now());
         if (lastTradeDate == null || !lastTradeDate.equals(today)) {
             dailyTradeCount.set(0);
             consecutiveLosses.set(0);

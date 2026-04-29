@@ -43,6 +43,8 @@ public class TradeLog {
     private String direction;
     private Integer quantity;
     private Integer remainingQuantity;
+    private Integer lotSize;
+    private Double pointValue;
     private Boolean recovery;
     private String gateDecision;
     private String rejectReason;

@@ -23,6 +23,7 @@ import com.riskpilot.model.TradeLog;
 import com.riskpilot.model.TradeView;
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.repository.TradeRepository;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.LinkedHashMap;
@@ -71,6 +73,10 @@ public class ShadowExecutionEngine {
     private final NtfyNotificationService ntfyNotificationService;
     private final TradeRepository tradeRepository;
     private final MarketSessionService marketSessionService;
+    private final PositionSizer positionSizer;
+    private final ExecutionSimulator executionSimulator;
+    private final RiskEngine riskEngine;
+    private final TradingSessionService tradingSessionService;
     private final ReentrantLock tradeStateLock = new ReentrantLock();
     private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor();
     private final ConcurrentHashMap<String, AtomicInteger> rejectReasonCounts = new ConcurrentHashMap<>();
@@ -84,53 +90,72 @@ public class ShadowExecutionEngine {
     private long activeEntryLatencyMs;
     private Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
+    private PendingEntry pendingEntry;
+    private PendingExit pendingExit;
+
+    @PostConstruct
+    public void restoreRuntimeState() {
+        restoreActiveTrade();
+    }
 
     public void evaluateTick(StrictValidationService.ValidationResult validationResult) {
         tradeStateLock.lock();
         try {
-        MarketTick tick = validationResult.tick();
-        if (killSwitchEngine.isKillSwitchTriggered()) {
-            log.warn("Kill switch active, ignoring tick");
-            return;
-        }
+            MarketTick tick = validationResult.tick();
+            if (killSwitchEngine.isKillSwitchTriggered()) {
+                log.warn("Kill switch active, ignoring tick");
+                return;
+            }
 
-        log.debug(
-            "ExecutionEngine trigger seq={} price={} exchangeTs={} receiveTs={} ageMs={} allowExecution={}",
-            tick.sequenceId(),
-            tick.price(),
-            tick.exchangeTimestamp(),
-            tick.receivedAt(),
-            tick.sourceAgeMs(),
-            validationResult.allowExecution()
-        );
-
-        if (!validationResult.allowExecution()) {
-            log.info(
-                "EXECUTION_SKIPPED_MARKET_CLOSED seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+            log.debug(
+                "ExecutionEngine trigger seq={} price={} exchangeTs={} receiveTs={} ageMs={} allowExecution={}",
                 tick.sequenceId(),
                 tick.price(),
                 tick.exchangeTimestamp(),
                 tick.receivedAt(),
-                tick.sourceAgeMs()
+                tick.sourceAgeMs(),
+                validationResult.allowExecution()
             );
-            return;
-        }
 
-        TradingSessionSnapshot state = stateManager.getSnapshot();
-        if (!state.tradeActive() || state.activeTradeReference() == null) {
-            return;
-        }
+            if (!validationResult.allowExecution()) {
+                refreshRiskAndSession(null, tick.price());
+                log.info(
+                    "EXECUTION_SKIPPED_MARKET_CLOSED seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
+                    tick.sequenceId(),
+                    tick.price(),
+                    tick.exchangeTimestamp(),
+                    tick.receivedAt(),
+                    tick.sourceAgeMs()
+                );
+                return;
+            }
 
-        ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), tick.price());
-        trade = ActiveTradeExecution.fromTickTP1(trade, tick.price());
+            if (pendingEntry != null && !pendingEntry.executed() && !tick.receivedAt().isBefore(pendingEntry.plan().executionTime())) {
+                executePlannedEntry(pendingEntry, tick);
+            }
 
-        TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, tick.price());
-        if (exit.triggered()) {
-            closeTrade(trade, exit, tick);
-            return;
-        }
+            TradingSessionSnapshot state = stateManager.getSnapshot();
+            if (!state.tradeActive() || state.activeTradeReference() == null) {
+                refreshRiskAndSession(null, tick.price());
+                return;
+            }
 
-        updateActiveTradeState(trade, state.lastRejectReason(), tick.price());
+            ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), tick.price());
+            trade = ActiveTradeExecution.fromTickTP1(trade, tick.price());
+
+            if (pendingExit != null && !tick.receivedAt().isBefore(pendingExit.plan().executionTime())) {
+                executePlannedExit(pendingExit, tick);
+                return;
+            }
+
+            TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, tick.price());
+            if (exit.triggered()) {
+                scheduleExit(trade, exit.reason(), exit.exitType(), tick.receivedAt(), tick.price(), estimateVolatilityPoints(), estimateTickGapMs());
+                updateActiveTradeState(trade, state.lastRejectReason(), tick.price());
+                return;
+            }
+
+            updateActiveTradeState(trade, state.lastRejectReason(), tick.price());
         } finally {
             tradeStateLock.unlock();
         }
@@ -170,9 +195,9 @@ public class ShadowExecutionEngine {
             if (riskGateEngine.shouldForceLateSessionExit(state)) {
                 try {
                     MarketTick exitTick = requireLiveTick("TIME_CUTOFF_EXIT");
-                    closeTrade(trade, exitAtPrice(trade, exitTick.price(), "TIME_CUTOFF_EXIT", "REAL"), exitTick);
+                    scheduleExit(trade, "TIME_CUTOFF_EXIT", "REAL", exitTick.receivedAt(), exitTick.price(), candle.high - candle.low, estimateTickGapMs());
                 } catch (StaleFeedException staleFeedException) {
-                    closeTrade(trade, exitAtPrice(trade, candle.close, "FEED_STALE_EXIT", "ESTIMATED"), null);
+                    closeTrade(trade, exitAtPrice(trade, candle.close, "FEED_STALE_EXIT", "ESTIMATED"), null, null);
                 }
                 return;
             }
@@ -217,6 +242,8 @@ public class ShadowExecutionEngine {
         activeExpectedEntry = 0.0;
         activeEntryLatencyMs = 0L;
         activeTradeId = null;
+        pendingEntry = null;
+        pendingExit = null;
         lastRegimeConfidenceScore = null;
         broadcastCurrentSessionState();
         } finally {
@@ -229,7 +256,7 @@ public class ShadowExecutionEngine {
         broadcastExecutor.shutdownNow();
     }
 
-    @Scheduled(cron = "0 0 9 * * ?")
+    @Scheduled(cron = "0 15 9 * * *", zone = "Asia/Kolkata")
     public void executeDailyHardReset() {
         restart();
     }
@@ -276,7 +303,7 @@ public class ShadowExecutionEngine {
         }
 
         double entrySlippage = Math.abs(entryTick.price() - signal.getEntry());
-        long entryLatencyMs = entryTick.sourceAgeMs();
+        long entryLatencyMs = estimateTickGapMs();
 
         try {
             strictValidationService.validateRegime(state.regime().name());
@@ -295,8 +322,77 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        openTrade(signal, state, latest.timestamp(), entryTick);
+        scheduleEntry(signal, state, latest.timestamp(), estimateVolatilityPoints(), estimateTickGapMs());
         lastTriggeredCandleTime = candleId;
+    }
+
+    private void scheduleEntry(
+        Signal signal,
+        TradingSessionSnapshot state,
+        LocalDateTime signalTime,
+        double volatilityPoints,
+        long tickGapMs
+    ) {
+        if (pendingEntry != null) {
+            return;
+        }
+        Instant signalInstant = signalTime.atZone(marketSessionService.zoneId()).toInstant();
+        ExecutionSimulator.ExecutionPlan plan = executionSimulator.planEntry(signalInstant, volatilityPoints, tickGapMs);
+        pendingEntry = new PendingEntry(signal, state, signalTime, plan, false);
+        log.info(
+            "Planned entry signalTime={} direction={} expectedEntry={} eligibleAt={} latencyMs={}",
+            signalTime,
+            signal.getDirection(),
+            signal.getEntry(),
+            marketSessionService.toMarketTime(plan.executionTime()),
+            plan.latencyMs()
+        );
+    }
+
+    private void executePlannedEntry(PendingEntry plannedEntry, MarketTick tick) {
+        ExecutionSimulator.SimulatedFill fill = executionSimulator.fillEntry(
+            plannedEntry.signal().getDirection(),
+            plannedEntry.signal().getEntry(),
+            tick,
+            plannedEntry.plan()
+        );
+        openTrade(plannedEntry.signal(), plannedEntry.state(), plannedEntry.signalTime(), fill);
+        pendingEntry = null;
+    }
+
+    private void scheduleExit(
+        ActiveTradeExecution trade,
+        String reason,
+        String exitType,
+        Instant signalTime,
+        double expectedExit,
+        double volatilityPoints,
+        long tickGapMs
+    ) {
+        if (pendingExit != null) {
+            return;
+        }
+        ExecutionSimulator.ExecutionPlan plan = executionSimulator.planExit(signalTime, volatilityPoints, tickGapMs);
+        pendingExit = new PendingExit(trade, reason, exitType, expectedExit, plan);
+        log.info(
+            "Planned exit reason={} expectedExit={} eligibleAt={} latencyMs={}",
+            reason,
+            expectedExit,
+            marketSessionService.toMarketTime(plan.executionTime()),
+            plan.latencyMs()
+        );
+    }
+
+    private void executePlannedExit(PendingExit pendingExit, MarketTick tick) {
+        ExecutionSimulator.SimulatedFill fill = executionSimulator.fillExit(
+            pendingExit.trade().direction(),
+            pendingExit.expectedExit(),
+            tick,
+            pendingExit.plan()
+        );
+        double pnlInr = pnlInr(pendingExit.trade(), fill.actualPrice(), pendingExit.trade().remainingQuantity());
+        TradeExit exit = new TradeExit(true, pnlInr, pendingExit.reason(), fill.actualPrice(), pendingExit.exitType());
+        closeTrade(pendingExit.trade(), exit, tick, fill);
     }
 
     private void updateSessionStateFromTime(LocalTime now) {
@@ -372,19 +468,21 @@ public class ShadowExecutionEngine {
         return TimePhase.LATE;
     }
 
-    private void openTrade(Signal signal, TradingSessionSnapshot state, LocalDateTime signalTime, MarketTick entryTick) {
-        LocalDateTime executionTime = toLocalDateTime(entryTick.receivedAt());
-        double actualEntryPrice = entryTick.price();
+    private void openTrade(
+        Signal signal,
+        TradingSessionSnapshot state,
+        LocalDateTime signalTime,
+        ExecutionSimulator.SimulatedFill fill
+    ) {
+        LocalDateTime executionTime = toLocalDateTime(fill.executionTime());
+        double actualEntryPrice = fill.actualPrice();
         double tp1Distance = Math.max(1.0, volatilityNormalizer.getCurrentTP1());
         double tp1Level = "SHORT".equalsIgnoreCase(signal.getDirection())
             ? actualEntryPrice - tp1Distance
             : actualEntryPrice + tp1Distance;
-        double positionScale = switch (state.timePhase()) {
-            case MID -> config.getTimePhase().getMid().getPositionScale();
-            case LATE -> 0.0;
-            default -> config.getTimePhase().getEarly().getPositionScale();
-        };
         double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
+        RiskEngine.EquitySnapshot equitySnapshot = riskEngine.snapshot();
+        int quantityLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.currentEquity(), equitySnapshot.consecutiveLosses());
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
             normalizeDirection(signal.getDirection()),
@@ -396,10 +494,10 @@ public class ShadowExecutionEngine {
             false,
             false,
             false,
-            positionScale,
-            positionScale,
-            Math.max(0, signal.getQuantity()),
-            Math.max(0, signal.getQuantity()),
+            quantityLots,
+            quantityLots,
+            config.getInstrument().getLotSize(),
+            config.getInstrument().getPointValue(),
             0.0,
             0.0,
             0.0,
@@ -409,9 +507,10 @@ public class ShadowExecutionEngine {
 
         activeSignalTime = signalTime;
         activeExecutionTime = executionTime;
-        activeExpectedEntry = signal.getEntry();
-        activeEntryLatencyMs = entryTick.sourceAgeMs();
-        persistOpenedTrade(signal, trade, executionTime, entryTick);
+        activeExpectedEntry = fill.expectedPrice();
+        activeEntryLatencyMs = fill.latencyMs();
+        pendingEntry = null;
+        persistOpenedTrade(signal, trade, signalTime, executionTime, fill);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -430,20 +529,23 @@ public class ShadowExecutionEngine {
         ));
 
         ntfyNotificationService.notifyTradeEntry(signal, trade);
+        refreshRiskAndSession(trade, actualEntryPrice);
         broadcastCurrentSessionState();
     }
 
-    private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick) {
+    private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick, ExecutionSimulator.SimulatedFill fill) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
-        double riskPoints = Math.max(1.0, trade.initialRisk());
-        double realizedR = exit.pnlPoints() / riskPoints;
-        double finalRealizedPnL = trade.realizedPnL() + exit.pnlPoints();
-        double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
+        double riskInr = Math.max(1.0, trade.initialRiskPoints() * trade.totalUnits() * trade.pointValue());
+        double finalRealizedPnL = trade.realizedPnL() + exit.pnlInr();
+        double realizedR = finalRealizedPnL / riskInr;
+        double expectedExit = fill != null ? fill.expectedPrice() : (trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss());
         boolean recovery = activeSignalTime == null || activeExecutionTime == null;
         String effectiveExitType = recovery ? "RECOVERED" : exit.exitType();
         double entrySlip = calculateEntrySlippage(trade.direction(), activeExpectedEntry, trade.entryPrice());
         double exitSlip = calculateExitSlippage(trade.direction(), expectedExit, exit.exitPrice());
-        long exitLatencyMs = exitTick != null ? exitTick.sourceAgeMs() : config.getInfra().getHeartbeat().getMaxSilenceMs();
+        long exitLatencyMs = fill != null
+            ? fill.latencyMs()
+            : config.getInfra().getHeartbeat().getMaxSilenceMs();
 
         try {
             strictValidationService.validateExitExecution(
@@ -484,6 +586,8 @@ public class ShadowExecutionEngine {
             realizedR,
             trade.quantity(),
             trade.remainingQuantity(),
+            trade.lotSize(),
+            trade.pointValue(),
             "ALLOW",
             "",
             state.regime(),
@@ -515,6 +619,7 @@ public class ShadowExecutionEngine {
             features
         );
         strictValidationService.recordTradeExecution(realizedR);
+        riskEngine.recordClosedTrade(finalRealizedPnL);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
         finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip, effectiveExitType);
 
@@ -539,6 +644,8 @@ public class ShadowExecutionEngine {
         activeExpectedEntry = 0.0;
         activeEntryLatencyMs = 0L;
         activeTradeId = null;
+        pendingExit = null;
+        refreshRiskAndSession(null, exit.exitPrice());
         broadcastCurrentSessionState();
     }
 
@@ -595,6 +702,7 @@ public class ShadowExecutionEngine {
 
     private void broadcastCurrentSessionState() {
         TradingSessionSnapshot state = stateManager.getSnapshot();
+        RiskEngine.EquitySnapshot equitySnapshot = riskEngine.refresh(state.activeTradeReference(), marketDataStateService.lastAcceptedTick().map(MarketTick::price).orElse(null));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionActive", state.sessionActive());
         payload.put("regime", state.regime().name());
@@ -607,6 +715,9 @@ public class ShadowExecutionEngine {
         payload.put("heartbeatAlive", state.heartbeatAlive());
         payload.put("dailyLossR", state.cumulativeDailyLossR());
         payload.put("lastRejectReason", state.lastRejectReason());
+        payload.put("currentEquity", equitySnapshot.currentEquity());
+        payload.put("realizedPnlInr", equitySnapshot.realizedPnlInr());
+        payload.put("unrealizedPnlInr", equitySnapshot.unrealizedPnlInr());
         payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
         MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
@@ -627,6 +738,7 @@ public class ShadowExecutionEngine {
         payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
         payload.put("regimeConfidenceReason", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getReason() : null);
         payload.put("reducedMode", lastRegimeConfidenceScore != null && lastRegimeConfidenceScore.isReducedMode());
+        tradingSessionService.updateRuntimeState(DEFAULT_SYMBOL, state, equitySnapshot);
         broadcastExecutor.execute(() -> webSocketService.sendSessionState(payload));
     }
 
@@ -635,11 +747,7 @@ public class ShadowExecutionEngine {
     }
 
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason, String exitType) {
-        double points = trade.tp1Level() < trade.entryPrice()
-            ? trade.entryPrice() - price
-            : price - trade.entryPrice();
-        double size = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
-        return new TradeExit(true, points * size, reason, price, exitType);
+        return new TradeExit(true, pnlInr(trade, price, trade.remainingQuantity()), reason, price, exitType);
     }
 
     private double currentOrRange(TradingSessionSnapshot state) {
@@ -677,7 +785,13 @@ public class ShadowExecutionEngine {
         return !Double.isInfinite(value) && !Double.isNaN(value);
     }
 
-    private void persistOpenedTrade(Signal signal, ActiveTradeExecution trade, LocalDateTime entryTime, MarketTick entryTick) {
+    private void persistOpenedTrade(
+        Signal signal,
+        ActiveTradeExecution trade,
+        LocalDateTime signalTime,
+        LocalDateTime entryTime,
+        ExecutionSimulator.SimulatedFill fill
+    ) {
         try {
             cancelPersistedActiveTrade("STALE_RECOVERY");
             Trade persistedTrade = Trade.builder()
@@ -690,6 +804,10 @@ public class ShadowExecutionEngine {
                 .expectedExitPrice(decimal(trade.tp1Level()))
                 .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
                 .remainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())))
+                .quantity(Math.max(0, trade.quantity()))
+                .remainingQuantity(Math.max(0, trade.remainingQuantity()))
+                .lotSize(trade.lotSize())
+                .pointValue(decimal(trade.pointValue()))
                 .realizedPnL(decimal(trade.realizedPnL()))
                 .unrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP))
                 .maxFavorableExcursion(decimal(trade.mfe()))
@@ -698,11 +816,12 @@ public class ShadowExecutionEngine {
                 .runnerActive(trade.runnerActive())
                 .tailHalfLocked(trade.tailHalfLocked())
                 .trailingStopLoss(decimal(trade.trailingSL()))
-                .entryLatencyMs(entryTick.sourceAgeMs())
+                .entryLatencyMs(fill.latencyMs())
                 .entrySlippage(decimal(calculateEntrySlippage(trade.direction(), signal.getEntry(), trade.entryPrice())))
                 .status("ACTIVE")
                 .exitReason("OPEN")
                 .exitType("REAL")
+                .signalTime(signalTime)
                 .entryTime(entryTime)
                 .build();
             persistedTrade = tradeRepository.save(persistedTrade);
@@ -724,6 +843,7 @@ public class ShadowExecutionEngine {
             entity.setTargetPrice(decimal(trade.tp1Level()));
             entity.setExpectedExitPrice(decimal(trade.tp1Level()));
             entity.setRemainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())));
+            entity.setRemainingQuantity(Math.max(0, trade.remainingQuantity()));
             entity.setRealizedPnL(decimal(trade.realizedPnL()));
             entity.setUnrealizedPnL(decimal(calculateUnrealizedPnL(trade, currentPrice)));
             entity.setMaxFavorableExcursion(decimal(trade.mfe()));
@@ -765,6 +885,7 @@ public class ShadowExecutionEngine {
             entity.setExitLatencyMs(exitLatencyMs);
             entity.setExitSlippage(decimal(exitSlippage));
             entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            entity.setRemainingQuantity(0);
             entity.setRealizedPnL(decimal(finalRealizedPnL));
             entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setMaxFavorableExcursion(decimal(trade.mfe()));
@@ -797,6 +918,7 @@ public class ShadowExecutionEngine {
             entity.setExitTime(LocalDateTime.now());
             entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            entity.setRemainingQuantity(0);
             tradeRepository.save(entity);
         } catch (Exception e) {
             log.warn("Unable to cancel stale active shadow trade: {}", e.getMessage());
@@ -825,10 +947,7 @@ public class ShadowExecutionEngine {
     }
 
     private double calculateUnrealizedPnL(ActiveTradeExecution trade, double currentPrice) {
-        double pnlPoints = trade.tp1Level() < trade.entryPrice()
-            ? trade.entryPrice() - currentPrice
-            : currentPrice - trade.entryPrice();
-        return pnlPoints * trade.remainingSize();
+        return trade.markToMarketPnl(currentPrice);
     }
 
     private BigDecimal decimal(double value) {
@@ -850,6 +969,86 @@ public class ShadowExecutionEngine {
 
     private LocalDateTime toLocalDateTime(Instant instant) {
         return marketSessionService.toMarketTime(instant).toLocalDateTime();
+    }
+
+    private void restoreActiveTrade() {
+        try {
+            Optional<Trade> persisted = tradeRepository.findFirstBySymbolAndStatusOrderByEntryTimeDesc(DEFAULT_SYMBOL, "ACTIVE");
+            if (persisted.isEmpty()) {
+                riskEngine.refresh(null, null);
+                return;
+            }
+
+            Trade trade = persisted.get();
+            ActiveTradeExecution activeTrade = new ActiveTradeExecution(
+                normalizeDirection(trade.getDirection()),
+                trade.getEntryPrice().doubleValue(),
+                trade.getStopLoss().doubleValue(),
+                trade.getTargetPrice().doubleValue(),
+                Math.abs(trade.getEntryPrice().doubleValue() - trade.getStopLoss().doubleValue()),
+                Boolean.TRUE.equals(trade.getTp1Hit()),
+                Boolean.TRUE.equals(trade.getRunnerActive()),
+                false,
+                Boolean.TRUE.equals(trade.getTailHalfLocked()),
+                trade.getQuantity(),
+                trade.getRemainingQuantity(),
+                trade.getLotSize(),
+                trade.getPointValue().doubleValue(),
+                trade.getRealizedPnL().doubleValue(),
+                trade.getMaxFavorableExcursion().doubleValue(),
+                trade.getMaxAdverseExcursion().doubleValue(),
+                0.0,
+                trade.getTrailingStopLoss().doubleValue()
+            );
+            activeTradeId = trade.getId();
+            activeSignalTime = trade.getSignalTime();
+            activeExecutionTime = trade.getEntryTime();
+            activeExpectedEntry = trade.getExpectedEntryPrice() != null ? trade.getExpectedEntryPrice().doubleValue() : trade.getEntryPrice().doubleValue();
+            activeEntryLatencyMs = trade.getEntryLatencyMs() == null ? 0L : trade.getEntryLatencyMs();
+            stateManager.update(current -> new TradingSessionSnapshot(
+                marketSessionService.isTradingSessionActive(marketSessionService.now()),
+                current.regime(),
+                current.volatilityQualified(),
+                current.timePhase(),
+                current.tradesTaken(),
+                true,
+                current.feedStable(),
+                current.heartbeatAlive(),
+                current.orHigh(),
+                current.orLow(),
+                current.cumulativeDailyLossR(),
+                activeTrade,
+                "STATE_RESTORED"
+            ));
+            riskEngine.refresh(activeTrade, marketDataStateService.lastAcceptedTick().map(MarketTick::price).orElse(trade.getEntryPrice().doubleValue()));
+        } catch (Exception e) {
+            log.warn("Unable to restore active trade state: {}", e.getMessage());
+        }
+    }
+
+    private void refreshRiskAndSession(ActiveTradeExecution trade, Double currentPrice) {
+        RiskEngine.EquitySnapshot equitySnapshot = riskEngine.refresh(trade, currentPrice);
+        tradingSessionService.updateRuntimeState(DEFAULT_SYMBOL, stateManager.getSnapshot(), equitySnapshot);
+    }
+
+    private double estimateVolatilityPoints() {
+        List<Candle> history = candleAggregator.getValidHistory();
+        if (history.isEmpty()) {
+            return 10.0;
+        }
+        Candle last = history.get(history.size() - 1);
+        return Math.max(1.0, last.high - last.low);
+    }
+
+    private long estimateTickGapMs() {
+        return Math.max(1L, marketDataStateService.lastTickAgeMs(Instant.now()));
+    }
+
+    private double pnlInr(ActiveTradeExecution trade, double price, int lots) {
+        double pnlPoints = "SHORT".equalsIgnoreCase(trade.direction())
+            ? trade.entryPrice() - price
+            : price - trade.entryPrice();
+        return pnlPoints * trade.unitsForLots(lots) * trade.pointValue();
     }
 
     public Map<String, Integer> getTopRejectReasons() {
@@ -884,4 +1083,20 @@ public class ShadowExecutionEngine {
         }
         return expectedExit - actualExit;
     }
+
+    private record PendingEntry(
+        Signal signal,
+        TradingSessionSnapshot state,
+        LocalDateTime signalTime,
+        ExecutionSimulator.ExecutionPlan plan,
+        boolean executed
+    ) {}
+
+    private record PendingExit(
+        ActiveTradeExecution trade,
+        String reason,
+        String exitType,
+        double expectedExit,
+        ExecutionSimulator.ExecutionPlan plan
+    ) {}
 }

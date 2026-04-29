@@ -15,6 +15,8 @@ public class RiskPilotProperties {
 
     private Session session = new Session();
     private Market market = new Market();
+    private Instrument instrument = new Instrument();
+    private Account account = new Account();
     private Filters filters = new Filters();
     private TimePhase timePhase = new TimePhase();
     private Risk risk = new Risk();
@@ -58,6 +60,22 @@ public class RiskPilotProperties {
         private String open = "09:15";
         private String close = "15:30";
         private String zone = "Asia/Kolkata";
+    }
+
+    @Data
+    public static class Instrument {
+        private String symbol = "NIFTY";
+        private int lotSize = 75;
+        private double pointValue = 1.0;
+    }
+
+    @Data
+    public static class Account {
+        private double initialCapital = 500000.0;
+        private double riskPerTradePct = 1.0;
+        private double dailyLossLimitPct = 2.0;
+        private int sizeReductionAfterLosses = 2;
+        private double reducedRiskFactor = 0.5;
     }
 
     @Data
@@ -112,6 +130,7 @@ public class RiskPilotProperties {
     public static class Execution {
         private Slippage slippage = new Slippage();
         private Latency latency = new Latency();
+        private Simulation simulation = new Simulation();
         private boolean rejectOnHighSlippage = true;
         private boolean rejectOnLatencyBreach = true;
 
@@ -128,6 +147,20 @@ public class RiskPilotProperties {
             private long softBlockMs = 500L;
             private long hardBlockMs = 1500L;
             private long panicMs = 5000L;
+        }
+
+        @Data
+        public static class Simulation {
+            private long entryLatencyMinMs = 50L;
+            private long entryLatencyMaxMs = 300L;
+            private long exitLatencyMinMs = 50L;
+            private long exitLatencyMaxMs = 250L;
+            private double spreadMinPoints = 0.5;
+            private double spreadMaxPoints = 2.0;
+            private double slippageMinPoints = 0.1;
+            private double slippageMaxPoints = 3.0;
+            private double volatilityWeight = 0.08;
+            private double tickSpeedWeight = 0.35;
         }
     }
 

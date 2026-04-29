@@ -6,6 +6,7 @@ import com.riskpilot.model.TradeView;
 import com.riskpilot.repository.TradeLogRepository;
 import com.riskpilot.service.MarketDataStateService;
 import com.riskpilot.service.MarketSessionService;
+import com.riskpilot.service.RiskEngine;
 import com.riskpilot.service.ShadowExecutionEngine;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -30,6 +31,7 @@ public class DataController {
     private final MarketSessionService marketSessionService;
     private final ShadowExecutionEngine shadowExecutionEngine;
     private final RiskPilotProperties riskPilotProperties;
+    private final RiskEngine riskEngine;
 
     @GetMapping("/health")
     public Map<String, Object> health() {
@@ -53,6 +55,9 @@ public class DataController {
         payload.put("parseFailureCount", snapshot.parseFailureCount());
         payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
         payload.put("priceSource", priceSource);
+        payload.put("currentEquity", riskEngine.snapshot().currentEquity());
+        payload.put("realizedPnlInr", riskEngine.snapshot().realizedPnlInr());
+        payload.put("unrealizedPnlInr", riskEngine.snapshot().unrealizedPnlInr());
         payload.put("rejectReasonCounts", shadowExecutionEngine.getTopRejectReasons());
         payload.put("operationalStatus", shadowExecutionEngine.isOperationallyBlocked() ? "OPERATIONALLY_BLOCKED" : "ACTIVE");
         payload.put("timestamp", Instant.now().toString());

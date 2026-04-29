@@ -5,15 +5,15 @@ public record ActiveTradeExecution(
     double entryPrice,
     double stopLoss,
     double tp1Level,
-    double initialRisk,
+    double initialRiskPoints,
     boolean tp1Hit,
     boolean runnerActive,
     boolean stage2Active,
     boolean tailHalfLocked,
-    double positionSize,
-    double remainingSize,
     int quantity,
     int remainingQuantity,
+    int lotSize,
+    double pointValue,
     double realizedPnL,
     double mfe,
     double mae,
@@ -32,25 +32,25 @@ public record ActiveTradeExecution(
             return trade;
         }
 
-        double tp1Size = trade.positionSize() * 0.20;
-        double remaining = Math.max(0.0, trade.positionSize() - tp1Size);
-        double pnl = pnlPoints(trade, currentPrice) * tp1Size;
+        int tp1Lots = trade.quantity() > 1 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 1;
+        int remainingLots = Math.max(0, trade.quantity() - tp1Lots);
+        double pnlInr = pnlPoints(trade, currentPrice) * trade.unitsForLots(tp1Lots) * trade.pointValue();
 
         return new ActiveTradeExecution(
             trade.direction(),
             trade.entryPrice(),
             trade.entryPrice(),
             trade.tp1Level(),
-            trade.initialRisk(),
+            trade.initialRiskPoints(),
             true,
-            true,
+            remainingLots > 0,
             trade.stage2Active(),
             trade.tailHalfLocked(),
-            trade.positionSize(),
-            remaining,
             trade.quantity(),
-            Math.max(0, trade.quantity() - Math.max(1, (int) Math.round(trade.quantity() * 0.20))),
-            trade.realizedPnL() + pnl,
+            remainingLots,
+            trade.lotSize(),
+            trade.pointValue(),
+            trade.realizedPnL() + pnlInr,
             trade.mfe(),
             trade.mae(),
             trade.peakFavorableR(),
@@ -76,15 +76,15 @@ public record ActiveTradeExecution(
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
-            trade.initialRisk(),
+            trade.initialRiskPoints(),
             trade.tp1Hit(),
             trade.runnerActive(),
             trade.stage2Active(),
             trade.tailHalfLocked(),
-            trade.positionSize(),
-            trade.remainingSize(),
             trade.quantity(),
             trade.remainingQuantity(),
+            trade.lotSize(),
+            trade.pointValue(),
             trade.realizedPnL(),
             trade.mfe(),
             trade.mae(),
@@ -101,36 +101,51 @@ public record ActiveTradeExecution(
             return TradeExit.noExit();
         }
 
-        double exitSize = trade.tp1Hit() ? trade.remainingSize() : trade.positionSize();
-        double pnl = pnlPoints(trade, currentPrice) * exitSize;
-        return new TradeExit(true, pnl, "STOP_LOSS", currentPrice, "REAL");
+        double pnlInr = pnlPoints(trade, currentPrice) * trade.remainingUnits() * trade.pointValue();
+        return new TradeExit(true, pnlInr, "STOP_LOSS", currentPrice, "REAL");
     }
 
     public static ActiveTradeExecution updateExcursions(ActiveTradeExecution trade, double price) {
         double favorableMove = favorablePoints(trade, price);
         double adverseMove = adversePoints(trade, price);
-        double risk = trade.initialRisk() <= 0.0 ? 1.0 : trade.initialRisk();
+        double risk = trade.initialRiskPoints() <= 0.0 ? 1.0 : trade.initialRiskPoints();
 
         return new ActiveTradeExecution(
             trade.direction(),
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
-            trade.initialRisk(),
+            trade.initialRiskPoints(),
             trade.tp1Hit(),
             trade.runnerActive(),
             trade.stage2Active(),
             trade.tailHalfLocked(),
-            trade.positionSize(),
-            trade.remainingSize(),
             trade.quantity(),
             trade.remainingQuantity(),
+            trade.lotSize(),
+            trade.pointValue(),
             trade.realizedPnL(),
             Math.max(trade.mfe(), favorableMove),
             Math.max(trade.mae(), adverseMove),
             Math.max(trade.peakFavorableR(), favorableMove / risk),
             trade.trailingSL()
         );
+    }
+
+    public int totalUnits() {
+        return unitsForLots(quantity);
+    }
+
+    public int remainingUnits() {
+        return unitsForLots(remainingQuantity);
+    }
+
+    public int unitsForLots(int lots) {
+        return Math.max(0, lots) * Math.max(1, lotSize);
+    }
+
+    public double markToMarketPnl(double currentPrice) {
+        return pnlPoints(this, currentPrice) * remainingUnits() * pointValue;
     }
 
     private static boolean isShort(ActiveTradeExecution trade) {

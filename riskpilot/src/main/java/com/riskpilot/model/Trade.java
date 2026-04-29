@@ -62,6 +62,18 @@ public class Trade {
     
     @Column(nullable = false, precision = 5, scale = 2)
     private BigDecimal remainingSize;
+
+    @Column(nullable = false)
+    private Integer quantity;
+
+    @Column(nullable = false)
+    private Integer remainingQuantity;
+
+    @Column(nullable = false)
+    private Integer lotSize;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal pointValue;
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal realizedPnL;
@@ -97,6 +109,9 @@ public class Trade {
     
     @Column(nullable = false)
     private LocalDateTime entryTime;
+
+    @Column(nullable = false)
+    private LocalDateTime signalTime;
     
     @Column(nullable = true)
     private LocalDateTime exitTime;
@@ -115,6 +130,10 @@ public class Trade {
         if (exitType == null) exitType = "REAL";
         if (realizedPnL == null) realizedPnL = BigDecimal.ZERO;
         if (unrealizedPnL == null) unrealizedPnL = BigDecimal.ZERO;
+        if (quantity == null) quantity = 0;
+        if (remainingQuantity == null) remainingQuantity = 0;
+        if (lotSize == null) lotSize = 1;
+        if (pointValue == null) pointValue = BigDecimal.ONE.setScale(2);
         if (tp1Hit == null) tp1Hit = false;
         if (runnerActive == null) runnerActive = false;
         if (tailHalfLocked == null) tailHalfLocked = false;
