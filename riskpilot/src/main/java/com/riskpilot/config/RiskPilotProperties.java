@@ -23,6 +23,9 @@ public class RiskPilotProperties {
     private Execution execution = new Execution();
     private Infra infra = new Infra();
     private Notification notification = new Notification();
+    private KillSwitch killSwitch = new KillSwitch();
+    private Calendar calendar = new Calendar();
+    private Auth auth = new Auth();
 
     public boolean isLiveMode() {
         return "LIVE".equalsIgnoreCase(mode);
@@ -200,5 +203,41 @@ public class RiskPilotProperties {
         private boolean ntfyEnabled = false;
         private String ntfyTopic = "riskpilot_shadow_alerts";
         private int ntfyCooldownSec = 10;
+    }
+
+    /**
+     * Kill-switch settings. Audit fix: the previous default flag-file path was
+     * a relative string ("KILL_SWITCH"), so a different working directory
+     * silently disabled the entire safety mechanism. Provide an absolute path
+     * via the env var RISKPILOT_KILL_SWITCH_FLAG_FILE_PATH (or
+     * riskpilot.kill-switch.flag-file-path in YAML) in any non-default deploy.
+     */
+    @Data
+    public static class KillSwitch {
+        private String flagFilePath = "/tmp/riskpilot/KILL_SWITCH";
+        private long pollIntervalMs = 1000L;
+        private boolean autoFlattenOnTrip = true;
+        private boolean autoCancelOpenOrdersOnTrip = true;
+    }
+
+    /** NSE trading-calendar overrides. */
+    @Data
+    public static class Calendar {
+        private boolean honorNseHolidays = true;
+        private boolean blockWeekends = true;
+        // Allow operator override (rare): a comma-separated YYYY-MM-DD list of
+        // additional holidays not yet baked into NseHolidayCalendar.
+        private String additionalHolidays = "";
+    }
+
+    /** Broker-auth tuning. */
+    @Data
+    public static class Auth {
+        // Refresh cadence for the cached public IP used in Angel auth headers.
+        private long publicIpRefreshIntervalMinutes = 60L;
+        // If we're within this many ms of a TOTP step boundary at auth time,
+        // sleep until the next boundary so the submitted code is fresh on
+        // arrival at Angel's servers (defends against ±1 step skew rejects).
+        private long totpBoundaryGuardMs = 1500L;
     }
 }

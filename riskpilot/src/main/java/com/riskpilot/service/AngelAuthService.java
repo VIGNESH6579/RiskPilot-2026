@@ -1,11 +1,14 @@
 package com.riskpilot.service;
 
+import com.riskpilot.config.RiskPilotProperties;
 import dev.samstevens.totp.code.DefaultCodeGenerator;
 import dev.samstevens.totp.code.HashingAlgorithm;
 import dev.samstevens.totp.exceptions.CodeGenerationException;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -21,12 +24,33 @@ import java.net.SocketException;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Angel One auth service.
+ *
+ * Audit fixes applied:
+ *  - The synchronous {@code https://api.ipify.org} lookup that previously
+ *    happened on every {@link #authenticate()} call has been removed from the
+ *    hot path. Public-IP resolution now runs on a dedicated scheduled refresh
+ *    and the cached value is read by auth. This eliminates a third-party
+ *    dependency from the critical pre-market login window — an ipify outage
+ *    or slow response would previously block authentication and silently miss
+ *    the open.
+ *  - TOTP submission now defends against ±1 step skew at the bucket boundary.
+ *    If the wall clock is within {@code auth.totpBoundaryGuardMs} of the next
+ *    30-second bucket, we wait briefly for the boundary to pass so the code
+ *    we send is still valid by the time it reaches Angel's servers. Server-
+ *    side, Angel typically tolerates ±1 step (30s); this just makes sure we
+ *    don't ship a code that's about to expire mid-flight.
+ */
 @Service
 public class AngelAuthService {
     private static final Logger log = LoggerFactory.getLogger(AngelAuthService.class);
     private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
+    private static final String IPIFY_URL = "https://api.ipify.org";
     private static final long AUTH_RETRY_GUARD_MS = 5000L;
+    private static final long TOTP_STEP_SECONDS = 30L;
 
     @Value("${ANGEL_API_KEY:${angelapi.key:}}")
     private String apiKey;
@@ -48,12 +72,29 @@ public class AngelAuthService {
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectProvider<AngelTickStreamClient> tickStreamClientProvider;
+    private final RiskPilotProperties properties;
+
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
 
-    public AngelAuthService(ObjectProvider<AngelTickStreamClient> tickStreamClientProvider) {
+    // Cached public IP, refreshed off the auth path.
+    private final AtomicReference<String> cachedPublicIp = new AtomicReference<>(null);
+
+    @Autowired
+    public AngelAuthService(
+        ObjectProvider<AngelTickStreamClient> tickStreamClientProvider,
+        RiskPilotProperties properties
+    ) {
         this.tickStreamClientProvider = tickStreamClientProvider;
+        this.properties = properties;
+    }
+
+    @PostConstruct
+    public void primePublicIpCache() {
+        // Prime the cache once at startup (off the request thread for any
+        // subsequent auth call). If this fails, scheduled refresh will retry.
+        refreshPublicIpCache();
     }
 
     public synchronized boolean authenticate() {
@@ -67,13 +108,18 @@ public class AngelAuthService {
         }
         lastAuthAttemptEpochMs = now;
 
+        // Audit fix: defend against TOTP-bucket-boundary races. If we're very
+        // close to the next 30s boundary, wait briefly so the submitted code
+        // is still valid when Angel processes it.
+        waitPastTotpBoundaryIfNeeded();
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("Accept", "application/json");
         headers.set("X-UserType", "USER");
         headers.set("X-SourceID", "WEB");
         headers.set("X-ClientLocalIP", resolveLocalIp());
-        headers.set("X-ClientPublicIP", resolvePublicIp());
+        headers.set("X-ClientPublicIP", resolvePublicIpFromCache());
         headers.set("X-MACAddress", resolveMacAddress());
         headers.set("X-PrivateKey", apiKey);
 
@@ -88,7 +134,7 @@ public class AngelAuthService {
         }
 
         HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
-        
+
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(AUTH_URL, request, Map.class);
             if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
@@ -108,12 +154,34 @@ public class AngelAuthService {
         return false;
     }
 
+    private void waitPastTotpBoundaryIfNeeded() {
+        long guardMs = properties.getAuth().getTotpBoundaryGuardMs();
+        if (guardMs <= 0L) {
+            return;
+        }
+        long nowMs = System.currentTimeMillis();
+        long stepMs = TOTP_STEP_SECONDS * 1000L;
+        long msIntoBucket = nowMs % stepMs;
+        long msToNextBucket = stepMs - msIntoBucket;
+        if (msToNextBucket <= guardMs) {
+            try {
+                // Wait the small remainder + a tiny safety margin so we sit
+                // safely inside the next bucket.
+                long sleepMs = msToNextBucket + 50L;
+                log.debug("TOTP boundary guard: sleeping {}ms to next 30s step", sleepMs);
+                Thread.sleep(sleepMs);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     private String generateTotp() throws CodeGenerationException {
         DefaultCodeGenerator generator = new DefaultCodeGenerator(HashingAlgorithm.SHA1, 6);
-        long currentBucket = Math.floorDiv(System.currentTimeMillis() / 1000, 30);
+        long currentBucket = Math.floorDiv(System.currentTimeMillis() / 1000, TOTP_STEP_SECONDS);
         return generator.generate(totpSecret, currentBucket);
     }
-    
+
     public String getJwtToken() { return currentJwtToken; }
     public String getFeedToken() { return currentFeedToken; }
     public String getApiKey() { return apiKey; }
@@ -143,6 +211,40 @@ public class AngelAuthService {
         log.info("Pre-market auth result: {}", success);
     }
 
+    /**
+     * Periodically refresh the cached public IP so it's never resolved
+     * synchronously from the auth path. Default cadence: 60 minutes (override
+     * via {@code riskpilot.auth.public-ip-refresh-interval-minutes}).
+     */
+    @Scheduled(
+        fixedDelayString = "#{${riskpilot.auth.public-ip-refresh-interval-minutes:60} * 60 * 1000}",
+        initialDelay = 60_000L
+    )
+    public void scheduledRefreshPublicIp() {
+        refreshPublicIpCache();
+    }
+
+    private void refreshPublicIpCache() {
+        if (configuredPublicIp != null && !configuredPublicIp.isBlank()) {
+            cachedPublicIp.set(configuredPublicIp.trim());
+            return;
+        }
+        try {
+            String ip = restTemplate.getForObject(IPIFY_URL, String.class);
+            if (ip != null && !ip.isBlank()) {
+                cachedPublicIp.set(ip.trim());
+                return;
+            }
+        } catch (Exception e) {
+            log.debug("Public IP refresh failed: {}", e.getMessage());
+        }
+        // Fall back to local IP if we still have nothing — better a stable
+        // value than null in the auth headers.
+        if (cachedPublicIp.get() == null) {
+            cachedPublicIp.set(resolveLocalIp());
+        }
+    }
+
     private String resolveLocalIp() {
         if (configuredLocalIp != null && !configuredLocalIp.isBlank()) {
             return configuredLocalIp.trim();
@@ -154,18 +256,15 @@ public class AngelAuthService {
         }
     }
 
-    private String resolvePublicIp() {
-        if (configuredPublicIp != null && !configuredPublicIp.isBlank()) {
-            return configuredPublicIp.trim();
+    private String resolvePublicIpFromCache() {
+        // Pure memory read on the auth hot path. No network call.
+        String cached = cachedPublicIp.get();
+        if (cached != null && !cached.isBlank()) {
+            return cached;
         }
-        // Best-effort fallback; keep request valid even if lookup fails.
-        try {
-            String ip = restTemplate.getForObject("https://api.ipify.org", String.class);
-            if (ip != null && !ip.isBlank()) {
-                return ip.trim();
-            }
-        } catch (Exception ignored) {
-        }
+        // Last-ditch fallback if the cache hasn't been primed yet (e.g. very
+        // first call before @PostConstruct completes). Avoids returning null
+        // in the auth header but does NOT make a network call.
         return resolveLocalIp();
     }
 

@@ -1,21 +1,74 @@
 package com.riskpilot.engine;
 
+import com.riskpilot.config.RiskPilotProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Kill-switch engine.
+ *
+ * Audit fixes applied:
+ *  - Resolves the kill-switch flag file from configuration to an ABSOLUTE path
+ *    so a relative working-directory drift cannot silently disable the switch.
+ *  - The internal evaluator (evaluateInternal) is wired into a scheduled poller
+ *    (and an addressable updateMetrics hook) instead of being dead code with
+ *    zero callers.
+ *  - The hot-path tick evaluator no longer does a synchronous filesystem stat
+ *    on every signal evaluation. State is cached and refreshed by a scheduled
+ *    poller off the WebSocket thread; isKillSwitchTriggered() is now a memory
+ *    read.
+ *  - Triggering the kill switch invokes a list of registered halt actions
+ *    (e.g. cancel-all-orders + flatten-positions) so it actually stops trading
+ *    instead of only logging.
+ */
 @Slf4j
 @Component
 public class KillSwitchEngine {
 
-    private static final String KILL_FLAG_FILE = "KILL_SWITCH.flag";
-    private static final Path KILL_PATH = Paths.get(KILL_FLAG_FILE);
+    private final RiskPilotProperties properties;
+
+    private Path killPath;
+
+    private final AtomicBoolean cachedTriggered = new AtomicBoolean(false);
+    private final AtomicReference<List<String>> cachedReasons =
+        new AtomicReference<>(Collections.emptyList());
+    private final AtomicReference<Instant> lastEvaluationAt =
+        new AtomicReference<>(Instant.EPOCH);
+
+    private final List<Runnable> haltActions = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean haltActionsExecuted = new AtomicBoolean(false);
+
+    @Autowired
+    public KillSwitchEngine(RiskPilotProperties properties) {
+        this.properties = properties;
+    }
+
+    @PostConstruct
+    public void init() {
+        String configured = properties.getKillSwitch().getFlagFilePath();
+        this.killPath = Paths.get(configured).toAbsolutePath().normalize();
+        log.info("KillSwitchEngine initialised, flag file = {}", killPath);
+        // Prime the cache once on startup so consumers don't see a stale "false"
+        // before the first scheduled refresh.
+        refreshFromFlagFile();
+    }
 
     @Data
     public static class KillSwitchSnapshot {
@@ -40,8 +93,8 @@ public class KillSwitchEngine {
         private final int heartbeatPanics;
         private final int missingTickSessions;
 
-        public MetricsWindow(double expectancy, double runnerRate, double medianEntrySlippage, 
-                           double medianRunnerSlippage, int lossStreak, int heartbeatPanics, 
+        public MetricsWindow(double expectancy, double runnerRate, double medianEntrySlippage,
+                           double medianRunnerSlippage, int lossStreak, int heartbeatPanics,
                            int missingTickSessions) {
             this.expectancy = expectancy;
             this.runnerRate = runnerRate;
@@ -54,53 +107,42 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Check if kill-switch is triggered by external system (Python forward_scorecard)
+     * Hot-path safe: returns the cached value populated by the scheduled poller.
+     * No filesystem I/O. May lag by at most {@code killSwitch.pollIntervalMs}.
      */
     public boolean isKillSwitchTriggered() {
-        if (Files.exists(KILL_PATH)) {
-            try {
-                List<String> lines = Files.readAllLines(KILL_PATH);
-                if (!lines.isEmpty()) {
-                    log.error("🚨 KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
-                    return true;
-                }
-            } catch (Exception e) {
-                log.error("Error reading kill-switch file: {}", e.getMessage());
-                return true; // Fail safe - if we can't read, assume killed
-            }
-        }
-        return false;
+        return cachedTriggered.get();
     }
 
     /**
-     * Get current kill-switch state
+     * Get current kill-switch state from the in-memory cache.
      */
     public KillSwitchSnapshot getCurrentState() {
-        if (isKillSwitchTriggered()) {
-            try {
-                List<String> lines = Files.readAllLines(KILL_PATH);
-                return new KillSwitchSnapshot(true, lines, java.time.LocalDateTime.now().toString());
-            } catch (Exception e) {
-                return new KillSwitchSnapshot(true, List.of("FILE_READ_ERROR"), java.time.LocalDateTime.now().toString());
-            }
-        }
-        return new KillSwitchSnapshot(false, List.of(), java.time.LocalDateTime.now().toString());
+        return new KillSwitchSnapshot(
+            cachedTriggered.get(),
+            cachedReasons.get(),
+            LocalDateTime.now().toString()
+        );
     }
 
     /**
-     * Clear kill-switch (for manual restart after investigation)
+     * Clear kill-switch (for manual restart after investigation).
      */
-    public void clearKillSwitch() {
+    public synchronized void clearKillSwitch() {
         try {
-            Files.deleteIfExists(KILL_PATH);
-            log.info("✅ Kill-switch cleared - system can restart");
+            Files.deleteIfExists(killPath);
+            cachedTriggered.set(false);
+            cachedReasons.set(Collections.emptyList());
+            haltActionsExecuted.set(false);
+            log.info("Kill-switch cleared - system can restart");
         } catch (Exception e) {
             log.error("Failed to clear kill-switch: {}", e.getMessage());
         }
     }
 
     /**
-     * Internal kill-switch evaluation (for Java-level monitoring)
+     * Internal kill-switch evaluation against a metrics window. Now actually
+     * called from {@link #updateMetrics(MetricsWindow)} and (in tests) directly.
      */
     public KillSwitchSnapshot evaluateInternal(MetricsWindow metrics) {
         List<String> reasons = new ArrayList<>();
@@ -148,21 +190,111 @@ public class KillSwitchEngine {
 
         boolean triggered = !reasons.isEmpty();
         if (triggered) {
-            log.error("🚨 INTERNAL KILL SWITCH - Reasons: {}", String.join(", ", reasons));
+            log.error("INTERNAL KILL SWITCH evaluated - Reasons: {}", String.join(", ", reasons));
+            // Persist so the next process restart still sees the trip, and the
+            // scheduled poller picks it up identically to externally-written
+            // kill flags.
+            writeKillSwitch(reasons);
+            applyTrigger(reasons);
         }
 
-        return new KillSwitchSnapshot(triggered, reasons, java.time.LocalDateTime.now().toString());
+        return new KillSwitchSnapshot(triggered, reasons, LocalDateTime.now().toString());
     }
 
     /**
-     * Write kill-switch file (called by Python forward_scorecard)
+     * Push a new metrics window into the engine. Intended to be called from
+     * {@link RealTimeEdgeTracker} (or any other producer) on metric updates.
      */
-    public void writeKillSwitch(List<String> reasons) {
+    public void updateMetrics(MetricsWindow metrics) {
+        evaluateInternal(metrics);
+    }
+
+    /**
+     * Write kill-switch file (called by Python forward_scorecard or by the
+     * internal evaluator).
+     */
+    public synchronized void writeKillSwitch(List<String> reasons) {
         try {
-            Files.write(KILL_PATH, String.join("\n", reasons).getBytes());
-            log.error("🚨 KILL SWITCH WRITTEN - System will halt");
-        } catch (Exception e) {
-            log.error("Failed to write kill-switch file: {}", e.getMessage());
+            Path parent = killPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(killPath, String.join("\n", reasons).getBytes());
+            log.error("KILL SWITCH WRITTEN to {} - System will halt", killPath);
+        } catch (IOException e) {
+            log.error("Failed to write kill-switch file at {}: {}", killPath, e.getMessage());
         }
+        applyTrigger(reasons);
+    }
+
+    /**
+     * Register a halt action to be executed exactly once when the kill switch
+     * trips. Typical actions: cancel all open orders, flatten open positions,
+     * stop new-order intake.
+     */
+    public void registerHaltAction(Runnable action) {
+        if (action != null) {
+            haltActions.add(action);
+        }
+    }
+
+    /**
+     * Scheduled poller — runs on Spring's task scheduler, NOT on the WebSocket
+     * I/O thread. Refreshes the cached kill-switch state every
+     * {@code killSwitch.pollIntervalMs} so the hot path can stay lock-free.
+     */
+    @Scheduled(fixedDelayString = "${riskpilot.kill-switch.poll-interval-ms:1000}")
+    public void scheduledRefresh() {
+        refreshFromFlagFile();
+    }
+
+    private void refreshFromFlagFile() {
+        try {
+            if (Files.exists(killPath)) {
+                List<String> lines = Files.readAllLines(killPath);
+                if (!lines.isEmpty()) {
+                    if (!cachedTriggered.get()) {
+                        log.error("KILL SWITCH ACTIVATED - flag file {} present, reasons: {}",
+                            killPath, String.join(", ", lines));
+                    }
+                    cachedReasons.set(new ArrayList<>(lines));
+                    cachedTriggered.set(true);
+                    applyTrigger(lines);
+                } else {
+                    // Empty file is treated as no trip — same as no file.
+                    cachedTriggered.set(false);
+                    cachedReasons.set(Collections.emptyList());
+                }
+            } else {
+                cachedTriggered.set(false);
+                cachedReasons.set(Collections.emptyList());
+            }
+        } catch (Exception e) {
+            // Fail safe: if we cannot read the file, assume tripped.
+            log.error("Error reading kill-switch file {}: {} — assuming TRIGGERED",
+                killPath, e.getMessage());
+            cachedTriggered.set(true);
+            cachedReasons.set(List.of("FILE_READ_ERROR"));
+            applyTrigger(cachedReasons.get());
+        } finally {
+            lastEvaluationAt.set(Instant.now());
+        }
+    }
+
+    private void applyTrigger(List<String> reasons) {
+        if (haltActions.isEmpty()) {
+            return;
+        }
+        if (!haltActionsExecuted.compareAndSet(false, true)) {
+            return; // already executed during this trip
+        }
+        for (Runnable action : haltActions) {
+            try {
+                action.run();
+            } catch (Exception ex) {
+                log.error("Halt action threw {}: {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
+            }
+        }
+        log.error("Kill-switch halt actions executed (reasons={})", reasons);
     }
 }

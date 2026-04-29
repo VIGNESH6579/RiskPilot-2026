@@ -35,8 +35,17 @@ public class CandleAggregator {
     private Candle currentBuildingCandle = null;
     private ZonedDateTime lastTickTime = ZonedDateTime.now();
     private Instant lastArrivalTime = null;
-    
-    private boolean feedUnstable = false;
+    // Audit fix: candle alignment must be tracked by full ZonedDateTime so the
+    // midnight boundary doesn't false-match (LocalTime.isAfter wraps once the
+    // clock crosses 00:00). Prior code used only LocalTime which also could not
+    // detect "tick belongs to an already-finalised candle" across sessions.
+    private ZonedDateTime currentCandleAlignedTime = null;
+
+    // feedUnstable is sticky once set within a session — it must only be
+    // cleared by an explicit clearHistory() call. The previous implementation
+    // assigned (=) the value on every tick which silently wiped any prior
+    // markUnstable() event the next time a healthy tick arrived.
+    private volatile boolean feedUnstable = false;
 
     public CandleAggregator(
         ApplicationEventPublisher publisher,
@@ -84,7 +93,12 @@ public class CandleAggregator {
         double price = tick.price();
         java.time.Instant now = tick.receivedAt();
         long arrivalGapMs = lastArrivalTime == null ? 0L : java.time.Duration.between(lastArrivalTime, now).toMillis();
-        feedUnstable = (lastArrivalTime != null && arrivalGapMs > 4500L);
+        // Audit fix: OR (|=) instead of assignment (=) so prior markUnstable()
+        // calls or earlier gap-detected instability are not silently cleared
+        // by the next healthy tick.
+        if (lastArrivalTime != null && arrivalGapMs > 4500L) {
+            feedUnstable = true;
+        }
         lastTickTime = tickTime;
         lastArrivalTime = now;
         log.debug(
@@ -96,28 +110,50 @@ public class CandleAggregator {
                 tick.sourceAgeMs()
         );
 
-        // 5-minute alignment logic securely
+        // 5-minute alignment logic. Use full ZonedDateTime — comparing only
+        // LocalTime breaks across midnight (00:00 < 23:55) and silently
+        // corrupted closed candles when an out-of-order tick arrived for an
+        // earlier bar.
         int minute = tickTime.getMinute();
         int candleStartMinute = (minute / 5) * 5;
-        LocalTime candleAlignedTime = LocalTime.of(tickTime.getHour(), candleStartMinute, 0);
-        String candleTime = candleAlignedTime.format(CANDLE_TIME_FORMATTER);
+        ZonedDateTime alignedTime = tickTime
+            .withMinute(candleStartMinute)
+            .withSecond(0)
+            .withNano(0);
+        String candleTime = alignedTime.toLocalTime().format(CANDLE_TIME_FORMATTER);
 
         if (currentBuildingCandle == null) {
             currentBuildingCandle = new Candle(
-                tickTime.toLocalDate().toString(),
+                alignedTime.toLocalDate().toString(),
                 candleTime,
                 price, price, price, price, 1L
             );
+            currentCandleAlignedTime = alignedTime;
         } else {
-            LocalTime currentCandleTime = LocalTime.parse(currentBuildingCandle.time);
-            if (candleAlignedTime.isAfter(currentCandleTime)) {
-                // Candle has cleanly closed via time rollover properly natively tracking
+            ZonedDateTime currentAligned = currentCandleAlignedTime;
+            if (currentAligned == null) {
+                // Defensive: re-derive from the in-flight candle if state was
+                // restored without the aligned timestamp.
+                currentAligned = alignedTime;
+            }
+            if (alignedTime.isAfter(currentAligned)) {
+                // Candle has cleanly closed via time rollover.
                 finalizeCandle(currentBuildingCandle);
-                
+
                 currentBuildingCandle = new Candle(
-                    tickTime.toLocalDate().toString(),
+                    alignedTime.toLocalDate().toString(),
                     candleTime,
                     price, price, price, price, 1L
+                );
+                currentCandleAlignedTime = alignedTime;
+            } else if (alignedTime.isBefore(currentAligned)) {
+                // Out-of-order tick for an already-closed candle — drop it
+                // instead of silently mutating the in-flight bar's OHLC. Mark
+                // the feed unstable so downstream consumers can react.
+                feedUnstable = true;
+                log.warn(
+                    "Dropping out-of-order tick seq={} alignedTo={} currentBuildingAt={} (OOO)",
+                    tick.sequenceId(), alignedTime, currentAligned
                 );
             } else {
                 currentBuildingCandle.applyTick(price);
@@ -175,6 +211,7 @@ public class CandleAggregator {
         sessionBuffer.clear();
         afterHoursBuffer.clear();
         currentBuildingCandle = null;
+        currentCandleAlignedTime = null;
         lastTickTime = ZonedDateTime.now(marketSessionService.zoneId());
         lastArrivalTime = null;
         feedUnstable = false;

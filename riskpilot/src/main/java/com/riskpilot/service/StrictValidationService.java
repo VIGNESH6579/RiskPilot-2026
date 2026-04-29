@@ -234,11 +234,18 @@ public class StrictValidationService {
                 true
             );
         }
+        // Audit fix: preserve the ORIGINAL tick.receivedAt set by the
+        // WebSocket handler when the frame first arrived. Overwriting it with
+        // `now` (the validation timestamp) made the tick appear arbitrarily
+        // fresh, masking real I/O and processing latency, breaking age-based
+        // staleness checks downstream, and corrupting end-to-end latency
+        // metrics. Validation may take milliseconds; that delay is not a
+        // property of the tick itself.
         MarketTick acceptedTick = MarketTick.of(
             tick.symbol(),
             tick.price(),
             tick.exchangeTimestamp(),
-            now,
+            tick.receivedAt(),
             tick.transport(),
             tick.sequenceId(),
             tick.rawExchangeTime(),

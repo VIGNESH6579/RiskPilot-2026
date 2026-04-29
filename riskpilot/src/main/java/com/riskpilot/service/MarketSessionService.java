@@ -16,18 +16,48 @@ import java.time.ZonedDateTime;
 public class MarketSessionService {
 
     private final RiskPilotProperties properties;
+    private final NseHolidayCalendar holidayCalendar;
 
     public boolean isMarketOpen() {
         return isMarketOpen(now());
     }
 
+    /**
+     * Audit fix: previously this only checked the time-of-day window, so
+     * Saturdays, Sundays, Republic Day, Diwali, etc. all returned {@code true}
+     * during 09:15–15:30. Now also gates on weekend + NSE holiday calendar.
+     */
     public boolean isMarketOpen(Instant timestamp) {
-        LocalTime localTime = toMarketTime(timestamp).toLocalTime();
+        ZonedDateTime zdt = toMarketTime(timestamp);
+        if (!isTradingDay(zdt.toLocalDate())) {
+            return false;
+        }
+        LocalTime localTime = zdt.toLocalTime();
         return !localTime.isBefore(marketOpen()) && localTime.isBefore(marketClose());
     }
 
     public boolean isMarketOpen(LocalDateTime timestamp) {
         return isMarketOpen(timestamp.atZone(zoneId()).toInstant());
+    }
+
+    /** True when the given IST date is a regular full-day trading session. */
+    public boolean isTradingDay(LocalDate date) {
+        return holidayCalendar.isTradingDay(date);
+    }
+
+    /** True when today (IST) is a regular full-day trading session. */
+    public boolean isTradingDay() {
+        return isTradingDay(nowIst().toLocalDate());
+    }
+
+    /** True when the given IST date is on the published NSE holiday list. */
+    public boolean isNseHoliday(LocalDate date) {
+        return holidayCalendar.isHoliday(date);
+    }
+
+    /** True when the given IST date is a Saturday or Sunday. */
+    public boolean isWeekend(LocalDate date) {
+        return holidayCalendar.isWeekend(date);
     }
 
     public Instant now() {

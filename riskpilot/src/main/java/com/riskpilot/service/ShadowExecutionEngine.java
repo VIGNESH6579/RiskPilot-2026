@@ -40,6 +40,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -721,7 +722,14 @@ public class ShadowExecutionEngine {
 
     private void logReject(TradingSessionSnapshot state, String reason) {
         rejectedSignalCount.incrementAndGet();
-        rejectReasonCounts.computeIfAbsent(reason == null ? "UNKNOWN" : reason, ignored -> new AtomicInteger()).incrementAndGet();
+        // Audit fix: bound rejectReasonCounts cardinality. Many reject reasons
+        // embed dynamic numeric values, e.g. "LIVE_TICK_STALE: age=137ms
+        // max=100ms" or "SLIPPAGE_BREACH: actual=2.7 max=2.0". Using the raw
+        // string as a map key produced an unbounded map (one entry per unique
+        // measurement), leaking memory over a session and flooding metrics
+        // backends. We now strip such suffixes before counting.
+        String reasonKey = normalizeRejectReason(reason);
+        rejectReasonCounts.computeIfAbsent(reasonKey, ignored -> new AtomicInteger()).incrementAndGet();
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
             current.regime(),
@@ -747,6 +755,31 @@ public class ShadowExecutionEngine {
         );
 
         broadcastCurrentSessionState();
+    }
+
+    // Strip dynamic numeric/measurement suffixes from reject reasons so the
+    // counters map has bounded cardinality. Keeps a stable, low-cardinality
+    // family key suitable for metrics/dashboards.
+    private static final Pattern REJECT_REASON_NUMERIC_SUFFIX = Pattern.compile(
+        "[\\s,;:]*\\b(age|max|min|actual|expected|skew|gap|ageMs|maxMs|minMs|threshold|value)\\s*=\\s*-?\\d+(?:\\.\\d+)?\\s*(?:ms|s|pts|points|%)?",
+        Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern REJECT_REASON_TRAILING_NUMBERS = Pattern.compile(
+        "(?<=[A-Z_])\\s*-?\\d+(?:\\.\\d+)?\\s*(?:ms|s|pts|points|%)?$",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    static String normalizeRejectReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "UNKNOWN";
+        }
+        String stripped = REJECT_REASON_NUMERIC_SUFFIX.matcher(reason).replaceAll("");
+        stripped = REJECT_REASON_TRAILING_NUMBERS.matcher(stripped).replaceAll("");
+        // Collapse whitespace and trim trailing punctuation that gets left
+        // dangling after the value-bearing parts are stripped.
+        stripped = stripped.replaceAll("\\s+", " ").trim();
+        stripped = stripped.replaceAll("[,;:\\s]+$", "");
+        return stripped.isEmpty() ? "UNKNOWN" : stripped;
     }
 
     private void broadcastCurrentSessionState() {

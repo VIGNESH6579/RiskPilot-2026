@@ -32,7 +32,18 @@ public record ActiveTradeExecution(
             return trade;
         }
 
-        int tp1Lots = trade.quantity() > 1 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 1;
+        // Audit fix: when only 1 lot is open, the previous code took 100% off
+        // at TP1 (tp1Lots=1, remainingLots=0) which left no runner — defeating
+        // the asymmetric runner-driven edge the strategy is designed around.
+        // For single-lot trades we now defer the partial entirely: TP1 is
+        // recorded as "passed" only by virtue of trail-tightening on the next
+        // candle close, and the full lot remains as the runner. Multi-lot
+        // trades behave as before: ~20% off at TP1, the rest as runners.
+        if (trade.quantity() <= 1) {
+            return trade;
+        }
+
+        int tp1Lots = Math.max(1, (int) Math.round(trade.quantity() * 0.20));
         int remainingLots = Math.max(0, trade.quantity() - tp1Lots);
         double pnlInr = pnlPoints(trade, currentPrice) * trade.unitsForLots(tp1Lots) * trade.pointValue();
 
