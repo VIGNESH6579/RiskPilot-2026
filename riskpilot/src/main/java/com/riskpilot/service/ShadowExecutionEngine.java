@@ -130,6 +130,11 @@ public class ShadowExecutionEngine {
                 return;
             }
 
+            if (pendingEntry != null && isEntryPlanExpired(pendingEntry, tick.receivedAt())) {
+                logReject(stateManager.getSnapshot(), "ENTRY_PLAN_EXPIRED");
+                pendingEntry = null;
+            }
+
             if (pendingEntry != null && !pendingEntry.executed() && !tick.receivedAt().isBefore(pendingEntry.plan().executionTime())) {
                 executePlannedEntry(pendingEntry, tick);
             }
@@ -142,6 +147,17 @@ public class ShadowExecutionEngine {
 
             ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), tick.price());
             trade = ActiveTradeExecution.fromTickTP1(trade, tick.price());
+
+            if (pendingExit != null && isExitPlanExpired(pendingExit, tick.receivedAt())) {
+                PendingExit expiredExit = pendingExit;
+                closeTrade(
+                    expiredExit.trade(),
+                    exitAtPrice(expiredExit.trade(), expiredExit.expectedExit(), "EXIT_PLAN_EXPIRED", "ESTIMATED"),
+                    null,
+                    null
+                );
+                return;
+            }
 
             if (pendingExit != null && !tick.receivedAt().isBefore(pendingExit.plan().executionTime())) {
                 executePlannedExit(pendingExit, tick);
@@ -288,35 +304,29 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        MarketTick entryTick;
         try {
-            entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
+            MarketTick entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
             StrictValidationService.ValidationResult validationResult = strictValidationService.validateFreshTick(entryTick);
             if (!validationResult.allowExecution()) {
                 logReject(state, "MARKET_CLOSED_EXECUTION_BLOCK");
                 return;
             }
-            entryTick = validationResult.tick();
         } catch (Exception e) {
             logReject(state, e.getMessage());
             return;
         }
 
-        double entrySlippage = Math.abs(entryTick.price() - signal.getEntry());
-        long entryLatencyMs = estimateTickGapMs();
-
         try {
             strictValidationService.validateRegime(state.regime().name());
             strictValidationService.validateTimePhase(latest.timestamp().toLocalTime());
-            strictValidationService.validateEntryExecution(signal.getEntry(), entryTick.price(), entryLatencyMs);
         } catch (Exception e) {
             logReject(state, e.getMessage());
             return;
         }
 
         double orRange = currentOrRange(state);
-        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, entrySlippage, entryLatencyMs);
-        riskGateEngine.logDecision(state, orRange, entryLatencyMs, entrySlippage, decision);
+        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, 0.0, 0L);
+        riskGateEngine.logDecision(state, orRange, 0L, 0.0, decision);
         if (!decision.allowed()) {
             logReject(state, decision.reason());
             return;
@@ -356,6 +366,23 @@ public class ShadowExecutionEngine {
             tick,
             plannedEntry.plan()
         );
+        long actualEntryLatencyMs = Duration.between(plannedEntry.plan().signalTime(), fill.executionTime()).toMillis();
+        double actualEntrySlippage = Math.abs(fill.actualPrice() - plannedEntry.signal().getEntry());
+        try {
+            strictValidationService.validateEntryExecution(plannedEntry.signal().getEntry(), fill.actualPrice(), actualEntryLatencyMs);
+            TradingSessionSnapshot currentState = stateManager.getSnapshot();
+            GateDecision decision = riskGateEngine.evaluateEntry(currentState, currentOrRange(currentState), actualEntrySlippage, actualEntryLatencyMs);
+            riskGateEngine.logDecision(currentState, currentOrRange(currentState), actualEntryLatencyMs, actualEntrySlippage, decision);
+            if (!decision.allowed()) {
+                logReject(currentState, decision.reason());
+                pendingEntry = null;
+                return;
+            }
+        } catch (Exception e) {
+            logReject(stateManager.getSnapshot(), e.getMessage());
+            pendingEntry = null;
+            return;
+        }
         openTrade(plannedEntry.signal(), plannedEntry.state(), plannedEntry.signalTime(), fill);
         pendingEntry = null;
     }
@@ -390,6 +417,24 @@ public class ShadowExecutionEngine {
             tick,
             pendingExit.plan()
         );
+        long actualExitLatencyMs = Duration.between(pendingExit.plan().signalTime(), fill.executionTime()).toMillis();
+        try {
+            strictValidationService.validateExitExecution(
+                pendingExit.trade().tp1Hit() ? "RUNNER" : "PANIC_EXIT",
+                pendingExit.expectedExit(),
+                fill.actualPrice(),
+                actualExitLatencyMs
+            );
+        } catch (Exception e) {
+            log.warn("Exit execution validation failed, using estimated exit reason={}", e.getMessage());
+            closeTrade(
+                pendingExit.trade(),
+                exitAtPrice(pendingExit.trade(), pendingExit.expectedExit(), "EXIT_VALIDATION_FAILED", "ESTIMATED"),
+                null,
+                null
+            );
+            return;
+        }
         double pnlInr = pnlInr(pendingExit.trade(), fill.actualPrice(), pendingExit.trade().remainingQuantity());
         TradeExit exit = new TradeExit(true, pnlInr, pendingExit.reason(), fill.actualPrice(), pendingExit.exitType());
         closeTrade(pendingExit.trade(), exit, tick, fill);
@@ -483,6 +528,10 @@ public class ShadowExecutionEngine {
         double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
         RiskEngine.EquitySnapshot equitySnapshot = riskEngine.snapshot();
         int quantityLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.currentEquity(), equitySnapshot.consecutiveLosses());
+        if (quantityLots <= 0) {
+            logReject(state, "INSUFFICIENT_RISK_BUDGET");
+            return;
+        }
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
             normalizeDirection(signal.getDirection()),
@@ -1041,7 +1090,8 @@ public class ShadowExecutionEngine {
     }
 
     private long estimateTickGapMs() {
-        return Math.max(1L, marketDataStateService.lastTickAgeMs(Instant.now()));
+        long interArrivalMs = marketDataStateService.lastInterArrivalMs();
+        return Math.max(1L, interArrivalMs == 0L ? config.getInfra().getPaper().getTickIntervalMs() : interArrivalMs);
     }
 
     private double pnlInr(ActiveTradeExecution trade, double price, int lots) {
@@ -1082,6 +1132,16 @@ public class ShadowExecutionEngine {
             return actualExit - expectedExit;
         }
         return expectedExit - actualExit;
+    }
+
+    private boolean isEntryPlanExpired(PendingEntry plannedEntry, Instant observedAt) {
+        Instant expiry = plannedEntry.plan().executionTime().plusMillis(config.getExecution().getLatency().getHardBlockMs());
+        return observedAt.isAfter(expiry);
+    }
+
+    private boolean isExitPlanExpired(PendingExit plannedExit, Instant observedAt) {
+        Instant expiry = plannedExit.plan().executionTime().plusMillis(config.getExecution().getLatency().getPanicMs());
+        return observedAt.isAfter(expiry);
     }
 
     private record PendingEntry(

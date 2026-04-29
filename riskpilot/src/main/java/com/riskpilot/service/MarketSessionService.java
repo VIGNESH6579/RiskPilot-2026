@@ -23,7 +23,7 @@ public class MarketSessionService {
 
     public boolean isMarketOpen(Instant timestamp) {
         LocalTime localTime = toMarketTime(timestamp).toLocalTime();
-        return !localTime.isBefore(marketOpen()) && !localTime.isAfter(marketClose());
+        return !localTime.isBefore(marketOpen()) && localTime.isBefore(marketClose());
     }
 
     public boolean isMarketOpen(LocalDateTime timestamp) {

@@ -23,7 +23,10 @@ public class PositionSizer {
         double lotRiskInr = sanitizedStopDistance
             * properties.getInstrument().getLotSize()
             * properties.getInstrument().getPointValue();
+        if (riskBudgetInr <= 0.0 || lotRiskInr <= 0.0 || riskBudgetInr < lotRiskInr) {
+            return 0;
+        }
         int lots = (int) Math.floor(riskBudgetInr / lotRiskInr);
-        return Math.max(1, lots);
+        return Math.max(0, lots);
     }
 }

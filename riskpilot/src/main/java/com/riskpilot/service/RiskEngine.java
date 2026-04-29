@@ -37,8 +37,8 @@ public class RiskEngine {
     }
 
     public synchronized EquitySnapshot refresh(ActiveTradeExecution activeTrade, Double currentPrice) {
-        LocalDate sessionDate = marketSessionService.toMarketTime(marketSessionService.now()).toLocalDate();
-        BigDecimal realizedToday = tradeRepository.getPnLBetween(
+        LocalDate sessionDate = marketSessionService.sessionDate(marketSessionService.now());
+        BigDecimal realizedToday = tradeRepository.getRealizedPnLBetween(
             properties.getInstrument().getSymbol(),
             sessionDate.atStartOfDay(),
             sessionDate.plusDays(1).atStartOfDay()

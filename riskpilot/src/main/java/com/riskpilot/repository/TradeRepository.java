@@ -39,6 +39,19 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
         @Param("startDate") LocalDateTime startDate,
         @Param("endDate") LocalDateTime endDate
     );
+
+    @Query("""
+        SELECT COALESCE(SUM(t.realizedPnL), 0)
+        FROM Trade t
+        WHERE t.symbol = :symbol
+          AND t.entryTime >= :startDate
+          AND t.entryTime < :endDate
+        """)
+    BigDecimal getRealizedPnLBetween(
+        @Param("symbol") String symbol,
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
     
     @Query("SELECT MAX(t.maxAdverseExcursion) FROM Trade t WHERE t.symbol = :symbol AND t.entryTime >= :startDate")
     BigDecimal getMaxAdverseExcursionSince(@Param("symbol") String symbol, @Param("startDate") LocalDateTime startDate);

@@ -35,6 +35,7 @@ public class MarketDataStateService {
     }
 
     public synchronized void recordAcceptedTick(MarketTick tick) {
+        MarketDataSnapshot current = snapshotRef.get();
         snapshotRef.set(new MarketDataSnapshot(
             true,
             true,
@@ -42,12 +43,15 @@ public class MarketDataStateService {
             null,
             false,
             0,
-            snapshotRef.get().parseFailureCount(),
+            current.parseFailureCount(),
             true,
             tick.transport(),
             tick,
             tick.receivedAt(),
-            tick.sequenceId()
+            tick.sequenceId(),
+            current.lastAcceptedAt() == null
+                ? 0L
+                : Math.max(0L, Duration.between(current.lastAcceptedAt(), tick.receivedAt()).toMillis())
         ));
     }
 
@@ -68,7 +72,8 @@ public class MarketDataStateService {
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
-            current.lastSequenceId()
+            current.lastSequenceId(),
+            current.lastInterArrivalMs()
         ));
         return rejected;
     }
@@ -87,7 +92,8 @@ public class MarketDataStateService {
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
-            current.lastSequenceId()
+            current.lastSequenceId(),
+            current.lastInterArrivalMs()
         ));
     }
 
@@ -105,7 +111,8 @@ public class MarketDataStateService {
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
-            current.lastSequenceId()
+            current.lastSequenceId(),
+            current.lastInterArrivalMs()
         ));
     }
 
@@ -123,7 +130,8 @@ public class MarketDataStateService {
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
-            current.lastSequenceId()
+            current.lastSequenceId(),
+            current.lastInterArrivalMs()
         ));
     }
 
@@ -141,7 +149,8 @@ public class MarketDataStateService {
             transport != null ? transport : current.transport(),
             current.lastTick(),
             current.lastAcceptedAt(),
-            current.lastSequenceId()
+            current.lastSequenceId(),
+            current.lastInterArrivalMs()
         ));
     }
 
@@ -163,6 +172,10 @@ public class MarketDataStateService {
             return Long.MAX_VALUE;
         }
         return Math.max(0L, Duration.between(current.lastTick().receivedAt(), now).toMillis());
+    }
+
+    public long lastInterArrivalMs() {
+        return snapshotRef.get().lastInterArrivalMs();
     }
 
     public String resolvePriceSource(boolean marketOpen, long maxSilenceMs) {
@@ -196,7 +209,8 @@ public class MarketDataStateService {
         MarketDataTransport transport,
         MarketTick lastTick,
         Instant lastAcceptedAt,
-        long lastSequenceId
+        long lastSequenceId,
+        long lastInterArrivalMs
     ) {
         public static MarketDataSnapshot initial() {
             return new MarketDataSnapshot(
@@ -211,7 +225,8 @@ public class MarketDataStateService {
                 null,
                 null,
                 null,
-                -1L
+                -1L,
+                0L
             );
         }
 
@@ -228,7 +243,8 @@ public class MarketDataStateService {
                 transport != null ? transport : this.transport,
                 lastTick,
                 lastAcceptedAt,
-                lastSequenceId
+                lastSequenceId,
+                lastInterArrivalMs
             );
         }
 
@@ -245,7 +261,8 @@ public class MarketDataStateService {
                 transport != null ? transport : this.transport,
                 lastTick,
                 lastAcceptedAt,
-                lastSequenceId
+                lastSequenceId,
+                lastInterArrivalMs
             );
         }
     }
