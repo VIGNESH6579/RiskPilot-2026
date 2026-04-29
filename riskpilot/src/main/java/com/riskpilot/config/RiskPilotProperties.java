@@ -63,8 +63,11 @@ public class RiskPilotProperties {
         private String symbol = "NIFTY";
         private int lotSize = 75;
         private double pointValue = 1.0;
-        // NIFTY weekly expiry day. Adjust here when the exchange schedule changes.
-        private String expiryDayOfWeek = "THURSDAY";
+        // NIFTY weekly expiry day. As of the SEBI single-weekly-expiry
+        // framework (effective 2025-09 onwards) NSE settles NIFTY weekly
+        // options on Tuesday. Override with INSTRUMENT_EXPIRY_DAY_OF_WEEK
+        // if the exchange schedule changes again.
+        private String expiryDayOfWeek = "TUESDAY";
     }
 
     @Data
