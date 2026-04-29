@@ -318,7 +318,7 @@
 
         spotEl.textContent = formatNum(health.spot);
         expiryEl.textContent = health.expiryDate || health.expiry || "--";
-        sourceEl.textContent = health.source || health.optionChainSource || "--";
+        sourceEl.textContent = health.priceSource || health.source || health.optionChainSource || "--";
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
         applySessionState(state);
 

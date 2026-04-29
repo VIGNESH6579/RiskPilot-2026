@@ -772,11 +772,14 @@ public class ShadowExecutionEngine {
         MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
         boolean marketOpen = marketSessionService.isMarketOpen();
         String priceSource = marketDataStateService.resolvePriceSource(marketOpen, config.getInfra().getHeartbeat().getMaxSilenceMs());
+        Double liveLastPrice = "LIVE".equals(priceSource) && marketDataSnapshot.lastTick() != null
+            ? marketDataSnapshot.lastTick().price()
+            : null;
         payload.put("transport", marketDataSnapshot.transport() != null ? marketDataSnapshot.transport().name() : null);
         payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
         payload.put("priceSource", priceSource);
         payload.put("sessionActive", marketOpen && state.sessionActive());
-        payload.put("lastPrice", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().price() : null);
+        payload.put("lastPrice", liveLastPrice);
         payload.put("sourceAgeMs", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().sourceAgeMs() : null);
         payload.put("feedBlocked", marketDataSnapshot.feedBlocked());
         payload.put("feedBlockReason", marketDataSnapshot.blockReason());
