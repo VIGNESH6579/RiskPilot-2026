@@ -36,15 +36,16 @@ public class MarketDataStateService {
 
     public synchronized void recordAcceptedTick(MarketTick tick) {
         MarketDataSnapshot current = snapshotRef.get();
+        boolean keepFeedBlocked = tick.afterHours() && current.feedBlocked();
         snapshotRef.set(new MarketDataSnapshot(
             true,
             true,
-            false,
-            null,
+            keepFeedBlocked,
+            keepFeedBlocked ? current.blockReason() : null,
             false,
             0,
             current.parseFailureCount(),
-            true,
+            !tick.afterHours(),
             tick.transport(),
             tick,
             tick.receivedAt(),

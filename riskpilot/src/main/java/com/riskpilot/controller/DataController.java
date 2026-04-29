@@ -41,10 +41,14 @@ public class DataController {
             marketOpen,
             riskPilotProperties.getInfra().getHeartbeat().getMaxSilenceMs()
         );
+        boolean isLive = "LIVE".equals(priceSource);
+        Double liveSpot = (isLive && snapshot.lastTick() != null && snapshot.lastTick().price() > 0.0)
+            ? snapshot.lastTick().price()
+            : null;
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", snapshot.transport() != null ? snapshot.transport().name() : null);
-        payload.put("price", snapshot.lastTick() != null ? snapshot.lastTick().price() : null);
-        payload.put("spot", snapshot.lastTick() != null && snapshot.lastTick().price() > 0.0 ? snapshot.lastTick().price() : null);
+        payload.put("price", liveSpot);
+        payload.put("spot", liveSpot);
         payload.put("sourceAgeMs", snapshot.lastTick() != null ? snapshot.lastTick().sourceAgeMs() : null);
         payload.put("lastFreshTickAt", snapshot.lastAcceptedAt());
         payload.put("healthy", marketOpen && snapshot.connected() && snapshot.subscribed() && snapshot.ready() && !snapshot.feedBlocked() && snapshot.lastTick() != null);
