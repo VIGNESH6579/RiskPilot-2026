@@ -31,7 +31,7 @@ public class Candle {
         this.tickCount = tickCount;
     }
 
-    public Candle copy() {
+    public synchronized Candle copy() {
         return new Candle(date, time, open, high, low, close, tickCount);
     }
 
@@ -45,11 +45,7 @@ public class Candle {
         try {
             return LocalDateTime.of(LocalDate.parse(date, DATE_FORMATTER), LocalTime.parse(time));
         } catch (Exception e) {
-            try {
-                return LocalDateTime.parse(date + " " + time, FALLBACK_FORMATTER);
-            } catch (Exception ignored) {
-                return LocalDateTime.now();
-            }
+            return LocalDateTime.parse(date + " " + time, FALLBACK_FORMATTER);
         }
     }
 

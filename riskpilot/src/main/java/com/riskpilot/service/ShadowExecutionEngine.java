@@ -771,7 +771,6 @@ public class ShadowExecutionEngine {
         payload.put("timePhase", state.timePhase().name());
         payload.put("tradeActive", state.tradeActive());
         payload.put("tradesTaken", state.tradesTaken());
-        payload.put("maxTradesPerDay", config.getRisk().getMaxTradesPerDay());
         payload.put("feedStable", state.feedStable());
         payload.put("heartbeatAlive", state.heartbeatAlive());
         payload.put("dailyLossR", state.cumulativeDailyLossR());

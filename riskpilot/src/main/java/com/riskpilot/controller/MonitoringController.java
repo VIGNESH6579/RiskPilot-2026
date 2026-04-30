@@ -31,7 +31,6 @@ public class MonitoringController {
         payload.put("timePhase", snapshot.timePhase().name());
         payload.put("tradeActive", snapshot.tradeActive());
         payload.put("tradesTaken", snapshot.tradesTaken());
-        payload.put("maxTradesPerDay", riskPilotProperties.getRisk().getMaxTradesPerDay());
         payload.put("feedStable", snapshot.feedStable());
         payload.put("heartbeatAlive", snapshot.heartbeatAlive());
         payload.put("dailyLossR", snapshot.cumulativeDailyLossR());

@@ -2,6 +2,7 @@ package com.riskpilot.engine;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -9,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Component
@@ -16,6 +18,8 @@ public class KillSwitchEngine {
 
     private static final String KILL_FLAG_FILE = "KILL_SWITCH.flag";
     private static final Path KILL_PATH = Paths.get(KILL_FLAG_FILE);
+
+    private final AtomicBoolean cachedKillState = new AtomicBoolean(false);
 
     @Data
     public static class KillSwitchSnapshot {
@@ -54,19 +58,31 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Check if kill-switch is triggered by external system (Python forward_scorecard)
+     * Returns the cached kill-switch state. The cache is refreshed every
+     * 2 seconds by {@link #refreshKillSwitchCache()} so tick-level callers
+     * never hit the filesystem directly.
      */
     public boolean isKillSwitchTriggered() {
+        return cachedKillState.get();
+    }
+
+    @Scheduled(fixedDelay = 2000)
+    public void refreshKillSwitchCache() {
+        boolean triggered = checkFileKillSwitch();
+        cachedKillState.set(triggered);
+    }
+
+    private boolean checkFileKillSwitch() {
         if (Files.exists(KILL_PATH)) {
             try {
                 List<String> lines = Files.readAllLines(KILL_PATH);
                 if (!lines.isEmpty()) {
-                    log.error("🚨 KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
+                    log.error("KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
                     return true;
                 }
             } catch (Exception e) {
                 log.error("Error reading kill-switch file: {}", e.getMessage());
-                return true; // Fail safe - if we can't read, assume killed
+                return true;
             }
         }
         return false;
@@ -93,7 +109,7 @@ public class KillSwitchEngine {
     public void clearKillSwitch() {
         try {
             Files.deleteIfExists(KILL_PATH);
-            log.info("✅ Kill-switch cleared - system can restart");
+            log.info("Kill-switch cleared - system can restart");
         } catch (Exception e) {
             log.error("Failed to clear kill-switch: {}", e.getMessage());
         }
