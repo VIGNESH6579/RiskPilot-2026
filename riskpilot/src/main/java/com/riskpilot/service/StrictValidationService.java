@@ -38,11 +38,13 @@ public class StrictValidationService {
     }
 
     public void validateSystem() {
-        if (!properties.isLiveMode() && !properties.isShadowMode()) {
-            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be LIVE or SHADOW");
+        if (properties.isLiveMode()) {
+            throw new IllegalStateException(
+                "LIVE_MODE_BLOCKED: This system is shadow-mode only. "
+                + "Set RISKPILOT_MODE=SHADOW (the default) to run.");
         }
-        if (properties.getRisk().getMaxTradesPerDay() < 1) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day must be at least 1");
+        if (!properties.isShadowMode()) {
+            throw new IllegalStateException("RUNTIME_MODE_INVALID: mode must be SHADOW");
         }
         if (properties.getExecution().getSlippage().getEntryMax() > 3.0) {
             throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high");
@@ -82,9 +84,6 @@ public class StrictValidationService {
         }
 
         refreshDailyCountersIfNeeded();
-        if (dailyTradeCount.get() >= properties.getRisk().getMaxTradesPerDay()) {
-            return false;
-        }
         if (consecutiveLosses.get() >= properties.getRisk().getMaxConsecutiveLosses()) {
             return false;
         }
