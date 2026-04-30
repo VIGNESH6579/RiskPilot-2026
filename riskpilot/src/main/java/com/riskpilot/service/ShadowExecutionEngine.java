@@ -721,7 +721,19 @@ public class ShadowExecutionEngine {
 
     private void logReject(TradingSessionSnapshot state, String reason) {
         rejectedSignalCount.incrementAndGet();
-        rejectReasonCounts.computeIfAbsent(reason == null ? "UNKNOWN" : reason, ignored -> new AtomicInteger()).incrementAndGet();
+        // FIX: defensive canonicalisation. Reasons that flow in here include
+        // raw exception messages (e.g. e.getMessage() from MarketDataException)
+        // which can embed live numeric values. Without canonicalisation
+        // rejectReasonCounts grows unbounded on a long-running JVM and
+        // eventually OOMs the process, taking the in-memory edge tracker /
+        // adaptive regime windows with it.
+        String canonical = canonicalRejectReason(reason);
+        rejectReasonCounts.computeIfAbsent(canonical, ignored -> new AtomicInteger()).incrementAndGet();
+        // Hard ceiling on cardinality as a last line of defence in case a
+        // future code path forgets to canonicalise.
+        if (rejectReasonCounts.size() > 256) {
+            rejectReasonCounts.entrySet().removeIf(e -> e.getValue().get() <= 1);
+        }
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
             current.regime(),
@@ -1128,6 +1140,34 @@ public class ShadowExecutionEngine {
 
     private String normalizeDirection(String direction) {
         return "SHORT".equalsIgnoreCase(direction) ? "SHORT" : "LONG";
+    }
+
+    /**
+     * Map an arbitrary reason string to a stable, bounded-cardinality code.
+     * Strips dynamic numeric tails (e.g. "LIVE_TICK_STALE: age=812ms max=2000ms"
+     * collapses to "LIVE_TICK_STALE") so rejectReasonCounts cannot grow
+     * without bound on a long-running JVM.
+     */
+    private static String canonicalRejectReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "UNKNOWN";
+        }
+        String trimmed = reason.trim();
+        // Strip anything after the first ':' or '(' — that is where dynamic
+        // values are conventionally appended in this codebase.
+        int colon = trimmed.indexOf(':');
+        if (colon > 0) {
+            trimmed = trimmed.substring(0, colon);
+        }
+        int paren = trimmed.indexOf('(');
+        if (paren > 0) {
+            trimmed = trimmed.substring(0, paren);
+        }
+        // Hard cap on length as final defence.
+        if (trimmed.length() > 64) {
+            trimmed = trimmed.substring(0, 64);
+        }
+        return trimmed.trim();
     }
 
     private double calculateEntrySlippage(String direction, double expectedEntry, double actualEntry) {

@@ -56,6 +56,17 @@ public class RiskPilotProperties {
         private String open = "09:15";
         private String close = "15:30";
         private String zone = "Asia/Kolkata";
+        // Comma-separated list of additional NSE holidays (ISO yyyy-MM-dd).
+        // Used in addition to the static list compiled into MarketSessionService.
+        // Operators should keep this list current as NSE publishes its annual
+        // trading-holiday calendar — the static list cannot anticipate festival
+        // dates that vary year-to-year (Diwali, Eid, Holi, etc).
+        // Example env: RISKPILOT_MARKET_ADDITIONAL_HOLIDAYS=2026-01-26,2026-08-15
+        private java.util.List<String> additionalHolidays = new java.util.ArrayList<>();
+        // If true, the market is treated as closed on Saturday and Sunday
+        // regardless of any holiday list. Toggle to false only for replay
+        // / backtest harnesses that must process saved weekend data.
+        private boolean weekendsClosed = true;
     }
 
     @Data

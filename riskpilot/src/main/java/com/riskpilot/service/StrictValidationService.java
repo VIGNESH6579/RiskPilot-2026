@@ -205,11 +205,7 @@ public class StrictValidationService {
                 ageMs,
                 properties.getInfra().getFeed().getMaxSourceAgeMs()
             );
-            throw new MarketDataException(String.format(
-                "LIVE_TICK_STALE: age=%dms max=%dms",
-                ageMs,
-                properties.getInfra().getFeed().getMaxSourceAgeMs()
-            ));
+            throw new MarketDataException("LIVE_TICK_STALE");
         }
 
         if (!marketOpen) {
@@ -234,11 +230,17 @@ public class StrictValidationService {
                 true
             );
         }
+        // FIX: preserve the original WebSocket-receive instant. Overwriting
+        // receivedAt with the validation-time `now` here would falsify
+        // every downstream latency / staleness / inter-tick-gap measurement
+        // (HeartbeatMonitor.silenceMs, MarketDataStateService.lastTickAgeMs,
+        // ExecutionSimulator.estimateTickGapMs, etc.) and bias simulated
+        // slippage systematically toward optimism on every shadow trade.
         MarketTick acceptedTick = MarketTick.of(
             tick.symbol(),
             tick.price(),
             tick.exchangeTimestamp(),
-            now,
+            tick.receivedAt(),
             tick.transport(),
             tick.sequenceId(),
             tick.rawExchangeTime(),
