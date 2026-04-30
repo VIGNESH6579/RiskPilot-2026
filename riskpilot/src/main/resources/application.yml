@@ -86,6 +86,12 @@ riskpilot:
       tp1-max: 3.0
       runner-max: 6.0
       panic-exit-max: 8.0
+      # Slippage model strategy. FIXED_TICK is good for low-volatility
+      # regimes and regression tests; ATR_FRACTION scales with realised
+      # volatility and is the recommended default for index futures.
+      model: ${EXECUTION_SLIPPAGE_MODEL:ATR_FRACTION}
+      fixed-tick-points: ${EXECUTION_SLIPPAGE_FIXED_TICK_POINTS:1.0}
+      atr-fraction: ${EXECUTION_SLIPPAGE_ATR_FRACTION:0.05}
     latency:
       soft-block-ms: 500
       hard-block-ms: 1500
@@ -101,6 +107,11 @@ riskpilot:
       slippage-max-points: ${EXECUTION_SLIPPAGE_MAX_POINTS:3.0}
       volatility-weight: ${EXECUTION_VOLATILITY_WEIGHT:0.08}
       tick-speed-weight: ${EXECUTION_TICK_SPEED_WEIGHT:0.35}
+      # Orders >= this many lots are split into two fill legs. Set to 0
+      # to disable partial-fill simulation.
+      partial-fill-threshold-lots: ${EXECUTION_PARTIAL_FILL_THRESHOLD_LOTS:20}
+      partial-fill-second-leg-drift-points: ${EXECUTION_PARTIAL_FILL_DRIFT_POINTS:0.5}
+      partial-fill-second-leg-latency-ms: ${EXECUTION_PARTIAL_FILL_LATENCY_MS:100}
     reject-on-high-slippage: true
     reject-on-latency-breach: true
   infra:

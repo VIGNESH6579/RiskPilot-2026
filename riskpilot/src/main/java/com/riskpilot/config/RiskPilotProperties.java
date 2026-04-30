@@ -143,6 +143,30 @@ public class RiskPilotProperties {
             private double tp1Max = 3.0;
             private double runnerMax = 6.0;
             private double panicExitMax = 8.0;
+
+            /**
+             * Selects the {@code SlippageModel} used by
+             * {@code ExecutionSimulator}. Valid values: {@code FIXED_TICK}
+             * or {@code ATR_FRACTION}. Default is {@code ATR_FRACTION}
+             * because it is more realistic for index futures whose
+             * spread cost scales with realised volatility.
+             */
+            private String model = "ATR_FRACTION";
+
+            /**
+             * Slippage in points used by the FIXED_TICK model. Should
+             * sit between {@code simulation.slippage-min-points} and
+             * {@code simulation.slippage-max-points}; values outside
+             * the envelope are clamped at runtime.
+             */
+            private double fixedTickPoints = 1.0;
+
+            /**
+             * Multiplier applied to the rolling ATR (in points) by the
+             * ATR_FRACTION model. 0.05 means 5% of ATR per fill — a
+             * defensible starting point for NIFTY.
+             */
+            private double atrFraction = 0.05;
         }
 
         @Data
@@ -164,6 +188,32 @@ public class RiskPilotProperties {
             private double slippageMaxPoints = 3.0;
             private double volatilityWeight = 0.08;
             private double tickSpeedWeight = 0.35;
+
+            /**
+             * Orders >= this many lots are split into two fill legs to
+             * model the realistic case where the second half of size
+             * crosses the spread at a worse price after the first leg
+             * walks the book. Set to 0 to disable partial-fill
+             * simulation entirely (single leg always).
+             */
+            private int partialFillThresholdLots = 20;
+
+            /**
+             * Additional adverse drift (in points) applied to the
+             * second leg of a partial fill on top of the second leg's
+             * own slippage calculation. Models book-walking: the
+             * second half of size eats deeper liquidity that was sitting
+             * behind the top of book.
+             */
+            private double partialFillSecondLegDriftPoints = 0.5;
+
+            /**
+             * Extra latency (in ms) added to the second leg of a
+             * partial fill to model the time it takes the venue to
+             * report each leg back. Plain delta on top of the leg-1
+             * latency, never randomised.
+             */
+            private long partialFillSecondLegLatencyMs = 100L;
         }
     }
 

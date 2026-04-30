@@ -17,6 +17,7 @@ import com.riskpilot.model.MarketTick;
 import com.riskpilot.model.Regime;
 import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
+import com.riskpilot.model.ShadowFillEvent;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradeLog;
@@ -76,6 +77,7 @@ public class ShadowExecutionEngine {
     private final MarketSessionService marketSessionService;
     private final PositionSizer positionSizer;
     private final ExecutionSimulator executionSimulator;
+    private final ShadowFillLedger shadowFillLedger;
     private final RiskEngine riskEngine;
     private final TradingSessionService tradingSessionService;
     private final ReentrantLock tradeStateLock = new ReentrantLock();
@@ -155,6 +157,7 @@ public class ShadowExecutionEngine {
                     expiredExit.trade(),
                     exitAtPrice(expiredExit.trade(), expiredExit.expectedExit(), "EXIT_PLAN_EXPIRED", "ESTIMATED"),
                     null,
+                    null,
                     null
                 );
                 return;
@@ -228,7 +231,7 @@ public class ShadowExecutionEngine {
                     MarketTick exitTick = requireLiveTick("TIME_CUTOFF_EXIT");
                     scheduleExit(trade, "TIME_CUTOFF_EXIT", "REAL", exitTick.receivedAt(), exitTick.price(), candle.high - candle.low, estimateTickGapMs());
                 } catch (StaleFeedException staleFeedException) {
-                    closeTrade(trade, exitAtPrice(trade, candle.close, "FEED_STALE_EXIT", "ESTIMATED"), null, null);
+                    closeTrade(trade, exitAtPrice(trade, candle.close, "FEED_STALE_EXIT", "ESTIMATED"), null, null, null);
                 }
                 return;
             }
@@ -375,6 +378,12 @@ public class ShadowExecutionEngine {
     }
 
     private void executePlannedEntry(PendingEntry plannedEntry, MarketTick tick) {
+        // Validation uses the leg-1 single-fill estimate. Multi-leg
+        // book-walking is modelled later inside openTrade once we know
+        // the conviction-scaled lot count; the actual aggregated fill
+        // may price slightly worse than this estimate, which is the
+        // realistic semantic — pre-trade slippage checks always work
+        // off an estimate, real fills are what the book gives you.
         ExecutionSimulator.SimulatedFill fill = executionSimulator.fillEntry(
             plannedEntry.signal().getDirection(),
             plannedEntry.signal().getEntry(),
@@ -398,7 +407,7 @@ public class ShadowExecutionEngine {
             pendingEntry = null;
             return;
         }
-        openTrade(plannedEntry.signal(), plannedEntry.state(), plannedEntry.signalTime(), fill);
+        openTrade(plannedEntry.signal(), plannedEntry.state(), plannedEntry.signalTime(), tick, plannedEntry.plan());
         pendingEntry = null;
     }
 
@@ -426,12 +435,15 @@ public class ShadowExecutionEngine {
     }
 
     private void executePlannedExit(PendingExit pendingExit, MarketTick tick) {
-        ExecutionSimulator.SimulatedFill fill = executionSimulator.fillExit(
+        int exitLots = Math.max(1, pendingExit.trade().remainingQuantity());
+        ExecutionSimulator.Execution execution = executionSimulator.executeExit(
             pendingExit.trade().direction(),
             pendingExit.expectedExit(),
             tick,
-            pendingExit.plan()
+            pendingExit.plan(),
+            exitLots
         );
+        ExecutionSimulator.SimulatedFill fill = execution.aggregated();
         long actualExitLatencyMs = Duration.between(pendingExit.plan().signalTime(), fill.executionTime()).toMillis();
         try {
             strictValidationService.validateExitExecution(
@@ -446,13 +458,14 @@ public class ShadowExecutionEngine {
                 pendingExit.trade(),
                 exitAtPrice(pendingExit.trade(), pendingExit.expectedExit(), "EXIT_VALIDATION_FAILED", "ESTIMATED"),
                 null,
+                null,
                 null
             );
             return;
         }
         double pnlInr = pnlInr(pendingExit.trade(), fill.actualPrice(), pendingExit.trade().remainingQuantity());
         TradeExit exit = new TradeExit(true, pnlInr, pendingExit.reason(), fill.actualPrice(), pendingExit.exitType());
-        closeTrade(pendingExit.trade(), exit, tick, fill);
+        closeTrade(pendingExit.trade(), exit, tick, fill, execution.legs());
     }
 
     private void updateSessionStateFromTime(LocalTime now) {
@@ -532,34 +545,63 @@ public class ShadowExecutionEngine {
         Signal signal,
         TradingSessionSnapshot state,
         LocalDateTime signalTime,
-        ExecutionSimulator.SimulatedFill fill
+        MarketTick entryTick,
+        ExecutionSimulator.ExecutionPlan plan
     ) {
+        // Risk-budget sizing first…
+        double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - signal.getEntry()));
+        RiskEngine.EquitySnapshot equitySnapshot = riskEngine.snapshot();
+        int riskBudgetedLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.currentEquity(), equitySnapshot.consecutiveLosses());
+        if (riskBudgetedLots <= 0) {
+            logReject(state, "INSUFFICIENT_RISK_BUDGET");
+            return;
+        }
+
+        // …then the conviction scaler. Floor instead of round so a 0.49
+        // conviction on a 1-lot risk budget produces 0 (and rejects)
+        // rather than silently rounding up to a full position.
+        double conviction = clampUnit(signal.getConvictionScore());
+        int convictionScaledLots = (int) Math.floor(riskBudgetedLots * conviction);
+        if (convictionScaledLots <= 0) {
+            logReject(state, "LOW_CONVICTION_SIZE");
+            return;
+        }
+
+        // Now that we know lots, run the multi-leg execution model.
+        // The aggregated VWAP fill is what the trade row records; the
+        // per-leg detail goes to the audit ledger.
+        ExecutionSimulator.Execution execution = executionSimulator.executeEntry(
+            signal.getDirection(),
+            signal.getEntry(),
+            entryTick,
+            plan,
+            convictionScaledLots
+        );
+        ExecutionSimulator.SimulatedFill fill = execution.aggregated();
+
         LocalDateTime executionTime = toLocalDateTime(fill.executionTime());
         double actualEntryPrice = fill.actualPrice();
         double tp1Distance = Math.max(1.0, volatilityNormalizer.getCurrentTP1());
         double tp1Level = "SHORT".equalsIgnoreCase(signal.getDirection())
             ? actualEntryPrice - tp1Distance
             : actualEntryPrice + tp1Distance;
-        double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
-        RiskEngine.EquitySnapshot equitySnapshot = riskEngine.snapshot();
-        int quantityLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.currentEquity(), equitySnapshot.consecutiveLosses());
-        if (quantityLots <= 0) {
-            logReject(state, "INSUFFICIENT_RISK_BUDGET");
-            return;
-        }
+        // initialRisk is recomputed against the actual fill so the
+        // per-trade R unit reflects what we actually paid, not the
+        // theoretical entry price of the signal.
+        double executedRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
             normalizeDirection(signal.getDirection()),
             actualEntryPrice,
             signal.getStopLoss(),
             tp1Level,
-            initialRisk,
+            executedRisk,
             false,
             false,
             false,
             false,
-            quantityLots,
-            quantityLots,
+            convictionScaledLots,
+            convictionScaledLots,
             config.getInstrument().getLotSize(),
             config.getInstrument().getPointValue(),
             0.0,
@@ -575,6 +617,7 @@ public class ShadowExecutionEngine {
         activeEntryLatencyMs = fill.latencyMs();
         pendingEntry = null;
         persistOpenedTrade(signal, trade, signalTime, executionTime, fill);
+        recordEntryLegsToLedger(signal, trade, signalTime, executionTime, execution.legs());
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -597,7 +640,116 @@ public class ShadowExecutionEngine {
         broadcastCurrentSessionState();
     }
 
-    private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick, ExecutionSimulator.SimulatedFill fill) {
+    private static double clampUnit(double value) {
+        if (Double.isNaN(value) || value < 0.0) return 0.0;
+        if (value > 1.0) return 1.0;
+        return value;
+    }
+
+    private void recordEntryLegsToLedger(
+        Signal signal,
+        ActiveTradeExecution trade,
+        LocalDateTime signalTime,
+        LocalDateTime aggregateExecTime,
+        java.util.List<ExecutionSimulator.FillLeg> legs
+    ) {
+        if (legs == null || legs.isEmpty() || activeTradeId == null) {
+            return;
+        }
+        String slippageModel = executionSimulator.activeSlippageModelName();
+        String direction = trade.direction();
+        for (ExecutionSimulator.FillLeg leg : legs) {
+            ShadowFillEvent event = ShadowFillEvent.builder()
+                .tradeId(activeTradeId)
+                .side("ENTRY")
+                .direction(direction)
+                .legNumber(leg.legNumber())
+                .totalLegs(leg.totalLegs())
+                .lots(leg.lots())
+                .expectedPrice(decimal(leg.fill().expectedPrice()))
+                .fillPrice(decimal(leg.fill().actualPrice()))
+                .slippagePoints(decimal(leg.fill().slippagePoints()))
+                .spreadPoints(decimal(leg.fill().spreadPoints()))
+                .latencyMs(leg.fill().latencyMs())
+                .slippageModel(slippageModel)
+                .occurredAt(toLocalDateTime(leg.fill().executionTime()))
+                .build();
+            shadowFillLedger.record(event);
+        }
+    }
+
+    /**
+     * Writes one ledger row per exit leg when we have real per-leg
+     * data (planned exits that survived validation). For estimated
+     * exits — kill switch, feed-stale, validation-failed paths — there
+     * are no real legs, so we write a single synthetic row marked
+     * with the exit reason as the slippage model so the ledger is
+     * unambiguous about which fills were modelled vs estimated.
+     */
+    private void recordExitLegsToLedger(
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double expectedExit,
+        long exitLatencyMs,
+        double exitSlippagePoints,
+        String effectiveExitType,
+        java.util.List<ExecutionSimulator.FillLeg> exitLegs
+    ) {
+        if (activeTradeId == null) {
+            return;
+        }
+        String direction = trade.direction();
+
+        if (exitLegs == null || exitLegs.isEmpty()) {
+            ShadowFillEvent estimated = ShadowFillEvent.builder()
+                .tradeId(activeTradeId)
+                .side("EXIT")
+                .direction(direction)
+                .legNumber(1)
+                .totalLegs(1)
+                .lots(Math.max(0, trade.remainingQuantity()))
+                .expectedPrice(decimal(expectedExit))
+                .fillPrice(decimal(exit.exitPrice()))
+                .slippagePoints(decimal(exitSlippagePoints))
+                .spreadPoints(decimal(0.0))
+                .latencyMs(exitLatencyMs)
+                .slippageModel("ESTIMATED:" + (effectiveExitType != null ? effectiveExitType : exit.reason()))
+                .exitReason(exit.reason())
+                .occurredAt(LocalDateTime.now())
+                .build();
+            shadowFillLedger.record(estimated);
+            return;
+        }
+
+        String slippageModel = executionSimulator.activeSlippageModelName();
+        for (ExecutionSimulator.FillLeg leg : exitLegs) {
+            ShadowFillEvent event = ShadowFillEvent.builder()
+                .tradeId(activeTradeId)
+                .side("EXIT")
+                .direction(direction)
+                .legNumber(leg.legNumber())
+                .totalLegs(leg.totalLegs())
+                .lots(leg.lots())
+                .expectedPrice(decimal(leg.fill().expectedPrice()))
+                .fillPrice(decimal(leg.fill().actualPrice()))
+                .slippagePoints(decimal(leg.fill().slippagePoints()))
+                .spreadPoints(decimal(leg.fill().spreadPoints()))
+                .latencyMs(leg.fill().latencyMs())
+                .slippageModel(slippageModel)
+                .exitReason(exit.reason())
+                .occurredAt(toLocalDateTime(leg.fill().executionTime()))
+                .build();
+            shadowFillLedger.record(event);
+        }
+    }
+
+    private void closeTrade(
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        MarketTick exitTick,
+        ExecutionSimulator.SimulatedFill fill,
+        java.util.List<ExecutionSimulator.FillLeg> exitLegs
+    ) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         double riskInr = Math.max(1.0, trade.initialRiskPoints() * trade.totalUnits() * trade.pointValue());
         double finalRealizedPnL = trade.realizedPnL() + exit.pnlInr();
@@ -703,6 +855,7 @@ public class ShadowExecutionEngine {
         riskEngine.recordClosedTrade(finalRealizedPnL);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
         finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip, effectiveExitType);
+        recordExitLegsToLedger(trade, exit, expectedExit, exitLatencyMs, exitSlip, effectiveExitType, exitLegs);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),

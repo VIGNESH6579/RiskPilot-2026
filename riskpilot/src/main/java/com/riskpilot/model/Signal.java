@@ -29,4 +29,26 @@ public class Signal {
 
     public void setQuantity(int quantity) { this.quantity = quantity; }
     public int getQuantity() { return quantity; }
+
+    /**
+     * Per-signal sizing multiplier in [0.0, 1.0]. The position sizer
+     * computes a maximum lot count from risk budget; this score scales
+     * that maximum down for lower-conviction setups (e.g. shallow
+     * traps, weak rejection wicks). 1.0 = full size, 0.0 = no trade.
+     *
+     * Defaults to 1.0 so any pre-existing signal source that does not
+     * set the field continues to behave exactly as before.
+     */
+    private double convictionScore = 1.0;
+
+    public void setConvictionScore(double convictionScore) {
+        if (Double.isNaN(convictionScore) || convictionScore < 0.0) {
+            this.convictionScore = 0.0;
+        } else if (convictionScore > 1.0) {
+            this.convictionScore = 1.0;
+        } else {
+            this.convictionScore = convictionScore;
+        }
+    }
+    public double getConvictionScore() { return convictionScore; }
 }
