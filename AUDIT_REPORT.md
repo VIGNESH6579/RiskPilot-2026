@@ -1,365 +1,274 @@
-# RiskPilot-2026 — Brutal Senior-Architect / Quant-Systems Audit
+# RiskPilot-2026 — Brutal Senior-Architect / Quant-Systems Audit (Shadow-Mode Edition)
 
-**Scope:** entire repository as of commit on `main` (post `d32e5b3`).
-**Mode under audit:** `SHADOW` (only mode actually implemented).
-**Stated intent:** real-money NIFTY index-options trap-strategy execution via Angel One SmartStream LTP feed.
-**Tone:** no praise, no hedging. Every finding below would block a Day-1 production go-live at any serious prop / fund desk.
+**Scope:** entire repository as of `main`.
+**Mode under audit:** `SHADOW` only (operator confirmed: real broker order execution is **out of scope by design**).
+**Stated intent:** produce trustworthy shadow-mode P&L, R-multiple, slippage, and regime telemetry from real Angel One SmartStream LTP data, so the strategy can be evaluated without touching capital.
 
-Severity legend: **BLOCKER** (live-trading stop), **HIGH** (must fix before any capital), **MEDIUM** (will hurt P&L or operability), **LOW** (hygiene).
+**Re-framed central question, given shadow-only intent:**
 
----
+> Can the numbers this system produces be trusted as a basis for any decision about the strategy?
 
-## 1. CRITICAL BUGS
+Tone: no praise, no hedging.
 
-### 1.1 [BLOCKER] There is no real broker order-execution layer at all
-- `ShadowExecutionEngine` + `ExecutionSimulator` *simulate* fills (`SimulatedFill`, `fillEntry`, `fillExit`). No `placeOrder`, `modifyOrder`, `cancelOrder`, `orderBook`, `positionBook`, `tradeBook` calls to Angel One REST anywhere in `service/`.
-- "Execution latency" is the inter-tick gap clamped into a configured envelope (`ExecutionSimulator.plan`, lines 60–61). It is **not** the real RTT to the broker.
-- "Slippage" is a deterministic linear function of last candle range + clamped tick speed (`ExecutionSimulator.plan`, lines 70–81). It cannot model real partial fills, order-book sweeps, circuit-limit halts, or freeze-quantity rejections.
-- `pnlInr` in shadow trades uses configured `pointValue` against the **NIFTY index price** (`ShadowExecutionEngine.pnlInr`, line 1107). Real trades are in F&O option premiums, where delta ≪ 1 and gamma/theta dominate. The P&L numbers this system produces have **no monetary meaning** for an options book.
-- The README, configs, and validation chain claim "LIVE/SHADOW" parity, but `RiskPilotProperties.isRealFeedMode()` only gates the **feed**, not the order path. Switching `mode: LIVE` would change a label in logs and absolutely nothing else.
+Severity legend:
+- **BLOCKER** — corrupts shadow telemetry; the numbers cannot be trusted at all.
+- **HIGH** — biases shadow telemetry in a known direction; numbers must be discounted.
+- **MEDIUM** — operational hazard; you will lose data, miss days, or chase ghosts.
+- **LOW** — hygiene.
 
-**Verdict on this single point alone: SHADOW-ONLY. The repo is incapable of live trading.**
-
-### 1.2 [BLOCKER] Deadlock potential between `tradeStateLock` and `CandleAggregator`'s monitor
-- Tick path: `AngelTickStreamClient.onBinary` → `ingestTick` → `CandleAggregator.processTick` (acquires `synchronized(this)`) → `publishEvent(CandleClosedEvent)` → `ShadowExecutionEngine.evaluateCandle` (acquires `tradeStateLock`).
-  Lock order: **CandleAggregator.monitor → tradeStateLock**.
-- Daily-reset / recovery path: `ShadowExecutionEngine.executeDailyHardReset` → `tradeStateLock.lock()` → `candleAggregator.clearHistory()` (acquires `synchronized(this)`).
-  Lock order: **tradeStateLock → CandleAggregator.monitor**.
-- Two threads on opposite paths → classic AB/BA deadlock. Once it triggers (e.g. cron fires at exactly 09:15 IST while a tick is being processed), the WS thread and the scheduler thread block forever, the WS read-loop stops, the heartbeat dies, but `markHalted` was already called on a different thread that *also* needed the lock — silent total stall during market open.
-
-### 1.3 [BLOCKER] `StrictValidationService.validateFreshTick` overwrites `tick.receivedAt` with the validation-time `now`
-- Lines 237–246: returned `acceptedTick` is built with `now` (the validation timestamp) as `receivedAt` instead of the real WS receive instant.
-- All downstream latency / staleness measurements (`MarketDataStateService.lastTickAgeMs`, `silenceMs`, heartbeat staleness, `estimateTickGapMs` used by the simulator) now read a **falsified** receivedAt.
-- Combined with `MarketTick.of(...)` recomputing `sourceAgeMs` from the new `receivedAt`, the system will systematically *under-report* age and *under-report* inter-arrival gap. Stale ticks closer to the threshold will sneak through.
-
-### 1.4 [BLOCKER] `KillSwitchEngine` is not actually a kill-switch
-- `KILL_FLAG_FILE = "KILL_SWITCH.flag"` is a **relative path** (line 17). It depends entirely on the JVM's CWD on Render — opaque to the operator. If the operator drops a file in the repo root, the running container can't see it.
-- `isKillSwitchTriggered()` does a `Files.exists(...)` and `Files.readAllLines(...)` on every entry-gate evaluation (called from `RiskGateEngine.evaluateEntry`). That is a synchronous filesystem stat on the WS-driven hot path.
-- `evaluateInternal(MetricsWindow)` exists but is **never called from anywhere** — `rg "evaluateInternal" .` in the repo confirms zero callers. The internal kill-switch logic is dead code.
-- `writeKillSwitch` is also never called by Java. The comment refers to a "Python forward_scorecard" that does not exist in the repo.
-- Net effect: there is no automatic kill-switch. The only way to stop the system mid-day is manual SIGTERM.
-
-### 1.5 [BLOCKER] No NSE holiday calendar, no weekend check
-- `MarketSessionService.isMarketOpen` only checks the time-of-day window `[09:15, 15:30)`.
-- Saturdays, Sundays, Diwali, Republic Day, Budget special sessions, NSE muhurat session — all treated identically. The system will:
-  - Show "MARKET OPEN" on `/health` on weekends and holidays.
-  - Permit trade entry if any source ever delivers a non-stale tick during those windows (e.g. a replayed feed, a test harness, a brokerage feed bug).
-  - Mis-classify the post-09:00 NSE pre-open auction (09:00–09:08) as "closed" (correct) but also fail to recognise the special trading sessions outside 09:15–15:30 used during muhurat / migration days.
-
-### 1.6 [BLOCKER] `AngelTickStreamClient.parseTick` accepts ages > 12 hours during clock disagreement
-- `normalizeExchangeFeedEpochMs` only rejects ages older than year 2020 or below `MIN_REASONABLE_EPOCH_MILLIS` (~2017-07-14). It does **not** reject "future" timestamps or wildly stale ones.
-- Combined with bug 1.3 (rewriting `receivedAt` to `now`), a stale exchange timestamp from a paused feed → `ageMs` computed in `parseTick` is correct, but the *age stored on the accepted tick is wrong* (positions to `now - exchangeTs` recomputed by `MarketTick.of` using rewritten `receivedAt`). The strict-timing gate then runs against this falsified figure.
-
-### 1.7 [BLOCKER] `CandleAggregator` silently mutates a closed candle when ticks arrive out-of-order
-- `processTick` lines 112–134: if the incoming tick's `candleAlignedTime` is *before* the current candle's start time (out-of-order or replayed tick), the `else` branch fires and calls `applyTick` against the **current** building candle — corrupting OHLC of a candle that should already be closed or that is logically in the past.
-- No sequence-id monotonicity check anywhere. `MarketTick.sequenceId` is read and logged but never used to reject out-of-sequence ticks.
-
-### 1.8 [HIGH] `feedUnstable` flag in `CandleAggregator` is reset by every fast tick
-- Line 87: `feedUnstable = (lastArrivalTime != null && arrivalGapMs > 4500L);` — assigns, doesn't OR.
-- A previous `markUnstable()` call (e.g. from `AngelTickStreamClient` on parse failure) is **silently cleared** by the next tick that arrives within 4.5 s. Instability events vanish before any downstream consumer can react.
-
-### 1.9 [HIGH] Date-rollover bug in `CandleAggregator.processTick`
-- Comparison at line 113 uses `LocalTime.isAfter`, which has no concept of date. After a JVM that survives across midnight (test harness, dev run, or worst-case a server kept running over a weekend), the first Monday tick at 09:15 will compare *before* the persisted Friday 15:25 candle and update it instead of starting a new one.
-- `clearHistory()` is only called from `ShadowExecutionEngine.restart()` and the daily-reset cron. If either fails or is delayed, the bug bites.
-
-### 1.10 [HIGH] `ShadowExecutionEngine.closeTrade` re-validates exit slippage but swallows the result
-- Lines 599–608: `strictValidationService.validateExitExecution(...)` is called inside `try { ... } catch (Exception e) { log.warn(...) }`. The whole "strict mode rejects on slippage breach" claim is silently neutered for exits — every exit goes through regardless of slippage.
-- Same pattern in `persistOpenedTrade`, `syncPersistedActiveTrade`, `finalizePersistedTrade`, `cancelPersistedActiveTrade`, `restoreActiveTrade`: catch `Exception`, `log.warn`, continue. **No DB transaction boundaries.** Partial writes during a Postgres blip leave the trade table in an inconsistent state with no recovery.
-
-### 1.11 [HIGH] `rejectReasonCounts` grows unbounded
-- `ShadowExecutionEngine.logReject` does `rejectReasonCounts.computeIfAbsent(reason, ...)` with no key-set ceiling. Any code path that synthesises reasons from variable strings (e.g. `String.format("LIVE_TICK_STALE: age=%dms max=%dms", ...)`) — and `StrictValidationService.validateFreshTick` does exactly this on lines 208–212 — produces an unbounded number of distinct keys. Long-lived process → memory leak.
-
-### 1.12 [HIGH] Activity flags `activeTradeId` and `lastTriggeredCandleTime` are not `volatile`
-- Read on the WS-thread tick path *outside* `tradeStateLock` (in broadcast methods) and written on the cron / WS path. Without `volatile` or final synchronisation, read threads may observe stale values indefinitely on a long-running JVM.
-
-### 1.13 [HIGH] `restoreActiveTrade` reconstructs `initialRiskPoints` as `|entryPrice − stopLoss|`, losing the *original* risk
-- Line 1040: `Math.abs(trade.getEntryPrice() − trade.getStopLoss())`. After TP1 the persisted `stopLoss` was moved to breakeven (= entryPrice), so reconstructed `initialRiskPoints` becomes 0 → divide-by-zero is "saved" by `Math.max(1.0, ...)` later, but **R-multiples post-restore are mathematically wrong**, the daily-loss-R limit is wrong, and the size-reduction logic is wrong.
-
-### 1.14 [HIGH] `pnlInr(trade, price, lots)` uses `unitsForLots(lots)` while `quantity` is in lots already
-- `ShadowExecutionEngine.pnlInr` is fine, but `ActiveTradeExecution.fromTickTP1` line 35–37 takes `tp1Lots = max(1, round(quantity * 0.20))` where `quantity` is the **lot count**. For `quantity = 1` (most common at small accounts), TP1 takes the **entire position** at TP1 and leaves zero runner — silently disabling the runner stage that the rest of the engine assumes will exist.
-
-### 1.15 [MEDIUM] `TrapEngine.calculateQuantity` is dead code that lies in the `Signal`
-- Sets `signal.setQuantity(...)` based on `TRAP_RISK_CAPITAL` env var, but `ShadowExecutionEngine.openTrade` immediately overrides via `positionSizer.sizePositionLots(...)`. Operators reading the signal log will see one number, the broker view another — guaranteed audit-trail confusion.
-
-### 1.16 [MEDIUM] `TrapEngine` uses hard-coded magic numbers (6.0, 10.0, 120.0 pts) and hard-coded `"NIFTY"` symbol
-- No bands per regime, no scaling by ATR, no instrument abstraction. The thing that *generates the alpha* is the least configurable piece in the codebase.
+> **Note on what changed vs the prior audit pass:** the operator has confirmed there will be no real Angel One order placement. Findings about freeze-quantity, LPP/UPP, partial fills, cancel-on-disconnect, FIX semantics, broker reconciliation, etc. are now correctly classified as **N/A**. They are listed in §11 for completeness but are **not** counted against the verdict.
 
 ---
 
-## 2. HIGH-RISK DESIGN FLAWS
+## 1. BLOCKERS — corrupt the shadow telemetry itself
 
-### 2.1 The whole "trade decision pipeline" runs on the WebSocket I/O thread
-- `AngelWebSocketListener.onBinary` → `ingestTick` → `validateFreshTick` → `recordAcceptedTick` → `processTick` → `publishEvent(CandleClosedEvent)` synchronously calls `ShadowExecutionEngine.evaluateCandle` → which acquires `tradeStateLock`, runs the `TrapEngine`, the `RegimeFilter`, the `RegimeConfidenceEngine`, the `PositionSizer`, the `RiskGateEngine`, the `ExecutionSimulator`, and persists to Postgres — then returns to the WS thread which then calls `evaluateTick` on the same engine, which acquires `tradeStateLock` *again*.
-- **Any DB stall, any Spring AOP advice, any GC pause stalls the entire feed.** No back-pressure, no bounded queue, no event-loop separation.
+### 1.1 [BLOCKER] `StrictValidationService.validateFreshTick` overwrites `tick.receivedAt` with `now`
+- Lines 237–246: the returned `acceptedTick` is rebuilt with the **validation-time** `now` as `receivedAt`, instead of the real WebSocket-receive instant. `MarketTick.of(...)` then recomputes `sourceAgeMs` from the rewritten value.
+- Every downstream metric is falsified by this one line:
+  - `MarketDataStateService.lastTickAgeMs` reads "younger than reality" → false freshness.
+  - `silenceMs` in `HeartbeatMonitor` resets on the wrong instant.
+  - `estimateTickGapMs` used by `ExecutionSimulator.plan` becomes `now − now ≈ small`, biasing the simulator toward **lower simulated latency and lower simulated slippage** every single trade.
+- Net effect: the entire shadow report is biased toward optimism. **You cannot use shadow slippage or shadow latency numbers for anything.**
 
-### 2.2 Single broadcast executor (`broadcastExecutor` = single-thread)
-- All UI websocket fan-out happens on one thread. Slow client → queue grows → `OutOfMemoryError`. The `LinkedBlockingQueue` is unbounded.
+### 1.2 [BLOCKER] `CandleAggregator.processTick` silently corrupts already-closed candles
+- Lines 112–134: when a tick arrives whose `candleAlignedTime` is *before* the current building candle's start (out-of-order or replayed tick — common on Angel reconnects), the `else` branch fires and `applyTick` is run against the **current** candle. OHLC of a candle that is logically in the past gets mutated.
+- No use of `MarketTick.sequenceId` to deduplicate or reject out-of-sequence ticks; the field is logged but never used as a filter.
+- **All historical OHLC data the strategy is trained on is silently corruptible.** TrapEngine reads exactly these candles. Garbage in → garbage out.
 
-### 2.3 No persistence transaction boundaries
-- Every `tradeRepository.save(...)` runs in its own implicit transaction. A trade that opens, hits TP1, then crashes mid-runner leaves the DB with `tp1Hit=true, runnerActive=true, status=ACTIVE, remainingQuantity=N` but **no in-memory engine state**. `restoreActiveTrade` will rehydrate and immediately compute a wrong `initialRiskPoints` (see 1.13). No `@Transactional` anywhere in the trading flow.
+### 1.3 [BLOCKER] Date-rollover bug in `CandleAggregator`
+- Comparison at line 113 uses `LocalTime.isAfter`, which has no notion of date.
+- A long-lived JVM that survives midnight (test harness, dev run, weekend) will have the first Monday 09:15 tick compare *before* the persisted Friday 15:25 candle and update Friday's candle instead of starting a new one.
+- `clearHistory()` is only called from `restart()` and the daily-reset cron (which itself is on the deadlock path — see 1.5). If either is delayed or fails, the bug bites silently.
 
-### 2.4 No idempotency on Angel re-subscription
-- `subscribeNifty` is fire-and-forget. If the WS reconnects mid-second and the prior subscription is still alive on the broker side, you can receive duplicate ticks; sequence-id is not used to deduplicate (see 1.7).
+### 1.4 [BLOCKER] `feedUnstable` flag is *assigned*, not OR'd, on every tick
+- `CandleAggregator` line 87: `feedUnstable = (lastArrivalTime != null && arrivalGapMs > 4500L);`
+- A previous `markUnstable()` call (e.g. from `AngelTickStreamClient` on parse failure or from `HeartbeatMonitor.monitorHealth` on silence) is **silently cleared** by the next tick that arrives within 4.5 s.
+- Instability events vanish from the data before any consumer can react. Shadow trades will be opened during what was actually an unstable feed window, then attributed to "stable feed" in the post-hoc telemetry. **You will believe the strategy has more uptime than it does.**
 
-### 2.5 `AngelAuthService` fetches the public IP via `https://api.ipify.org`
-- Production credential request **leaks the deployment topology to a third party** every authentication cycle (every pre-market 09:00 IST + every reconnect that needs auth).
-- Also: blocks the auth path on a third-party HTTP call. If `ipify` is rate-limited or down, auth stalls.
-- And: changes per call (ipify cache vs reality), so Angel's "must-match-IP" enforcement (which they do enforce on REST) becomes a flaky gate.
+### 1.5 [BLOCKER] AB/BA deadlock between `tradeStateLock` and `CandleAggregator`'s monitor
+- Tick path lock order: `synchronized(CandleAggregator.this)` → publishes `CandleClosedEvent` → `ShadowExecutionEngine.evaluateCandle` → `tradeStateLock.lock()`. Order: **CandleAggregator → tradeStateLock**.
+- Daily-reset path lock order: `ShadowExecutionEngine.executeDailyHardReset` → `tradeStateLock.lock()` → `candleAggregator.clearHistory()` → `synchronized(CandleAggregator.this)`. Order: **tradeStateLock → CandleAggregator**.
+- Two threads on opposite paths → classic deadlock. Triggers most cleanly at exactly 09:15 IST when the cron and the first tick race. Once dead, the WebSocket read loop stops, `HeartbeatMonitor` eventually marks the feed halted, and the rest of the day produces no shadow data **and no error other than silence**.
+- For shadow-mode trustworthiness this is a blocker because you will lose entire days without knowing why.
 
-### 2.6 `AngelAuthService.preMarketAuth` is `@Scheduled(cron="0 0 9 * * MON-FRI")`
-- Misses Saturday/Sunday correctly, but **runs on every NSE holiday Mon–Fri**, generating a useless auth attempt and burning the daily TOTP window. On settlement-bank-holidays where Angel rotates tokens server-side, this can also lock the account temporarily.
+### 1.6 [BLOCKER] No NSE holiday calendar, no weekend gate
+- `MarketSessionService.isMarketOpen` only checks `time ∈ [09:15, 15:30)`.
+- On Diwali muhurat the shadow system runs at the wrong window. On any non-trading weekday (Republic Day, Budget bank holiday, NSE-declared holiday) the system is nominally "open" — and if any feed source delivers a non-stale tick (replayed feed, broker bug, test harness), shadow trades will be recorded with no annotation that they happened on a closed day.
+- **Backtest aggregations will be polluted by trades that could not have occurred in real life.**
 
-### 2.7 The `TradingSessionSnapshot` mutation pattern is racy
-- `SessionStateManager.update(unaryOperator)` (presumed CAS — not read here, but the call pattern shows compose-on-current-snapshot) is correct **only if** every consumer always uses the snapshot atomically. Several call sites read individual fields then write a partial new snapshot built from `current.X`, `current.Y` — meaning two concurrent updates can clobber each other (e.g. `closeTrade` setting `tradeActive=false` while `updateActiveTradeState` from the next tick sets `tradeActive=true` based on its older view).
+### 1.7 [BLOCKER] Shadow P&L is computed in *index points × pointValue*, but the strategy claims to trade *options*
+- `ShadowExecutionEngine.pnlInr(trade, price, lots)` line ~1107: `(price − entryPrice) × pointValue × unitsForLots(lots)`.
+- `pointValue` is a configured constant (NIFTY ₹50/pt). This is **futures math**, not options math.
+- For an options book, realised P&L per index point ≈ `delta` (≪ 1) for OTM/near-money positions, plus gamma/theta/vega contributions. The number this system prints is therefore wrong by a factor of `1/delta` — typically 3×–5× too optimistic for the position the operator presumably intends to take.
+- For shadow-mode trustworthiness: the strategy *might* still be a real edge, but you have no way to read whether it is, because the displayed ₹ figure has no monetary meaning. **R-multiples derived from this P&L are also wrong.** Daily-loss-R, win-rate, expectancy — all wrong.
+- Two acceptable fixes:
+  1. Restrict the strategy *explicitly* to NIFTY index futures and rename the engine accordingly. The math then becomes correct and the comparison to live futures execution is meaningful.
+  2. Add a real option-leg model (delta-aware fill price, theta decay across the holding period, gamma adjustment to delta over the move). This is non-trivial.
 
-### 2.8 `RegimeFilter` and `RegimeConfidenceEngine` are two parallel, partially-overlapping regime systems
-- Both maintain their own opening-range, breakout, ATR, efficiency state. They use *different* thresholds (`RegimeFilter.MIN_REGIME_SCORE = 4` vs `RegimeConfidenceEngine` `< 55 → block, < 70 → reduced`). Either both must agree (no such gating exists) or one is dead weight. Currently the engine reads both and uses the second only for a UI badge — meaning the *real* gating decision is the first one.
+### 1.8 [BLOCKER] No persistence transaction boundaries → silent data corruption on restart
+- `closeTrade` runs nine sequential side effects (analytics insert → WS broadcast → in-memory updates → ntfy HTTP → DB update → state update). **None of them are inside a `@Transactional`.** A crash between steps 1 and 8 leaves:
+  - The analytics row written.
+  - The `Trade` entity still `status=ACTIVE`.
+  - The in-memory engine without an active trade.
+- On startup, `restoreActiveTrade` then rehydrates a phantom open position that already exited. Worse, it computes its `initialRiskPoints` from the *current* persisted SL — which may already have been moved to breakeven on TP1 — yielding a near-zero risk-per-trade for everything that follows that trade. **All R-multiples printed after that point are mathematically wrong.**
+- For shadow-mode trustworthiness this is a blocker because the recovery path silently produces wrong numbers, not crashes.
 
-### 2.9 `KillSwitchEngine.evaluateInternal` has no caller and no scheduler
-- The "internal kill switch" claim is fictional.
-
-### 2.10 No reconciliation against the broker
-- Even if a real order layer existed, there is no nightly position-reconciliation job, no order-book sweep on startup, no detection of orphan broker positions vs DB state.
-
----
-
-## 3. LOGIC ERRORS IN STRATEGY
-
-### 3.1 5-minute candles for a sub-2R intraday trap is too coarse
-- `CandleAggregator` produces 5-minute candles (`(minute / 5) * 5`). `TrapEngine` requires 7 candles → **35 minutes of warmup** before the first valid signal. NIFTY morning move usually completes in the first 30 minutes; the strategy structurally cannot trade the highest-edge window of the day.
-
-### 3.2 `TrapEngine` uses the "current closed candle's close" as both detection and entry price
-- `signal.setEntry(t0.close)`. By the time the candle closes and the event fires, the price has already moved. The simulated fill then assumes you can transact at `tickPrice ± halfSpread ± impact` — but in reality the *signal price* and *realisable price* on a market order one tick later can differ by 2–5 points routinely on NIFTY index futures, and 10–20 paise on options after multiplying by delta. Real slippage is going to be much larger than what `ExecutionSimulator.slippageMaxPoints` allows.
-
-### 3.3 Hard-coded constants in `TrapEngine` masquerading as a strategy
-- 6.0 pt minimum breakout depth, 10.0 pt SL buffer, 120.0 pt max stop distance, 7-candle window, 5-candle range mean. Zero parameter is regime-aware, ATR-normalised, or risk-budget-derived.
-- Stop distance is point-based on the **index**, but position sizing applies it to **option lots** via `lotSize × pointValue`. Mathematically this is a futures-style sizing model misapplied to options. The actual option premium move per index point is `delta`, not 1, so realised loss per "stop-loss point" will be ~`delta × 1` ≪ planned. **Risk-per-trade percentage is wrong by a factor of 1/delta.**
-
-### 3.4 Trailing stop in `ActiveTradeExecution.fromCandleClose`
-- `atr = candle.high − candle.low` (just the last candle's range — NOT an ATR). Buffer `max(10, atr × 0.4)`. For a wide volatile candle this gives a permissive trail; for a narrow candle it locks in 10 pts above the last bar high. Not a coherent trailing model.
-
-### 3.5 TP1 fraction = 20% of `quantity` (lots) and rounded
-- `Math.round(quantity * 0.20)` for `quantity ∈ {1,2,3,4}` produces `{1,1,1,1}` lots — i.e. 100%, 50%, 33%, 25%. The strategy claim of "scale out 20% at TP1, runner the rest" is not what the code does at small lot counts (which is the only realistic scale for the stated `riskPerTradePct`).
-
-### 3.6 `RegimeConfidenceEngine` thresholds are unbacktested magic numbers
-- 25/20/15/15/15/10 weight allocation, 55/70 cutoffs. No reference to backtest data, walk-forward results, or out-of-sample performance. Numerology, not quant.
-
-### 3.7 `RegimeFilter` "trading allowed" is read but **not used as a gate**
-- `RiskGateEngine.evaluateEntry` only checks `state.regime() != Regime.TREND`. The regime score / `tradingAllowed` flag is **never** consulted in the gate. The whole regime-confidence pipeline is decorative.
-
-### 3.8 Daily-loss-R uses `state.cumulativeDailyLossR()` but the increment is `Math.min(0.0, realizedR)`
-- `closeTrade` line 686: only adds losses, never offsets with wins. So the "daily loss limit in R" is actually "cumulative gross loss only" — a winning trade does not relax the limit. That's possibly intentional, but it is *not* what most desks call "daily loss limit" and it is undocumented.
-
-### 3.9 `RiskEngine.dailyLossLimitBreached` uses `realizedPnl` only (not unrealized)
-- A trade in a deep drawdown that hasn't hit SL is invisible to the gate. The gate only catches realised losses. A black-swan gap-down on the next candle that exceeds the daily-loss limit by 3× will be noticed only after exit.
-
-### 3.10 `PositionSizer.sizePositionLots` uses `equityInr × riskPerTradePct`
-- `equityInr` includes `unrealizedPnl` (`RiskEngine.refresh` adds unrealized). So position size *grows* with paper profits and *shrinks* on paper losses on the **same** open trade, which is meaningless because there is only one open trade at a time. For the next trade after a winner: equity has grown → next risk is on a higher base → compounding; after a loser: smaller. Not wrong per se, but `consecutiveLosses`-based reduction stacks on top of this and was never documented as compounding.
+### 1.9 [BLOCKER] `restoreActiveTrade` recomputes `initialRiskPoints` from current SL
+- Same root cause as 1.8 but worth listing separately because it bites even when there is **no** crash — every clean restart of an in-flight trade post-TP1 wrecks subsequent R-multiples for that trade.
 
 ---
 
-## 4. EXECUTION / BROKER RISKS
+## 2. HIGH — biases shadow telemetry in a known direction
 
-### 4.1 No order placement, no order-state machine, no reject handling
-See 1.1. Cannot be repeated enough: this is an analytics + simulation engine. It is not connected to any broker for order entry.
+### 2.1 [HIGH] `closeTrade` re-validates exit slippage but swallows the exception
+- `strictValidationService.validateExitExecution(...)` runs inside `try { … } catch (Exception e) { log.warn(…) }`. The strict-mode exit gate is silently neutered for exits.
+- Same pattern for every persistence call (`persistOpenedTrade`, `syncPersistedActiveTrade`, `finalizePersistedTrade`, `cancelPersistedActiveTrade`, `restoreActiveTrade`): catch, log, continue. Combined with 1.8 you get partial writes that are also silently un-flagged.
+- Result: the "this exit was rejected by strict validation" telemetry that the operator presumably wants to read in shadow mode never appears. You will see a clean exit row even when the exit was non-conforming.
 
-### 4.2 No freeze-quantity check
-NSE NIFTY F&O has a freeze quantity per order. `PositionSizer` will happily compute lots that exceed the freeze-quantity → broker will reject the order in real-mode. Nothing in the code guards against this.
+### 2.2 [HIGH] `ActiveTradeExecution.fromTickTP1` rounds TP1 lots to integer
+- `tp1Lots = max(1, round(quantity * 0.20))`. For `quantity = 1` this is `1` (i.e. **100% at TP1, zero runner**). For `quantity = 2` it is `1` (50%). For `quantity = 3` it is `1` (33%). For `quantity = 4` it is `1` (25%).
+- The strategy claim "scale 20% at TP1, runner the rest" is not what the code does at the lot counts a real account will use. Shadow runner-rate, runner-slippage, runner-expectancy numbers are therefore **structurally biased** away from what the strategy is supposed to be measuring.
 
-### 4.3 No circuit-breaker / LPP / UPP awareness
-NIFTY index has 10/15/20% circuit limits, options have LPP/UPP price bands. No code reads or respects these — slippage logic assumes infinite liquidity inside `slippageMaxPoints` (default value not inspected here, but configuration-bound).
+### 2.3 [HIGH] `RegimeFilter.tradingAllowed` is computed but never gated on
+- `RiskGateEngine.evaluateEntry` only checks `state.regime() != Regime.TREND`. The whole regime score / `tradingAllowed` flag and the parallel `RegimeConfidenceEngine` (55/70 thresholds) are decorative — they appear in `/health` but do not block any trade.
+- Shadow telemetry will therefore show entries during regimes the engineering claims to filter out. The "regime gating works" hypothesis cannot be tested from this data.
 
-### 4.4 No bid/ask spread observation
-Angel SmartStream LTP packets carry only the last traded price. The system blindly trades a strategy that depends on tight spreads (trap reversals are spread-sensitive). The `simulation.spreadMidpoint()` is a configured constant, not a measurement.
+### 2.4 [HIGH] `pointValue` in shadow P&L confuses lot count with unit count
+- See 1.7. The compounding effect: `unitsForLots(lots) = lots × lotSize`, and `pnlInr = pricePoints × pointValue × units`. For NIFTY, `pointValue` is ₹50 and `lotSize` is 50 → `units` ≈ 50 × lots → P&L is multiplied by `50` an extra time vs the futures-correct formula `pricePoints × pointValue × lots`. **The figure is off by `lotSize` even before considering options/delta.** Worth verifying against the configured properties — if `pointValue` was set to `1` to compensate, the configuration is concealing the bug.
 
-### 4.5 `closeTrade` is only triggered from tick + candle events
-- If the WS dies and ticks stop, the trade can't be closed even though the configured force-exit time has passed. There is no clock-driven exit watchdog independent of feed health.
+### 2.5 [HIGH] `TrapEngine` magic numbers (6, 10, 120 pts), hardcoded "NIFTY", no ATR normalisation
+- 6.0 pt minimum breakout depth, 10.0 pt SL buffer, 120.0 pt max stop distance. Zero parameter is regime-aware or volatility-normalised. NIFTY in 2018 vs 2024 has very different intraday ranges; the same numbers cannot be optimal for both.
+- Shadow telemetry from this engine measures the trap-with-these-specific-constants, not "the trap strategy" generally. Walk-forward conclusions cannot generalise.
 
-### 4.6 Force-exit time check is per-tick
-- `MarketSessionService.shouldForceExit` is only invoked from inside the tick path. If the feed disconnects 1 minute before the configured force-exit and reconnects 1 minute after market close, the position never gets the force-exit signal until the next session.
+### 2.6 [HIGH] Trailing stop in `ActiveTradeExecution.fromCandleClose` is not an ATR
+- Computed as `atr = candle.high − candle.low` (just the last candle's range) and buffer `max(10, atr × 0.4)`. Wide candle → permissive trail; narrow candle → 10pt above last bar. Not a coherent trail model — runner-stop telemetry is therefore not a clean read on "would a real ATR-trail work?".
 
-### 4.7 No partial-fill handling
-- `SimulatedFill` returns one `actualPrice`. Real Angel orders can fill in 1, 5, 25, or N partial lots over hundreds of ms. There is no `OrderEvent` queue, no average-price recomputation, no leftover-quantity tracking.
+### 2.7 [HIGH] `PositionSizer` uses `equityInr` that includes unrealised P&L
+- `RiskEngine.refresh` blends realised + unrealised. Position size therefore drifts during an open trade and across consecutive trades in a non-obvious way that is **not** documented as compounding. Reported risk-per-trade in shadow telemetry is internally consistent but does not match the static "0.5%" the operator probably expects.
 
-### 4.8 No order cancel on disconnect
-- If a hypothetical real order is in the broker's order book and the WS dies, Angel's behaviour is to **leave the order live**. There is no `cancelOrdersOnDisconnect` policy here, no equivalent of FIX `RestatementReason=Disconnect`.
+### 2.8 [HIGH] Daily-loss-R only counts losses (`Math.min(0.0, realizedR)`), wins do not relax it
+- `closeTrade` line ~686. This is "cumulative gross loss only", not what most desks call "daily loss limit". Shadow telemetry on "days the daily-loss kicked in" will overstate compared to the conventional definition. Either intentional or a bug — either way it is undocumented.
 
----
+### 2.9 [HIGH] `RiskEngine.dailyLossLimitBreached` reads `realizedPnl` only
+- A trade in deep drawdown that has not hit SL is invisible to the gate. A gap-down on the next candle exceeding the limit by 3× will only be noticed *after* exit. In shadow mode this means the kill-on-daily-loss event is delayed vs reality — telemetry on its trigger frequency understates.
 
-## 5. PERFORMANCE / SCALABILITY
+### 2.10 [HIGH] `rejectReasonCounts` grows unbounded
+- `StrictValidationService.validateFreshTick` synthesises reasons like `"LIVE_TICK_STALE: age=812ms max=2000ms"` (lines 208–212). Each unique value is a new key in `rejectReasonCounts`. Long-running JVM → unbounded heap growth.
+- Operationally: you will see the JVM die after a few weeks of uptime, losing the in-memory edge tracker / regime tracker / streak counters that have not been persisted. **Adaptive-regime / edge-tracker windows cannot be trusted across long runs** for this reason.
 
-### 5.1 Synchronous DB writes on the tick path
-- `syncPersistedActiveTrade` and `finalizePersistedTrade` and `cancelPersistedActiveTrade` and `persistOpenedTrade` all run blocking JPA `tradeRepository.save(...)` while holding `tradeStateLock` on the WS thread. P99 of any Postgres write — even on a warm pool — exceeds the configured `maxSilenceMs` heartbeat threshold under load. **One slow `save` = heartbeat panic.**
-
-### 5.2 `restoreSessionCandles` reads `findTop50` synchronously in `@PostConstruct`
-- Container can't pass startup probe if Postgres is slow. Render's failure mode then is to hard-restart the container, which on next attempt also can't start. Cascading failure.
-
-### 5.3 `KillSwitchEngine.isKillSwitchTriggered` does `Files.exists` + `Files.readAllLines` on the entry path
-- Disk I/O on every signal evaluation. On Render's networked filesystem this will dominate latency.
-
-### 5.4 `AngelAuthService.resolvePublicIp` makes an outbound HTTP call inside the auth method
-- Blocks auth. Pre-market 09:00 IST sees this called; if `ipify` is slow, the WS connect chain stalls.
-
-### 5.5 Unbounded growth: `rejectReasonCounts`, `LinkedBlockingQueue` for broadcast, `afterHoursBuffer` (capped at 250 — fine), `breakoutHistory` (capped at 10 — fine), `candleHistory` in `RegimeFilter` (capped at 20 — fine)
-- The first two are unbounded.
-
-### 5.6 GC pressure
-- Every tick allocates a `MarketTick` (record), every `stateManager.update` allocates a `TradingSessionSnapshot`, every candle close allocates a `Candle`, every gate decision allocates a `GateDecision`. NIFTY ticks at 5–50 Hz steady-state, peaks at 200+ Hz around expiry. At 200 Hz × ~6 record allocations per tick = ~1.2k objects/sec just in the hot path. On a JDK 21 G1GC default config this is tolerable, but with the synchronous DB write in the same path you will see GC stalls coincident with Postgres P99 spikes.
+### 2.11 [HIGH] In-memory state for `RealTimeEdgeTracker`, `AdaptiveRegimeEngine`, `StrictValidationService`, regime histories — none persisted
+- A pod restart wipes the moving windows the operator presumably wants to evaluate the strategy with. Combined with 2.10, every long-window read is suspect.
 
 ---
 
-## 6. SECURITY / CONFIG
+## 3. MEDIUM — operational hazards that will cost you data or days
 
-### 6.1 `SESSION_SECRET` is in environment but no audit shows JWT/cookie signing
-- Without reading `SecurityConfig.java` and `PlainWebSocketConfig.java` here, the `/health`, `/monitoring/*`, and WS endpoints presumably accept unauthenticated traffic on Render. **Anyone with the public URL can read the active trade, P&L, and reject reasons.** A control endpoint to clear the kill-switch (`KillSwitchEngine.clearKillSwitch`) exposed via `EngineController` would be game-over.
+### 3.1 [MEDIUM] Single-thread broadcast executor with unbounded `LinkedBlockingQueue`
+- One slow UI client can OOM the JVM. In shadow mode this kills your data run.
 
-### 6.2 Angel credentials read via `@Value` with empty-string default
-- `apiKey`, `clientCode`, `pin`, `totpSecret`. All printable in heap dumps, not redacted in logs (the `log.warn("Angel auth rejected: {}", response.getBody())` *will* dump the full Angel response which on auth failure contains `clientcode`).
+### 3.2 [MEDIUM] Synchronous JPA writes on the WebSocket thread
+- `tradeRepository.save(...)` blocking inside `tradeStateLock` on the WS-driven candle path. P99 of any Postgres write can exceed `maxSilenceMs`, causing the `HeartbeatMonitor` to mark the feed halted **even though the feed is fine**. False heartbeat panics → shadow data discarded for the rest of that window.
 
-### 6.3 TOTP generated with `System.currentTimeMillis()` only
-- No NTP-skew tolerance, no two-bucket retry. Container clock drift > 30 s (common on first boot of a sleeping Render free dyno) → permanent auth failure until restart.
+### 3.3 [MEDIUM] `KillSwitchEngine` is not actually a kill-switch
+- Relative path `KILL_SWITCH.flag` (depends on JVM cwd on Render — opaque).
+- `evaluateInternal(MetricsWindow)` has zero callers; the "internal" kill-switch is dead code.
+- `writeKillSwitch` has zero Java callers; the comment refers to a "Python forward_scorecard" that does not exist in the repo.
+- For shadow mode the practical impact is reduced (no real money), but it means there is no automatic mechanism to halt a misbehaving shadow run that is polluting your dataset with bad data. You have to manually SIGTERM.
 
-### 6.4 MAC-address fallback `00:00:00:00:00:00`
-- Angel actively flags zero-MAC requests as suspicious and may rate-limit / block the account.
+### 3.4 [MEDIUM] No NTP-skew tolerance on TOTP
+- `AngelAuthService` uses `System.currentTimeMillis()` to compute the TOTP, no two-bucket retry. Container clock drift > 30s on a cold start → permanent auth failure → your shadow run is dead until manual restart.
 
-### 6.5 RestTemplate for Angel auth without timeout config
-- Default `RestTemplate` has no connect/read timeouts. A slow Angel API stalls the auth thread indefinitely, blocking the WS reconnect.
+### 3.5 [MEDIUM] `AngelAuthService` calls `https://api.ipify.org` synchronously inside `authenticate()`
+- Adds an external dependency to your auth path. ipify outage = your shadow system can't auth. Also leaks your deployment IP to a third party every reconnect.
 
-### 6.6 No CORS / no CSRF discussion
-- (Not inspected in detail; flag as needs-review.)
+### 3.6 [MEDIUM] No `RestTemplate` connect/read timeouts
+- `AngelAuthService` uses default `RestTemplate`. Slow Angel API → indefinite stall on the auth thread → the WS reconnect chain stalls behind it.
 
-### 6.7 Database credentials assumed to come from env, no rotation policy, no migration tooling visible
-- Schema is created by JPA `ddl-auto` on startup (presumed). On schema drift between releases, silent data loss is possible.
+### 3.7 [MEDIUM] `restoreSessionCandles` runs in `@PostConstruct` doing a synchronous `findTop50`
+- If Postgres is slow at boot, the container fails the readiness probe → Render restarts → loops. Cascading failure.
 
----
+### 3.8 [MEDIUM] `HeartbeatMonitor.monitorHealth` writes a fresh snapshot every 2s unconditionally
+- Causes a state broadcast every 2s even when nothing changed. Wastes WS bandwidth and shows up as background noise in any per-event analysis you do downstream.
 
-## 7. CONCURRENCY / THREADING
+### 3.9 [MEDIUM] `AngelAuthService.preMarketAuth` is `@Scheduled(cron="0 0 9 * * MON-FRI")` and does not respect the holiday calendar
+- Burns one TOTP attempt on every NSE holiday Monday–Friday. Angel rate-limits aggressive auth; this can lock your account temporarily during a normal week with two holidays.
 
-### 7.1 See 1.2 (deadlock) and 2.7 (snapshot races).
+### 3.10 [MEDIUM] No `volatile` on hot-path fields read outside the lock
+- `activeTradeId`, `lastTriggeredCandleTime`, `currentJwtToken`, `currentFeedToken`, `pendingExit`, `lastRegimeConfidenceScore` and others are written under `tradeStateLock` and read on the broadcast/UI path without it. Stale reads forever possible on a long-running JVM. Practically rare but nondeterministic, which is the worst kind of bug to have when validating telemetry.
 
-### 7.2 `volatile` missing on `webSocket`, `currentJwtToken`, `currentFeedToken`, `lastAuthAttemptEpochMs`, `activeTradeId`, `activeSignalTime`, `activeExecutionTime`, `activeExpectedEntry`, `activeEntryLatencyMs`, `pendingExit`, `lastTriggeredCandleTime`, `lastRegimeConfidenceScore`
-- Some are written under `tradeStateLock` and read outside of it (broadcast path), violating happens-before.
+### 3.11 [MEDIUM] No optimistic locking (`@Version`) on `Trade`
+- Concurrent `tradeRepository.save(entity)` against the same row is last-write-wins. `syncPersistedActiveTrade` (per-tick) racing `finalizePersistedTrade` (close) racing startup `restoreActiveTrade` is reachable.
 
-### 7.3 `ExecutorService` resources never bounded or named
-- `ScheduledExecutorService executor = Executors.newScheduledThreadPool(2)` in `AngelTickStreamClient`. Threads are unnamed → useless in thread dumps under load.
-- `broadcastExecutor` is presumably a single-thread executor (called from `ShadowExecutionEngine`). Unbounded queue.
+### 3.12 [MEDIUM] No idempotency / dedup on Angel re-subscription
+- WS reconnect mid-second can leave a prior subscription live → duplicate ticks. `MarketTick.sequenceId` exists but is not used to deduplicate. Duplicate ticks bias `ExecutionSimulator.estimateTickGapMs` toward zero, biasing simulated slippage downward — same direction as 1.1, compounding.
 
-### 7.4 `HeartbeatMonitor.monitorHealth` runs every 2 s and unconditionally writes the snapshot
-- Causes a state broadcast every 2 s even when nothing changed. Not a bug, but pointless network chatter.
+### 3.13 [MEDIUM] Two parallel regime systems (`RegimeFilter` + `RegimeConfidenceEngine`) with different thresholds
+- Either decorative (only `RegimeFilter` is read by the gate) or unsynchronised. Pick one. Today it is the first one, with the second emitted only as a UI score — but the architecture suggests they were meant to agree.
 
----
+### 3.14 [MEDIUM] No correlation IDs on log lines
+- Tracing a single shadow trade across the 10–15 log statements that touch it is grep-by-trade-id. Trade ID is printed in *some* lines, not all.
 
-## 8. DATA INTEGRITY / PERSISTENCE
+### 3.15 [MEDIUM] Per-tick logging at INFO including hex packet preview
+- ~10 KB/s baseline log volume. Render free-tier log retention will be exhausted in hours. You lose the very telemetry you are running shadow mode to collect.
 
-### 8.1 No `@Transactional` boundaries on multi-step trade lifecycle updates
-- `closeTrade` does in this exact order:
-  1. `liveMetricsLogger.logShadowExecution(...)` (DB insert)
-  2. `broadcastTradeData(...)` (WS fan-out)
-  3. `edgeTracker.addTradeResult(...)` (in-memory)
-  4. `adaptiveRegimeEngine.addTradeResult(...)` (in-memory)
-  5. `strictValidationService.recordTradeExecution(...)` (in-memory)
-  6. `riskEngine.recordClosedTrade(...)` (in-memory + DB read in refresh)
-  7. `ntfyNotificationService.notifyTradeExit(...)` (third-party HTTP)
-  8. `finalizePersistedTrade(...)` (DB update)
-  9. `stateManager.update(...)` (in-memory)
-- A crash between steps 1 and 8 logs an "executed trade" with exit telemetry, but the `Trade` entity is still `status=ACTIVE`. On restart, `restoreActiveTrade` rehydrates a phantom open position that already closed.
-
-### 8.2 `cancelPersistedActiveTrade("STALE_RECOVERY")` is called from inside `persistOpenedTrade`
-- Race: if a stale active trade exists in DB at the moment a new trade is being persisted, the system cancels the prior trade with reason `"STALE_RECOVERY"` and creates a new one. There is **no audit trail** of why the prior trade was cancelled (e.g. crash vs duplicate signal vs operator action).
-
-### 8.3 No optimistic locking (`@Version`) on `Trade`
-- Two threads running `tradeRepository.save(entity)` against the same row will perform last-write-wins. Given that `syncPersistedActiveTrade` is called from the WS path and `finalizePersistedTrade` from the same path on different ticks, plus restore on startup, this is reachable.
-
-### 8.4 `CandleRecord` persistence on `finalizeCandle`
-- Fires under `synchronized(this)` on the tick path. See 5.1.
-
-### 8.5 No DB pool config inspected
-- Without HikariCP tuning visible, the default pool size is 10. Under any contention, the tick path can starve.
+### 3.16 [MEDIUM] `CandleAggregator.afterHoursBuffer` and other buffers have implicit assumptions
+- `afterHoursBuffer` capped at 250. Fine for normal days. After a corporate announcement or Budget speech, after-hours tick burst can overflow silently.
 
 ---
 
-## 9. OBSERVABILITY / OPERABILITY
+## 4. LOW — hygiene
 
-### 9.1 Logging is verbose but not structured
-- `log.info("Angel WS tick token={} seq={} price={} ...")` logs **every accepted tick** including the full hex packet preview (128 bytes). At 50 Hz × 24 fields × ~200 bytes each = ~10 KB/s of log output baseline, ~40 KB/s during bursts. Render's log retention will be exhausted within hours.
-
-### 9.2 No metrics endpoint (Prometheus / Micrometer not configured here)
-- `/health` returns a manually composed Map. No histograms for tick-to-decision latency, no counters per reject reason, no gauges for queue depth. **Operationally blind in a real outage.**
-
-### 9.3 Alerting via `NtfyNotificationService` (presumed third-party HTTP)
-- Single point of failure; if `ntfy.sh` is down, no alerts. No fallback.
-
-### 9.4 No correlation-IDs on log lines
-- Tracing a single trade through 6 log statements requires `grep` by trade ID — except trade ID is only printed in some lines.
-
-### 9.5 The "audit trail" for a rejected signal is one log line
-- Reject reasons like `"NON_TREND"` give no context: which regime, which OR range, which orderbook state. Post-mortem on a missed move is impossible.
-
-### 9.6 `KillSwitchEngine` writes via `Files.write(KILL_PATH, ...)` with no fsync
-- Crash between write call and flush → kill flag silently lost.
+- 4.1 `KillSwitchEngine.writeKillSwitch` writes via `Files.write(...)` without fsync — crash between write and flush silently loses the flag.
+- 4.2 `Executors.newScheduledThreadPool(2)` in `AngelTickStreamClient` is unnamed — useless thread dumps under load.
+- 4.3 Angel credentials (`apiKey`, `clientCode`, `pin`, `totpSecret`) are `@Value` strings with empty-string defaults; `log.warn("Angel auth rejected: {}", response.getBody())` will dump full Angel responses including `clientcode` on auth failure.
+- 4.4 MAC-address fallback `"00:00:00:00:00:00"` — Angel flags zero-MAC requests as suspicious.
+- 4.5 No CORS / CSRF hardening on the public `/health`, `/monitoring/*` endpoints; `KillSwitchEngine.clearKillSwitch` should never be exposed even read-only.
+- 4.6 Schema appears to be JPA `ddl-auto`; no Flyway/Liquibase migrations visible — silent column drift across releases.
+- 4.7 No HikariCP pool tuning visible — default size 10 will starve under contention with the synchronous tick-path writes.
+- 4.8 `TrapEngine.calculateQuantity` writes `signal.setQuantity(...)` from `TRAP_RISK_CAPITAL` env var, but `ShadowExecutionEngine.openTrade` immediately overrides via `PositionSizer`. The signal log shows one number, the trade log another — guaranteed audit-trail confusion.
 
 ---
 
-## 10. TESTING / VERIFICATION GAPS
+## 5. STRATEGY-MATH SPECIFIC SHADOW HAZARDS (worth its own section)
 
-### 10.1 Per the repo layout there is `riskpilot/src/test/...` but the strategy decision tree has no observable property-based test
-- (Not reading test files in this audit pass; flagging that even if present, the things that need testing — deadlock under cron, partial DB write recovery, out-of-order tick handling, freeze-quantity guard, holiday-calendar — are exactly the things this code wouldn't pass.)
+If the operator's intent is to evaluate this strategy from shadow data, these are the things that will mislead you most:
 
-### 10.2 No replay harness
-- A real quant system has a deterministic replay-from-pcap or replay-from-tick-log mode. This system can be exercised only by talking to live Angel during market hours. Catastrophically slow feedback loop for any strategy iteration.
+1. **Index-point P&L vs real options P&L (1.7, 2.4)** — the displayed ₹ figure has no real-money meaning. R-multiples derived from it are correspondingly meaningless. The fastest fix is to declare the strategy as NIFTY-futures-only and rename `pnlInr` to use a single, correct futures formula. Then the shadow numbers are at least a meaningful proxy for futures execution.
 
-### 10.3 No paper-trading reconciliation
-- Even though the system is "shadow", there is no automated daily reconciliation that compares the simulated fills against real LTP-walk-forward — i.e. the shadow numbers cannot be validated against ground truth.
+2. **Slippage is a function of falsified latency (1.1)** — because `validateFreshTick` rewrites `receivedAt`, the simulator will systematically under-report latency and under-report slippage. Whatever expectancy the shadow run reports, the real-run expectancy will be lower by the slippage delta you have not measured.
 
-### 10.4 No staging / canary deployment workflow visible
-- `render.yaml` (single service) suggests prod-only deploys.
+3. **Runner-stage measurements are biased by 100%-at-TP1 at low lot counts (2.2)** — at 1–4 lots, the supposed "20% at TP1, runner the rest" is actually 25–100% at TP1. Runner-rate, runner-slippage, runner-expectancy in the shadow report measure a different strategy than the one specified.
+
+4. **Regime gating is decorative (2.3)** — entries happen in regimes the documentation says are filtered out. The "regime filter is helping me" hypothesis cannot be tested from shadow data because the filter is not actually engaged.
+
+5. **Daily-loss-R definition disagrees with the textbook (2.8)** — wins do not offset losses. Shadow telemetry on this metric does not mean what an external reader will assume it means.
+
+6. **In-memory state windows reset on every restart (2.10, 2.11)** — `RealTimeEdgeTracker`, `AdaptiveRegimeEngine` rolling stats are wiped. A 30-day shadow run on Render with even one redeploy is actually multiple shorter runs concatenated, not a continuous window.
+
+7. **Holiday & weekend pollution (1.6)** — shadow trades may be recorded on closed days from any non-Angel feed source.
 
 ---
 
-## 11. WHAT WAS GOOD (one short paragraph, for honesty)
+## 6. WHAT WAS GOOD
 
 - Strict typed configuration in `RiskPilotProperties`.
-- Clean separation of `ExecutionSimulator` from `ShadowExecutionEngine`.
+- `ExecutionSimulator` cleanly separated from `ShadowExecutionEngine`.
 - Use of immutable records for `MarketTick`, `ActiveTradeExecution`, `EquitySnapshot`, `RegimeMetrics`.
-- Daily-reset cron is wired (even if the deadlock risk is real).
-- The recent commit fixing NIFTY expiry to TUESDAY is correct per SEBI single-weekly framework.
+- Daily-reset cron is wired.
+- The recent commit fixing NIFTY weekly expiry to TUESDAY is correct per SEBI single-weekly framework.
 
 That is the entire list.
 
 ---
 
-## 12. FINAL VERDICT
+## 7. FINAL VERDICT (Shadow-Mode Edition)
 
-### **SAFE FOR LIVE TRADING: NO.**
+### **Are the shadow numbers trustworthy as a basis for any decision? — NO.**
 
-### **Confidence: 99%.**
+### **Confidence: 95%.**
 
-### Top 5 reasons (any one of which is independently disqualifying):
+(Confidence is one notch lower than the live-trading verdict because some items, e.g. unbounded `rejectReasonCounts`, only bite long-running deployments — a one-day shadow read may be partially salvageable.)
 
-1. **There is no broker order layer.** The system simulates fills against a configured slippage model and a constant spread. Switching `mode: LIVE` does not place real orders. It cannot lose money in a market order book, and it cannot make money there either. (Finding 1.1)
+### Top 5 disqualifying findings, shadow-only
 
-2. **The kill-switch does not work.** Relative file path, no internal trigger wiring, file-system stat on the hot path. Operators have no reliable way to halt the system mid-trade. (Finding 1.4)
+1. **`validateFreshTick` overwrites `receivedAt` (1.1)** — biases all latency / slippage / staleness telemetry toward optimism.
+2. **`pnlInr` uses index-point math for what the operator presumably intends as an options book (1.7)** — every ₹ figure and every R-multiple is wrong.
+3. **`CandleAggregator` silently corrupts closed candles, has a midnight rollover bug, and clears the `feedUnstable` flag on the next tick (1.2 / 1.3 / 1.4)** — the OHLC the strategy reads is unreliable.
+4. **AB/BA deadlock between `tradeStateLock` and `CandleAggregator` (1.5)** — entire shadow days will be lost silently, and you won't know which days.
+5. **No transaction boundaries + `restoreActiveTrade` recomputes initial risk wrong (1.8 / 1.9)** — every restart of an in-flight trade silently produces wrong post-restore R-multiples.
 
-3. **No NSE holiday calendar, no weekend gate.** The `MarketSessionService` is a clock-only stub. Any non-Angel feed source (test harness, replay, broker feed bug) on a closed day → trade. (Finding 1.5)
+### Minimum work to make the shadow numbers worth reading
 
-4. **Deadlock & data-integrity hazards on the hot path.** The trade decision pipeline runs synchronously on the WebSocket I/O thread, takes two locks in inconsistent order across paths, performs blocking JPA writes inside the lock, and has no transaction boundaries around multi-step lifecycle updates. (Findings 1.2, 2.1, 2.3, 5.1, 8.1)
+In priority order:
 
-5. **The strategy mathematics are wrong for the instrument.** `TrapEngine` reasons in NIFTY *index* points, but real positions are in *option* lots. Risk-per-trade is off by a factor of `1/delta` (~3×–5× for typical near-money weekly options). The position-sizer therefore systematically over-risks. P&L printed in shadow mode is non-monetary. (Findings 1.1, 3.3)
+1. Fix `validateFreshTick` to preserve the original `receivedAt`. (One-line fix. Single biggest win.)
+2. Fix `pnlInr`: either restrict the strategy to NIFTY futures (rename, use the correct futures formula) or add a delta-aware option-leg model.
+3. Fix `CandleAggregator`:
+   - Reject ticks whose `candleAlignedTime` is before the current candle (or apply only if the prior candle was not yet finalised).
+   - Compare on `LocalDateTime`, not `LocalTime` — kill the rollover bug.
+   - Use `feedUnstable |= …` and clear it only on a successful continuous window of N stable ticks.
+4. Move all DB writes off the WebSocket / `tradeStateLock` path onto a bounded queue with a single-consumer worker. Wrap each `closeTrade` / `persistOpenedTrade` sequence in a single `@Transactional`. Add `@Version` to `Trade`.
+5. Persist `initialRiskPoints` on every TP1 / SL move so restore reads it directly.
+6. Add an NSE-holiday calendar check to `MarketSessionService`. Record `tradingDay` annotation on every persisted trade row.
+7. Bound `rejectReasonCounts` cardinality (canonicalise reason codes — e.g. `LIVE_TICK_STALE` without the inline numbers; put the numbers in a separate gauge).
+8. Persist `RealTimeEdgeTracker` / `AdaptiveRegimeEngine` rolling state to the DB, rehydrate on startup.
+9. Wire the regime score / `RegimeConfidenceEngine` into `RiskGateEngine` if it is supposed to gate entries; otherwise delete it.
+10. Replace per-tick INFO logging with a sampled / structured logger; ship metrics to Micrometer + Prometheus instead.
+11. Add a deterministic tick-replay harness (read a JSON-lines tick log, feed it through the pipeline as if live). This is the single biggest force-multiplier for evaluating the strategy from shadow data — without it you can only learn one trading day per real day.
 
-### Minimum work required before *even paper-trading* with confidence:
-- Build a real broker order layer (REST place/modify/cancel + order-book sweep + reject handling + freeze-quantity guard + LPP/UPP guard).
-- Add a real holiday calendar + weekend gate + special-session whitelist.
-- Move trade decisions off the WS thread onto a bounded queue with single-consumer worker.
-- Wrap multi-step DB updates in `@Transactional`. Add `@Version` to `Trade`.
-- Replace the kill-switch with an absolute-path file + an internal scheduler that *actually evaluates and writes it* + a `cancelAllOpenOrders + flatten` action when triggered.
-- Fix `validateFreshTick` to preserve the original `receivedAt`.
-- Fix `CandleAggregator` for date rollover, out-of-order ticks, and the sticky-feedUnstable bug.
-- Fix `restoreActiveTrade` to persist `initialRiskPoints` and rehydrate it, not recompute it.
-- Fix `pnlInr` to use real option premium math (delta-aware) — or restrict the strategy explicitly to index futures and stop pretending it trades options.
-- Add structured metrics (Micrometer + Prometheus), rate-limit per-tick logging.
-- Add `@Transactional` boundaries and a reconciliation job.
-- Add a deterministic tick-replay harness; require any new strategy parameter change to be backtested through it.
+After steps 1–6 are done, **shadow-mode telemetry will be worth reading**. Until then, treat current numbers as directional intuition only.
 
-Until **all** of the above are done, capital should not touch this system.
+---
 
-— end of audit —
+## 8. ITEMS NOW OUT OF SCOPE (live-trading concerns no longer counted)
+
+For completeness, the following findings from the prior live-trading audit are **not** counted against the shadow-only verdict, because the operator has explicitly chosen not to place real orders. They remain true; they would re-activate if any future change introduces a real broker order layer.
+
+- No broker order placement / `placeOrder` / `modifyOrder` / `cancelOrder` calls.
+- No freeze-quantity, LPP/UPP, circuit-limit guards.
+- No partial-fill handling, no average-price recomputation, no leftover-quantity tracking.
+- No cancel-on-disconnect policy, no broker reconciliation job.
+- No FIX-equivalent order state machine.
+- No bid/ask spread observation (`simulation.spreadMidpoint()` is a configured constant; in shadow this is a *modelling* assumption you can choose to live with or refine).
+
+— end of audit (shadow-mode edition) —
