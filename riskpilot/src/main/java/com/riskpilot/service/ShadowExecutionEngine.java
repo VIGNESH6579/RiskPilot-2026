@@ -788,7 +788,10 @@ public class ShadowExecutionEngine {
             ? marketDataSnapshot.lastTick().price()
             : null;
         payload.put("transport", marketDataSnapshot.transport() != null ? marketDataSnapshot.transport().name() : null);
-        payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
+        // FIX: surface "HOLIDAY" distinctly from intra-day "CLOSED" so the
+        // dashboard does not look like a software-bug pause on every
+        // weekend / NSE holiday.
+        payload.put("marketStatus", marketSessionService.marketStatus());
         payload.put("priceSource", priceSource);
         payload.put("sessionActive", marketOpen && state.sessionActive());
         payload.put("lastPrice", liveLastPrice);

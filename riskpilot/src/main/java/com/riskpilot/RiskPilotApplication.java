@@ -3,6 +3,7 @@ package com.riskpilot;
 import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.engine.AdaptiveRegimeEngine;
 import com.riskpilot.engine.KillSwitchEngine;
+import com.riskpilot.service.MarketSessionService;
 import com.riskpilot.service.StrictValidationService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class RiskPilotApplication {
     private final KillSwitchEngine killSwitchEngine;
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final RiskPilotProperties riskPilotProperties;
+    private final MarketSessionService marketSessionService;
 
     public static void main(String[] args) {
         normalizeDatasourceEnvironment();
@@ -34,11 +36,15 @@ public class RiskPilotApplication {
     public void run() {
         strictValidationService.validateSystem();
         adaptiveRegimeEngine.initialize();
+        // FIX: route through MarketSessionService so the holiday calendar
+        // and weekend gate are applied. The previous local helper compared
+        // raw LocalTime.now() against open/close only, which would log
+        // "marketOpen=true" on a Saturday or Republic Day.
         log.info(
-            "RiskPilot runtime ready MODE={}, DATA_SOURCE={}, marketOpen={}, enforceStrictTiming={}",
+            "RiskPilot runtime ready MODE={}, DATA_SOURCE={}, marketStatus={}, enforceStrictTiming={}",
             riskPilotProperties.getMode(),
             riskPilotProperties.dataSourceLabel(),
-            isMarketOpen(),
+            marketSessionService.marketStatus(),
             riskPilotProperties.isEnforceStrictTiming()
         );
     }
@@ -95,10 +101,4 @@ public class RiskPilotApplication {
         return value == null || value.isBlank();
     }
 
-    private boolean isMarketOpen() {
-        var now = java.time.LocalTime.now(java.time.ZoneId.of(riskPilotProperties.getMarket().getZone()));
-        var open = java.time.LocalTime.parse(riskPilotProperties.getMarket().getOpen());
-        var close = java.time.LocalTime.parse(riskPilotProperties.getMarket().getClose());
-        return !now.isBefore(open) && !now.isAfter(close);
-    }
 }
