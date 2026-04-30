@@ -28,6 +28,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -177,6 +178,20 @@ public class ShadowExecutionEngine {
         }
     }
 
+    /**
+     * Candle close events are published from inside CandleAggregator's
+     * synchronized monitor (processTick → finalizeCandle → publishEvent).
+     * If we processed them inline on the same thread, evaluateCandle would
+     * try to re-acquire the aggregator monitor (via getValidHistory) AND
+     * the tradeStateLock, while another thread already holding tradeStateLock
+     * could be waiting for the aggregator monitor — classic AB/BA deadlock.
+     *
+     * Running this listener on a dedicated single-threaded executor
+     * ({@code candleEventExecutor}) breaks the cycle: the aggregator monitor
+     * is released before evaluateCandle reaches for tradeStateLock, so the
+     * lock acquisition order is always tradeStateLock → aggregator monitor.
+     */
+    @Async("candleEventExecutor")
     @EventListener
     public void onCandleClosed(CandleClosedEvent event) {
         evaluateCandle(event.candle());
@@ -604,7 +619,24 @@ public class ShadowExecutionEngine {
                 exitLatencyMs
             );
         } catch (Exception e) {
-            log.warn("Exit slippage validation triggered: {}", e.getMessage());
+            // Validation can legitimately throw on slippage breach mid-close.
+            // We don't propagate (the close must still finalize) but we log
+            // with full stacktrace + trade context so the breach is auditable
+            // in production logs. Previously only e.getMessage() was logged,
+            // which silently dropped the stack and made post-mortems blind.
+            log.warn(
+                "EXIT_VALIDATION_BREACH tradeId={} direction={} expectedExit={} actualExit={} exitLatencyMs={} reason={}",
+                activeTradeId,
+                trade.direction(),
+                expectedExit,
+                exit.exitPrice(),
+                exitLatencyMs,
+                e.getMessage(),
+                e
+            );
+            rejectReasonCounts
+                .computeIfAbsent("EXIT_VALIDATION_BREACH", key -> new AtomicInteger())
+                .incrementAndGet();
         }
 
         LocalDateTime effectiveSignalTime = activeSignalTime != null ? activeSignalTime : LocalDateTime.now();
@@ -852,6 +884,12 @@ public class ShadowExecutionEngine {
                 .entryPrice(decimal(trade.entryPrice()))
                 .expectedEntryPrice(decimal(signal.getEntry()))
                 .stopLoss(decimal(trade.stopLoss()))
+                // initialStopLoss snapshots the pre-TP1 protective stop so a
+                // crash + restart recovery can recompute the original 1R
+                // distance even after the runtime stop has been moved to
+                // break-even or trailed. See Trade.initialStopLoss and
+                // restoreActiveTrade().
+                .initialStopLoss(decimal(trade.stopLoss()))
                 .targetPrice(decimal(trade.tp1Level()))
                 .expectedExitPrice(decimal(trade.tp1Level()))
                 .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
@@ -879,7 +917,24 @@ public class ShadowExecutionEngine {
             persistedTrade = tradeRepository.save(persistedTrade);
             activeTradeId = persistedTrade.getId();
         } catch (Exception e) {
-            log.warn("Unable to persist opened shadow trade: {}", e.getMessage());
+            // A persistence failure here means the engine has an in-memory
+            // active trade but no DB row, which would silently break crash
+            // recovery and the closeTrade REST endpoint. Log with full
+            // stacktrace and bump the metric so it's visible. We don't
+            // re-throw because the in-memory state is still usable for the
+            // current process lifetime.
+            log.error(
+                "PERSIST_OPEN_FAILED symbol={} direction={} entry={} stop={} reason={}",
+                resolveSignalSymbol(signal),
+                trade.direction(),
+                trade.entryPrice(),
+                trade.stopLoss(),
+                e.getMessage(),
+                e
+            );
+            rejectReasonCounts
+                .computeIfAbsent("PERSIST_OPEN_FAILED", key -> new AtomicInteger())
+                .incrementAndGet();
         }
     }
 
@@ -910,7 +965,22 @@ public class ShadowExecutionEngine {
             tradeRepository.save(entity);
             activeTradeId = entity.getId();
         } catch (Exception e) {
-            log.warn("Unable to sync active shadow trade: {}", e.getMessage());
+            // Sync failures matter: if the DB row drifts from in-memory state,
+            // a subsequent restart will recover an outdated trade. Log full
+            // context including the optimistic-lock @Version field which is
+            // the most likely source of save() throwing here.
+            log.error(
+                "PERSIST_SYNC_FAILED tradeId={} stop={} trailing={} remaining={} reason={}",
+                activeTradeId,
+                trade.stopLoss(),
+                trade.trailingSL(),
+                trade.remainingQuantity(),
+                e.getMessage(),
+                e
+            );
+            rejectReasonCounts
+                .computeIfAbsent("PERSIST_SYNC_FAILED", key -> new AtomicInteger())
+                .incrementAndGet();
         }
     }
 
@@ -952,7 +1022,22 @@ public class ShadowExecutionEngine {
             entity.setExitTime(LocalDateTime.now());
             tradeRepository.save(entity);
         } catch (Exception e) {
-            log.warn("Unable to finalize shadow trade record: {}", e.getMessage());
+            // A failure to write the CLOSED row leaves a phantom ACTIVE trade
+            // in the DB that crash recovery would re-pick up next boot. This
+            // is the most operationally dangerous swallowed exception in the
+            // engine, so escalate it to ERROR with full stack + trade context.
+            log.error(
+                "PERSIST_FINALIZE_FAILED tradeId={} exitReason={} exitPrice={} realizedPnl={} reason={}",
+                activeTradeId,
+                exit.reason(),
+                exit.exitPrice(),
+                finalRealizedPnL,
+                e.getMessage(),
+                e
+            );
+            rejectReasonCounts
+                .computeIfAbsent("PERSIST_FINALIZE_FAILED", key -> new AtomicInteger())
+                .incrementAndGet();
         }
     }
 
@@ -973,7 +1058,15 @@ public class ShadowExecutionEngine {
             entity.setRemainingQuantity(0);
             tradeRepository.save(entity);
         } catch (Exception e) {
-            log.warn("Unable to cancel stale active shadow trade: {}", e.getMessage());
+            log.warn(
+                "PERSIST_CANCEL_FAILED reason={} cause={}",
+                reason,
+                e.getMessage(),
+                e
+            );
+            rejectReasonCounts
+                .computeIfAbsent("PERSIST_CANCEL_FAILED", key -> new AtomicInteger())
+                .incrementAndGet();
         }
     }
 
@@ -1032,12 +1125,31 @@ public class ShadowExecutionEngine {
             }
 
             Trade trade = persisted.get();
+            // Recompute initial 1R distance from the persisted snapshot of
+            // the original stop. The runtime trade.getStopLoss() may have
+            // been moved to break-even or trailed by the time we crashed,
+            // so using it would yield a near-zero risk budget and corrupt
+            // every realized-R metric for the recovered trade. Fall back to
+            // the current stop only for legacy rows where initialStopLoss
+            // was never written.
+            double initialStop = trade.getInitialStopLoss() != null
+                ? trade.getInitialStopLoss().doubleValue()
+                : trade.getStopLoss().doubleValue();
+            double initialRiskPoints = Math.abs(trade.getEntryPrice().doubleValue() - initialStop);
+            if (trade.getInitialStopLoss() == null) {
+                log.warn(
+                    "RESTORE_LEGACY_TRADE tradeId={} initialStopLoss missing — using current stop {} as fallback (risk={} pts)",
+                    trade.getId(),
+                    initialStop,
+                    initialRiskPoints
+                );
+            }
             ActiveTradeExecution activeTrade = new ActiveTradeExecution(
                 normalizeDirection(trade.getDirection()),
                 trade.getEntryPrice().doubleValue(),
                 trade.getStopLoss().doubleValue(),
                 trade.getTargetPrice().doubleValue(),
-                Math.abs(trade.getEntryPrice().doubleValue() - trade.getStopLoss().doubleValue()),
+                initialRiskPoints,
                 Boolean.TRUE.equals(trade.getTp1Hit()),
                 Boolean.TRUE.equals(trade.getRunnerActive()),
                 false,
@@ -1074,7 +1186,14 @@ public class ShadowExecutionEngine {
             ));
             riskEngine.refresh(activeTrade, marketDataStateService.lastAcceptedTick().map(MarketTick::price).orElse(trade.getEntryPrice().doubleValue()));
         } catch (Exception e) {
-            log.warn("Unable to restore active trade state: {}", e.getMessage());
+            // Restore failures are silent killers — they leave the engine
+            // thinking no trade is active when one is in fact open in the
+            // market. Escalate to ERROR with full stacktrace so the operator
+            // sees this immediately at boot.
+            log.error("RESTORE_ACTIVE_TRADE_FAILED reason={}", e.getMessage(), e);
+            rejectReasonCounts
+                .computeIfAbsent("RESTORE_ACTIVE_TRADE_FAILED", key -> new AtomicInteger())
+                .incrementAndGet();
         }
     }
 

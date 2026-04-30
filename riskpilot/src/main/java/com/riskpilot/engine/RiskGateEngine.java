@@ -21,6 +21,7 @@ public class RiskGateEngine {
     private final KillSwitchEngine killSwitchEngine;
     private final MarketSessionService marketSessionService;
     private final RiskEngine riskEngine;
+    private final RegimeFilter regimeFilter;
 
     @PostConstruct
     public void validate() {
@@ -56,6 +57,14 @@ public class RiskGateEngine {
         }
         if (state.regime() != Regime.TREND) {
             return reject("NON_TREND");
+        }
+        // Regime classification (TREND/CHOP/UNKNOWN) is necessary but not
+        // sufficient: the volatility/trend-efficiency/breakout-hold composite
+        // score on RegimeFilter can downgrade a snapshot that's nominally
+        // TREND into a non-tradable state (e.g. fading momentum, low ATR
+        // ratio). Wire it in here so a single source of truth governs entry.
+        if (!regimeFilter.isTradingAllowed()) {
+            return reject("REGIME_FILTER_BLOCKED");
         }
         if (orRange < config.getFilters().getMinOrRange()) {
             return reject("LOW_VOLATILITY");

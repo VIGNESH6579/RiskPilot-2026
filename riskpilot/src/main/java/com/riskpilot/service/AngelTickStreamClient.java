@@ -19,12 +19,16 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -52,10 +56,30 @@ public class AngelTickStreamClient {
     private final RiskPilotProperties properties;
     private final MarketSessionService marketSessionService;
 
+    private static final int INGEST_QUEUE_CAPACITY = 2048;
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
     private final AtomicInteger parseFailureCounter = new AtomicInteger(0);
+
+    /**
+     * The JDK HttpClient WebSocket reader thread MUST NOT be blocked by
+     * downstream work — if it is, TCP backpressure builds up, exchange
+     * timestamps drift relative to receive timestamps, and the feed
+     * appears stale. We hand parsed ticks off to a single-threaded
+     * executor that runs validation, candle aggregation, and engine
+     * evaluation on its own thread. Single thread is intentional: tick
+     * processing must be strictly serial to preserve seq ordering.
+     */
+    private final BlockingQueue<MarketTick> ingestQueue = new ArrayBlockingQueue<>(INGEST_QUEUE_CAPACITY);
+    private final ExecutorService ingestExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "angel-ingest");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final AtomicLong ingestDropCount = new AtomicLong(0L);
+    private final AtomicBoolean ingestRunning = new AtomicBoolean(true);
 
     private volatile WebSocket webSocket;
 
@@ -90,13 +114,59 @@ public class AngelTickStreamClient {
             throw new IllegalStateException("WEBSOCKET_REQUIRED");
         }
 
+        startIngestWorker();
         connectWebSocket();
+    }
+
+    private void startIngestWorker() {
+        ingestExecutor.execute(() -> {
+            log.info("Angel ingest worker started capacity={}", INGEST_QUEUE_CAPACITY);
+            while (ingestRunning.get() || !ingestQueue.isEmpty()) {
+                try {
+                    MarketTick tick = ingestQueue.poll(250L, TimeUnit.MILLISECONDS);
+                    if (tick == null) {
+                        continue;
+                    }
+                    processIngestedTick(tick);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.info("Angel ingest worker interrupted, draining and exiting");
+                    return;
+                } catch (Exception other) {
+                    // Defensive: a single tick failure must never kill the
+                    // worker. processIngestedTick already records the
+                    // failure to MarketDataStateService.
+                    log.error("Angel ingest worker swallowed unexpected error reason={}", other.getMessage(), other);
+                }
+            }
+            log.info("Angel ingest worker exited cleanly");
+        });
     }
 
     @PreDestroy
     public void shutdown() {
+        ingestRunning.set(false);
         disconnect();
         executor.shutdownNow();
+        ingestExecutor.shutdown();
+        try {
+            if (!ingestExecutor.awaitTermination(2L, TimeUnit.SECONDS)) {
+                ingestExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            ingestExecutor.shutdownNow();
+        }
+    }
+
+    /** Visible for tests and metrics endpoints. */
+    public long getIngestDropCount() {
+        return ingestDropCount.get();
+    }
+
+    /** Visible for tests and metrics endpoints. */
+    public int getIngestQueueDepth() {
+        return ingestQueue.size();
     }
 
     public void reconnectAfterAuthentication() {
@@ -154,7 +224,42 @@ public class AngelTickStreamClient {
         log.info("Subscribed Angel websocket to NIFTY token {}", NIFTY_SMART_STREAM_TOKEN);
     }
 
-    private void ingestTick(MarketTick tick) {
+    /**
+     * Hand-off point from the WebSocket reader thread. Must complete in
+     * sub-millisecond time so the JDK HttpClient WS reader is free to
+     * pull the next frame. Heavy work (validation, candle aggregation,
+     * engine tick evaluation) runs on the {@code angel-ingest} worker
+     * thread inside {@link #processIngestedTick}.
+     *
+     * Drop policy: if the queue is full we drop the NEWEST tick (i.e. the
+     * one we are trying to add) and log+meter the drop. Dropping newest
+     * is the right choice for a market data feed because older queued
+     * ticks must still be processed in order to keep candle continuity
+     * intact; dropping the oldest would break aggregation.
+     */
+    private void enqueueIngest(MarketTick tick) {
+        if (!ingestQueue.offer(tick)) {
+            long drops = ingestDropCount.incrementAndGet();
+            // Mark stale on the aggregator so the engine refuses to
+            // execute on the next tick we DO accept — we cannot trust
+            // continuity once we've dropped one.
+            candleAggregator.markUnstable();
+            marketDataStateService.markRejectedTick("INGEST_QUEUE_FULL", tick.transport());
+            // Log every 1st, 10th, 100th drop to avoid log flooding while
+            // still surfacing the issue.
+            if (drops <= 3 || drops % 100L == 0L) {
+                log.error(
+                    "INGEST_QUEUE_FULL droppedNewest seq={} totalDrops={} queueDepth={} capacity={}",
+                    tick.sequenceId(),
+                    drops,
+                    ingestQueue.size(),
+                    INGEST_QUEUE_CAPACITY
+                );
+            }
+        }
+    }
+
+    private void processIngestedTick(MarketTick tick) {
         try {
             log.debug(
                 "INGESTION_RECEIVED mode={} marketOpen={} transport={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
@@ -341,8 +446,14 @@ public class AngelTickStreamClient {
         @Override
         public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
             try {
+                // Parsing is cheap and CPU-bound; keep it on the WS reader
+                // thread so a malformed packet can't poison the ingest
+                // queue. Heavy downstream work (validation, candles,
+                // engine evaluation) is offloaded via enqueueIngest so the
+                // WS reader is never blocked by the engine's tradeStateLock
+                // or by JPA writes.
                 MarketTick tick = parseTick(data);
-                ingestTick(tick);
+                enqueueIngest(tick);
             } catch (Exception e) {
                 marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
                 candleAggregator.markUnstable();

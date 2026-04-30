@@ -20,7 +20,16 @@ public class Trade {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    
+
+    /**
+     * Optimistic lock guard. JPA will increment this on every UPDATE so two
+     * concurrent writers (engine + manual close from the REST controller)
+     * cannot silently overwrite each other's view of the trade.
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
+
     @Column(nullable = false, length = 20)
     private String symbol;
     
@@ -35,7 +44,18 @@ public class Trade {
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal stopLoss;
-    
+
+    /**
+     * The original (pre-TP1) protective stop captured at trade open. The
+     * runtime {@code stopLoss} field is mutated as the engine moves the stop
+     * to break-even or trails it, so on a crash + restart we lose the true
+     * 1R distance unless we persist this snapshot. Used by
+     * ShadowExecutionEngine.restoreActiveTrade() to recompute
+     * initialRiskPoints accurately. Nullable for legacy rows.
+     */
+    @Column(name = "initial_stop_loss", precision = 10, scale = 2)
+    private BigDecimal initialStopLoss;
+
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal targetPrice;
 
