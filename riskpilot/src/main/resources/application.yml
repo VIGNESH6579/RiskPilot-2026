@@ -42,7 +42,7 @@ riskpilot:
   instrument:
     symbol: ${TRADING_SYMBOL:NIFTY}
     lot-size: ${INSTRUMENT_LOT_SIZE:75}
-    point-value: ${INSTRUMENT_POINT_VALUE:1.0}
+    point-value: ${INSTRUMENT_POINT_VALUE:50.0}
   account:
     initial-capital: ${ACCOUNT_INITIAL_CAPITAL:500000}
     risk-per-trade-pct: ${ACCOUNT_RISK_PER_TRADE_PCT:1.0}

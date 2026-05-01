@@ -3,6 +3,7 @@ package com.riskpilot.service;
 import dev.samstevens.totp.code.DefaultCodeGenerator;
 import dev.samstevens.totp.code.HashingAlgorithm;
 import dev.samstevens.totp.exceptions.CodeGenerationException;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,6 +28,7 @@ public class AngelAuthService {
     private static final Logger log = LoggerFactory.getLogger(AngelAuthService.class);
     private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
     private static final long AUTH_RETRY_GUARD_MS = 5000L;
+    private static final long PUBLIC_IP_CACHE_TTL_MS = 3_600_000L;
 
     @Value("${ANGEL_API_KEY:${angelapi.key:}}")
     private String apiKey;
@@ -51,9 +53,16 @@ public class AngelAuthService {
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
+    private volatile String cachedPublicIp = null;
+    private volatile long publicIpCachedAt = 0L;
 
     public AngelAuthService(ObjectProvider<AngelTickStreamClient> tickStreamClientProvider) {
         this.tickStreamClientProvider = tickStreamClientProvider;
+    }
+
+    @PostConstruct
+    public void warmPublicIpCache() {
+        resolvePublicIp();
     }
 
     public synchronized boolean authenticate() {
@@ -80,8 +89,10 @@ public class AngelAuthService {
         Map<String, String> body = new HashMap<>();
         body.put("clientcode", clientCode);
         body.put("password", pin);
+        DefaultCodeGenerator generator = new DefaultCodeGenerator(HashingAlgorithm.SHA1, 6);
+        long currentBucket = currentTotpBucket();
         try {
-            body.put("totp", generateTotp());
+            body.put("totp", generator.generate(totpSecret, currentBucket));
         } catch (Exception e) {
             log.error("Angel auth failed: unable to generate TOTP: {}", e.getMessage());
             return false;
@@ -97,9 +108,19 @@ public class AngelAuthService {
                 currentFeedToken = data.get("feedToken");
                 log.info("Angel auth success");
                 return true;
-            } else {
-                log.warn("Angel auth rejected: {}", response.getBody());
             }
+            if (response.getBody() != null && "AB1010".equals(response.getBody().get("errorcode"))) {
+                body.put("totp", generator.generate(totpSecret, currentBucket - 1));
+                response = restTemplate.postForEntity(AUTH_URL, new HttpEntity<>(body, headers), Map.class);
+                if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
+                    Map<String, String> data = (Map<String, String>) response.getBody().get("data");
+                    currentJwtToken = data.get("jwtToken");
+                    currentFeedToken = data.get("feedToken");
+                    log.info("Angel auth success after previous TOTP bucket retry");
+                    return true;
+                }
+            }
+            log.warn("Angel auth rejected: {}", response.getBody());
         } catch (Exception e) {
             log.warn("Angel auth request failed: {}", e.getMessage());
         }
@@ -110,8 +131,12 @@ public class AngelAuthService {
 
     private String generateTotp() throws CodeGenerationException {
         DefaultCodeGenerator generator = new DefaultCodeGenerator(HashingAlgorithm.SHA1, 6);
-        long currentBucket = Math.floorDiv(System.currentTimeMillis() / 1000, 30);
+        long currentBucket = currentTotpBucket();
         return generator.generate(totpSecret, currentBucket);
+    }
+
+    private long currentTotpBucket() {
+        return Math.floorDiv(System.currentTimeMillis() / 1000, 30);
     }
     
     public String getJwtToken() { return currentJwtToken; }
@@ -158,15 +183,20 @@ public class AngelAuthService {
         if (configuredPublicIp != null && !configuredPublicIp.isBlank()) {
             return configuredPublicIp.trim();
         }
-        // Best-effort fallback; keep request valid even if lookup fails.
+        long now = System.currentTimeMillis();
+        if (cachedPublicIp != null && (now - publicIpCachedAt) < PUBLIC_IP_CACHE_TTL_MS) {
+            return cachedPublicIp;
+        }
         try {
             String ip = restTemplate.getForObject("https://api.ipify.org", String.class);
             if (ip != null && !ip.isBlank()) {
-                return ip.trim();
+                cachedPublicIp = ip.trim();
+                publicIpCachedAt = now;
+                return cachedPublicIp;
             }
         } catch (Exception ignored) {
         }
-        return resolveLocalIp();
+        return cachedPublicIp != null ? cachedPublicIp : resolveLocalIp();
     }
 
     private String resolveMacAddress() {

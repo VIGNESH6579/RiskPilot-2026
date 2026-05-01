@@ -32,9 +32,9 @@ public record ActiveTradeExecution(
             return trade;
         }
 
-        int tp1Lots = trade.quantity() > 1 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 1;
+        int tp1Lots = trade.quantity() >= 2 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 0;
         int remainingLots = Math.max(0, trade.quantity() - tp1Lots);
-        double pnlInr = pnlPoints(trade, currentPrice) * trade.unitsForLots(tp1Lots) * trade.pointValue();
+        double pnlInr = pnlPoints(trade, currentPrice) * tp1Lots * trade.lotSize() * trade.pointValue();
 
         return new ActiveTradeExecution(
             trade.direction(),
@@ -43,7 +43,7 @@ public record ActiveTradeExecution(
             trade.tp1Level(),
             trade.initialRiskPoints(),
             true,
-            remainingLots > 0,
+            true,
             trade.stage2Active(),
             trade.tailHalfLocked(),
             trade.quantity(),
@@ -101,7 +101,10 @@ public record ActiveTradeExecution(
             return TradeExit.noExit();
         }
 
-        double pnlInr = pnlPoints(trade, currentPrice) * trade.remainingUnits() * trade.pointValue();
+        double pnlInr = pnlPoints(trade, currentPrice)
+            * trade.remainingQuantity()
+            * trade.lotSize()
+            * trade.pointValue();
         return new TradeExit(true, pnlInr, "STOP_LOSS", currentPrice, "REAL");
     }
 
@@ -145,7 +148,7 @@ public record ActiveTradeExecution(
     }
 
     public double markToMarketPnl(double currentPrice) {
-        return pnlPoints(this, currentPrice) * remainingUnits() * pointValue;
+        return pnlPoints(this, currentPrice) * remainingQuantity * lotSize * pointValue;
     }
 
     private static boolean isShort(ActiveTradeExecution trade) {

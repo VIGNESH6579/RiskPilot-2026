@@ -20,6 +20,9 @@ public class Trade {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    private Long version;
     
     @Column(nullable = false, length = 20)
     private String symbol;
@@ -35,6 +38,9 @@ public class Trade {
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal stopLoss;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal initialRiskPoints;
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal targetPrice;
@@ -130,6 +136,7 @@ public class Trade {
         if (exitType == null) exitType = "REAL";
         if (realizedPnL == null) realizedPnL = BigDecimal.ZERO;
         if (unrealizedPnL == null) unrealizedPnL = BigDecimal.ZERO;
+        if (initialRiskPoints == null) initialRiskPoints = BigDecimal.ZERO.setScale(2);
         if (quantity == null) quantity = 0;
         if (remainingQuantity == null) remainingQuantity = 0;
         if (lotSize == null) lotSize = 1;

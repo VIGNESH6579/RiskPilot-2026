@@ -30,6 +30,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -77,21 +79,22 @@ public class ShadowExecutionEngine {
     private final ExecutionSimulator executionSimulator;
     private final RiskEngine riskEngine;
     private final TradingSessionService tradingSessionService;
+    private final TransactionTemplate transactionTemplate;
     private final ReentrantLock tradeStateLock = new ReentrantLock();
     private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor();
     private final ConcurrentHashMap<String, AtomicInteger> rejectReasonCounts = new ConcurrentHashMap<>();
     private final AtomicLong signalOpportunityCount = new AtomicLong();
     private final AtomicLong rejectedSignalCount = new AtomicLong();
 
-    private String lastTriggeredCandleTime = "";
-    private LocalDateTime activeSignalTime;
-    private LocalDateTime activeExecutionTime;
-    private double activeExpectedEntry;
-    private long activeEntryLatencyMs;
-    private Long activeTradeId;
+    private volatile String lastTriggeredCandleTime = "";
+    private volatile LocalDateTime activeSignalTime;
+    private volatile LocalDateTime activeExecutionTime;
+    private volatile double activeExpectedEntry;
+    private volatile long activeEntryLatencyMs;
+    private volatile Long activeTradeId;
     private volatile RegimeConfidenceEngine.RegimeScore lastRegimeConfidenceScore;
-    private PendingEntry pendingEntry;
-    private PendingExit pendingExit;
+    private volatile PendingEntry pendingEntry;
+    private volatile PendingExit pendingExit;
 
     @PostConstruct
     public void restoreRuntimeState() {
@@ -527,10 +530,15 @@ public class ShadowExecutionEngine {
             : actualEntryPrice + tp1Distance;
         double initialRisk = Math.max(1.0, Math.abs(signal.getStopLoss() - actualEntryPrice));
         RiskEngine.EquitySnapshot equitySnapshot = riskEngine.snapshot();
-        int quantityLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.currentEquity(), equitySnapshot.consecutiveLosses());
+        int quantityLots = positionSizer.sizePositionLots(initialRisk, equitySnapshot.realisedEquity(), equitySnapshot.consecutiveLosses());
         if (quantityLots <= 0) {
             logReject(state, "INSUFFICIENT_RISK_BUDGET");
             return;
+        }
+        RegimeConfidenceEngine.RegimeScore confidenceScore = lastRegimeConfidenceScore;
+        if (confidenceScore != null && confidenceScore.isReducedMode()) {
+            quantityLots = Math.max(1, (int) Math.floor(quantityLots * 0.5));
+            log.info("REDUCED_MODE_ACTIVE scaling position to {} lots", quantityLots);
         }
 
         ActiveTradeExecution trade = new ActiveTradeExecution(
@@ -584,7 +592,7 @@ public class ShadowExecutionEngine {
 
     private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick, ExecutionSimulator.SimulatedFill fill) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
-        double riskInr = Math.max(1.0, trade.initialRiskPoints() * trade.totalUnits() * trade.pointValue());
+        double riskInr = Math.max(1.0, trade.initialRiskPoints() * trade.quantity() * trade.lotSize() * trade.pointValue());
         double finalRealizedPnL = trade.realizedPnL() + exit.pnlInr();
         double realizedR = finalRealizedPnL / riskInr;
         double expectedExit = fill != null ? fill.expectedPrice() : (trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss());
@@ -618,32 +626,22 @@ public class ShadowExecutionEngine {
             );
         }
 
-        TradeLog executionLog = liveMetricsLogger.logShadowExecution(
+        TradeLog executionLog = finalizeTradeTransaction(
+            trade,
+            exit,
+            finalRealizedPnL,
+            expectedExit,
+            exitLatencyMs,
+            exitSlip,
+            effectiveExitType,
             effectiveSignalTime,
             effectiveExecutionTime,
-            trade.direction(),
             activeEntryLatencyMs,
-            exitLatencyMs,
             activeExpectedEntry,
-            trade.entryPrice(),
-            expectedExit,
-            exit.exitPrice(),
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            trade.mfe(),
-            trade.mae(),
             realizedR,
-            trade.quantity(),
-            trade.remainingQuantity(),
-            trade.lotSize(),
-            trade.pointValue(),
-            "ALLOW",
-            "",
             state.regime(),
             state.timePhase(),
             state.feedStable(),
-            exit.reason(),
-            effectiveExitType,
             recovery,
             LocalDateTime.now()
         );
@@ -670,7 +668,6 @@ public class ShadowExecutionEngine {
         strictValidationService.recordTradeExecution(realizedR);
         riskEngine.recordClosedTrade(finalRealizedPnL);
         ntfyNotificationService.notifyTradeExit(trade, exit, realizedR);
-        finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlip, effectiveExitType);
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -683,7 +680,7 @@ public class ShadowExecutionEngine {
             current.heartbeatAlive(),
             current.orHigh(),
             current.orLow(),
-            current.cumulativeDailyLossR() + Math.min(0.0, realizedR),
+            current.cumulativeDailyLossR() + realizedR,
             null,
             exit.reason()
         ));
@@ -843,6 +840,61 @@ public class ShadowExecutionEngine {
         return regimeConfidenceEngine.evaluate(snapshot, confidenceCandles);
     }
 
+    @Transactional
+    private TradeLog finalizeTradeTransaction(
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double finalRealizedPnL,
+        double expectedExit,
+        long exitLatencyMs,
+        double exitSlippage,
+        String effectiveExitType,
+        LocalDateTime effectiveSignalTime,
+        LocalDateTime effectiveExecutionTime,
+        long entryLatencyMs,
+        double expectedEntry,
+        double realizedR,
+        Regime regime,
+        TimePhase timePhase,
+        boolean feedStable,
+        boolean recovery,
+        LocalDateTime exitTime
+    ) {
+        return transactionTemplate.execute(status -> {
+            TradeLog executionLog = liveMetricsLogger.logShadowExecution(
+                effectiveSignalTime,
+                effectiveExecutionTime,
+                trade.direction(),
+                entryLatencyMs,
+                exitLatencyMs,
+                expectedEntry,
+                trade.entryPrice(),
+                expectedExit,
+                exit.exitPrice(),
+                trade.tp1Hit(),
+                trade.runnerActive(),
+                trade.mfe(),
+                trade.mae(),
+                realizedR,
+                trade.quantity(),
+                trade.remainingQuantity(),
+                trade.lotSize(),
+                trade.pointValue(),
+                "ALLOW",
+                "",
+                regime,
+                timePhase,
+                feedStable,
+                exit.reason(),
+                effectiveExitType,
+                recovery,
+                exitTime
+            );
+            finalizePersistedTrade(trade, exit, finalRealizedPnL, expectedExit, exitLatencyMs, exitSlippage, effectiveExitType);
+            return executionLog;
+        });
+    }
+
     private boolean isValidOr(double orHigh, double orLow) {
         return isValidNumber(orHigh) && isValidNumber(orLow) && orHigh >= orLow;
     }
@@ -851,6 +903,7 @@ public class ShadowExecutionEngine {
         return !Double.isInfinite(value) && !Double.isNaN(value);
     }
 
+    @Transactional
     private void persistOpenedTrade(
         Signal signal,
         ActiveTradeExecution trade,
@@ -866,6 +919,7 @@ public class ShadowExecutionEngine {
                 .entryPrice(decimal(trade.entryPrice()))
                 .expectedEntryPrice(decimal(signal.getEntry()))
                 .stopLoss(decimal(trade.stopLoss()))
+                .initialRiskPoints(decimal(trade.initialRiskPoints()))
                 .targetPrice(decimal(trade.tp1Level()))
                 .expectedExitPrice(decimal(trade.tp1Level()))
                 .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
@@ -898,36 +952,46 @@ public class ShadowExecutionEngine {
     }
 
     private void syncPersistedActiveTrade(ActiveTradeExecution trade, double currentPrice) {
-        try {
-            Optional<Trade> persistedTrade = findPersistedActiveTrade();
-            if (persistedTrade.isEmpty()) {
-                return;
-            }
+        final Long tradeIdSnapshot = activeTradeId;
+        final ActiveTradeExecution tradeSnapshot = trade;
+        final double priceSnapshot = currentPrice;
 
-            Trade entity = persistedTrade.get();
-            entity.setStopLoss(decimal(trade.stopLoss()));
-            entity.setTargetPrice(decimal(trade.tp1Level()));
-            entity.setExpectedExitPrice(decimal(trade.tp1Level()));
-            entity.setRemainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())));
-            entity.setRemainingQuantity(Math.max(0, trade.remainingQuantity()));
-            entity.setRealizedPnL(decimal(trade.realizedPnL()));
-            entity.setUnrealizedPnL(decimal(calculateUnrealizedPnL(trade, currentPrice)));
-            entity.setMaxFavorableExcursion(decimal(trade.mfe()));
-            entity.setMaxAdverseExcursion(decimal(trade.mae()));
-            entity.setTp1Hit(trade.tp1Hit());
-            entity.setRunnerActive(trade.runnerActive());
-            entity.setTailHalfLocked(trade.tailHalfLocked());
-            entity.setTrailingStopLoss(decimal(trade.trailingSL()));
-            entity.setStatus("ACTIVE");
-            entity.setExitReason("OPEN");
-            entity.setExitType("REAL");
-            tradeRepository.save(entity);
-            activeTradeId = entity.getId();
-        } catch (Exception e) {
-            log.warn("Unable to sync active shadow trade: {}", e.getMessage());
-        }
+        broadcastExecutor.execute(() -> {
+            try {
+                Optional<Trade> persistedTrade = findPersistedActiveTrade(tradeIdSnapshot);
+                if (persistedTrade.isEmpty()) {
+                    return;
+                }
+
+                Trade entity = persistedTrade.get();
+                if (!entity.isActive()) {
+                    return;
+                }
+                entity.setStopLoss(decimal(tradeSnapshot.stopLoss()));
+                entity.setTargetPrice(decimal(tradeSnapshot.tp1Level()));
+                entity.setExpectedExitPrice(decimal(tradeSnapshot.tp1Level()));
+                entity.setRemainingSize(BigDecimal.valueOf(Math.max(0, tradeSnapshot.remainingQuantity())));
+                entity.setRemainingQuantity(Math.max(0, tradeSnapshot.remainingQuantity()));
+                entity.setRealizedPnL(decimal(tradeSnapshot.realizedPnL()));
+                entity.setUnrealizedPnL(decimal(calculateUnrealizedPnL(tradeSnapshot, priceSnapshot)));
+                entity.setMaxFavorableExcursion(decimal(tradeSnapshot.mfe()));
+                entity.setMaxAdverseExcursion(decimal(tradeSnapshot.mae()));
+                entity.setTp1Hit(tradeSnapshot.tp1Hit());
+                entity.setRunnerActive(tradeSnapshot.runnerActive());
+                entity.setTailHalfLocked(tradeSnapshot.tailHalfLocked());
+                entity.setTrailingStopLoss(decimal(tradeSnapshot.trailingSL()));
+                entity.setStatus("ACTIVE");
+                entity.setExitReason("OPEN");
+                entity.setExitType("REAL");
+                tradeRepository.save(entity);
+                activeTradeId = entity.getId();
+            } catch (Exception e) {
+                log.warn("Unable to sync active shadow trade: {}", e.getMessage());
+            }
+        });
     }
 
+    @Transactional
     private void finalizePersistedTrade(
         ActiveTradeExecution trade,
         TradeExit exit,
@@ -1001,6 +1065,13 @@ public class ShadowExecutionEngine {
         return tradeRepository.findFirstBySymbolAndStatusOrderByEntryTimeDesc(DEFAULT_SYMBOL, "ACTIVE");
     }
 
+    private Optional<Trade> findPersistedActiveTrade(Long tradeId) {
+        if (tradeId != null) {
+            return tradeRepository.findById(tradeId);
+        }
+        return tradeRepository.findFirstBySymbolAndStatusOrderByEntryTimeDesc(DEFAULT_SYMBOL, "ACTIVE");
+    }
+
     private String resolveSignalSymbol(Signal signal) {
         if (signal.getSymbol() == null || signal.getSymbol().isBlank()) {
             return DEFAULT_SYMBOL;
@@ -1046,12 +1117,15 @@ public class ShadowExecutionEngine {
             }
 
             Trade trade = persisted.get();
+            double initialRisk = trade.getInitialRiskPoints() != null
+                ? trade.getInitialRiskPoints().doubleValue()
+                : Math.abs(trade.getEntryPrice().doubleValue() - trade.getStopLoss().doubleValue());
             ActiveTradeExecution activeTrade = new ActiveTradeExecution(
                 normalizeDirection(trade.getDirection()),
                 trade.getEntryPrice().doubleValue(),
                 trade.getStopLoss().doubleValue(),
                 trade.getTargetPrice().doubleValue(),
-                Math.abs(trade.getEntryPrice().doubleValue() - trade.getStopLoss().doubleValue()),
+                initialRisk,
                 Boolean.TRUE.equals(trade.getTp1Hit()),
                 Boolean.TRUE.equals(trade.getRunnerActive()),
                 false,
@@ -1122,7 +1196,11 @@ public class ShadowExecutionEngine {
         double pnlPoints = "SHORT".equalsIgnoreCase(trade.direction())
             ? trade.entryPrice() - price
             : price - trade.entryPrice();
-        return pnlPoints * trade.unitsForLots(lots) * trade.pointValue();
+        // NIFTY index futures P&L: points x lots x lotSize x pointValue.
+        return pnlPoints
+            * lots
+            * config.getInstrument().getLotSize()
+            * config.getInstrument().getPointValue();
     }
 
     public Map<String, Integer> getTopRejectReasons() {

@@ -73,7 +73,7 @@ public class RiskPilotProperties {
     public static class Instrument {
         private String symbol = "NIFTY";
         private int lotSize = 75;
-        private double pointValue = 1.0;
+        private double pointValue = 50.0;
         // NIFTY weekly expiry day. As of the SEBI single-weekly-expiry
         // framework (effective 2025-09 onwards) NSE settles NIFTY weekly
         // options on Tuesday. Override with INSTRUMENT_EXPIRY_DAY_OF_WEEK

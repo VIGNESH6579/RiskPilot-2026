@@ -47,10 +47,12 @@ public class RiskEngine {
         double unrealizedPnl = activeTrade == null || currentPrice == null
             ? 0.0
             : activeTrade.markToMarketPnl(currentPrice);
+        double realizedEquity = properties.getAccount().getInitialCapital() + realizedPnl;
         double equity = properties.getAccount().getInitialCapital() + realizedPnl + unrealizedPnl;
         EquitySnapshot snapshot = new EquitySnapshot(
             properties.getAccount().getInitialCapital(),
             equity,
+            realizedEquity,
             realizedPnl,
             unrealizedPnl,
             realizedPnl <= -(properties.getAccount().getInitialCapital() * properties.getAccount().getDailyLossLimitPct() / 100.0),
@@ -82,6 +84,7 @@ public class RiskEngine {
     public record EquitySnapshot(
         double initialCapital,
         double currentEquity,
+        double realisedEquity,
         double realizedPnlInr,
         double unrealizedPnlInr,
         boolean dailyLossLimitBreached,
