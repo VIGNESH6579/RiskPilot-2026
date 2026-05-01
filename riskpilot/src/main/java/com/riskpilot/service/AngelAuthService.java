@@ -51,8 +51,8 @@ public class AngelAuthService {
     private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectProvider<AngelTickStreamClient> tickStreamClientProvider;
     private final MarketSessionService marketSessionService;
-    private String currentJwtToken;
-    private String currentFeedToken;
+    private volatile String currentJwtToken;
+    private volatile String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
     private volatile String cachedPublicIp = null;
     private volatile long publicIpCachedAt = 0L;

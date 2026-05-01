@@ -186,8 +186,20 @@
         <div id="trades" class="value">0</div>
       </div>
       <div class="card">
+        <div class="label">Regime</div>
+        <div id="regime" class="value small">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Today P&L (R)</div>
+        <div id="todayPnl" class="value">0.0</div>
+      </div>
+      <div class="card">
         <div class="label">Last Reject</div>
         <div id="reject" class="value small muted">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Operational Status</div>
+        <div id="operationalStatus" class="value small">--</div>
       </div>
     </div>
 
@@ -210,11 +222,12 @@
             <th>MAE</th>
             <th>TP1</th>
             <th>Runner</th>
+            <th>R</th>
             <th>Exit</th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="11" class="empty">Waiting for live trade activity...</td></tr>
+          <tr><td colspan="12" class="empty">Waiting for live trade activity...</td></tr>
         </tbody>
       </table>
     </div>
@@ -237,7 +250,10 @@
     const sessionEl = document.getElementById("session");
     const feedEl = document.getElementById("feed");
     const tradesEl = document.getElementById("trades");
+    const regimeEl = document.getElementById("regime");
+    const todayPnlEl = document.getElementById("todayPnl");
     const rejectEl = document.getElementById("reject");
+    const operationalStatusEl = document.getElementById("operationalStatus");
     const activeTradePanel = document.getElementById("activeTradePanel");
     const activeTradeBody = document.getElementById("activeTradeBody");
 
@@ -277,11 +293,20 @@
       tradesEl.textContent = String(state.tradesTaken ?? 0);
       rejectEl.textContent = state.lastRejectReason || "--";
       rejectEl.className = "value small " + (state.lastRejectReason && state.lastRejectReason !== "ALLOW" ? "warn" : "muted");
+
+      const operationalStatus = state.operationalStatus || "ACTIVE";
+      operationalStatusEl.textContent = operationalStatus;
+      operationalStatusEl.className = "value small " + (operationalStatus === "ACTIVE" ? "good" : "bad");
+
+      regimeEl.textContent = state.regime || "--";
+      const todayPnl = state.dailyLossR ?? 0;
+      todayPnlEl.textContent = formatNum(todayPnl);
+      todayPnlEl.className = "value " + (todayPnl >= 0 ? "good" : "bad");
     }
 
     function renderTrades() {
       if (!Array.isArray(tradeRows) || tradeRows.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="11" class="empty">Waiting for live trade activity...</td></tr>';
+        rowsEl.innerHTML = '<tr><td colspan="12" class="empty">Waiting for live trade activity...</td></tr>';
         return;
       }
 
@@ -290,6 +315,7 @@
         const slipClass = Math.abs(row.slippage || 0) > 1 ? "bad" : "good";
         const tp1 = row.tp1Hit ? "Yes" : "No";
         const runner = row.runnerCaptured ? "Yes" : "No";
+        const rClass = (row.realizedR || 0) > 0 ? "good" : "bad";
         return `
           <tr>
             <td>${row.signalTime || "--"}</td>
@@ -302,6 +328,7 @@
             <td>${formatNum(row.mae)}</td>
             <td>${tp1}</td>
             <td>${runner}</td>
+            <td class="${rClass}">${formatNum(row.realizedR)}</td>
             <td>${row.exitReason || "--"}</td>
           </tr>
         `;
@@ -387,6 +414,10 @@
         expiryEl.textContent = health.expiryDate || health.expiry || "--";
         sourceEl.textContent = health.priceSource || health.source || health.optionChainSource || "--";
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
+        if (health.priceSource === "STALE" || health.feedBlocked) {
+          spotTagEl.textContent = "(STALE)";
+          spotTagEl.className = "small bad";
+        }
         applySessionState(state);
         renderActiveTrade(health.activeTrade);
 
@@ -402,6 +433,7 @@
             mae: row.mae,
             tp1Hit: row.tp1Hit,
             runnerCaptured: row.runnerCaptured,
+            realizedR: row.realizedR,
             exitReason: row.exitReason
           }));
           renderTrades();
@@ -409,6 +441,8 @@
       } catch (error) {
         console.error("Dashboard refresh failed", error);
         setStatus("API unavailable", "bad");
+        spotTagEl.textContent = "(API DOWN)";
+        spotTagEl.className = "small bad";
       }
     }
 

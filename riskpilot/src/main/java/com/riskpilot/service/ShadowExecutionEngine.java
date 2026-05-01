@@ -22,6 +22,7 @@ import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradeLog;
 import com.riskpilot.model.TradeView;
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.repository.TradeLogRepository;
 import com.riskpilot.repository.TradeRepository;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -74,6 +75,7 @@ public class ShadowExecutionEngine {
     private final StrictValidationService strictValidationService;
     private final NtfyNotificationService ntfyNotificationService;
     private final TradeRepository tradeRepository;
+    private final TradeLogRepository tradeLogRepository;
     private final MarketSessionService marketSessionService;
     private final PositionSizer positionSizer;
     private final ExecutionSimulator executionSimulator;
@@ -450,7 +452,7 @@ public class ShadowExecutionEngine {
             );
             return;
         }
-        double pnlInr = pnlInr(pendingExit.trade(), fill.actualPrice(), pendingExit.trade().remainingQuantity());
+        double pnlInr = futuresPnlInr(pendingExit.trade(), fill.actualPrice(), pendingExit.trade().remainingQuantity());
         TradeExit exit = new TradeExit(true, pnlInr, pendingExit.reason(), fill.actualPrice(), pendingExit.exitType());
         closeTrade(pendingExit.trade(), exit, tick, fill);
     }
@@ -603,6 +605,9 @@ public class ShadowExecutionEngine {
     }
 
     private void closeTrade(ActiveTradeExecution trade, TradeExit exit, MarketTick exitTick, ExecutionSimulator.SimulatedFill fill) {
+        if (killSwitchEngine.isKillSwitchTriggered()) {
+            log.error("Kill switch is active - trade close proceeding with caution");
+        }
         TradingSessionSnapshot state = stateManager.getSnapshot();
         double riskInr = Math.max(1.0, trade.initialRiskPoints() * trade.quantity() * trade.lotSize() * trade.pointValue());
         double finalRealizedPnL = trade.realizedPnL() + exit.pnlInr();
@@ -822,7 +827,7 @@ public class ShadowExecutionEngine {
     }
 
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason, String exitType) {
-        return new TradeExit(true, pnlInr(trade, price, trade.remainingQuantity()), reason, price, exitType);
+        return new TradeExit(true, futuresPnlInr(trade, price, trade.remainingQuantity()), reason, price, exitType);
     }
 
     private double currentOrRange(TradingSessionSnapshot state) {
@@ -842,6 +847,9 @@ public class ShadowExecutionEngine {
     }
 
     private RegimeConfidenceEngine.RegimeScore evaluateRegimeConfidence(TradingSessionSnapshot snapshot, List<Candle> history) {
+        if (!isValidOr(snapshot.orHigh(), snapshot.orLow())) {
+            return null;
+        }
         if (history.size() < 6) {
             return null;
         }
@@ -852,7 +860,6 @@ public class ShadowExecutionEngine {
         return regimeConfidenceEngine.evaluate(snapshot, confidenceCandles);
     }
 
-    @Transactional
     private TradeLog finalizeTradeTransaction(
         ActiveTradeExecution trade,
         TradeExit exit,
@@ -915,7 +922,6 @@ public class ShadowExecutionEngine {
         return !Double.isInfinite(value) && !Double.isNaN(value);
     }
 
-    @Transactional
     private void persistOpenedTrade(
         Signal signal,
         ActiveTradeExecution trade,
@@ -923,44 +929,47 @@ public class ShadowExecutionEngine {
         LocalDateTime entryTime,
         ExecutionSimulator.SimulatedFill fill
     ) {
-        try {
-            cancelPersistedActiveTrade("STALE_RECOVERY");
-            Trade persistedTrade = Trade.builder()
-                .symbol(resolveSignalSymbol(signal))
-                .direction(trade.direction())
-                .entryPrice(decimal(trade.entryPrice()))
-                .expectedEntryPrice(decimal(signal.getEntry()))
-                .stopLoss(decimal(trade.stopLoss()))
-                .initialRiskPoints(decimal(trade.initialRiskPoints()))
-                .targetPrice(decimal(trade.tp1Level()))
-                .expectedExitPrice(decimal(trade.tp1Level()))
-                .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
-                .remainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())))
-                .quantity(Math.max(0, trade.quantity()))
-                .remainingQuantity(Math.max(0, trade.remainingQuantity()))
-                .lotSize(trade.lotSize())
-                .pointValue(decimal(trade.pointValue()))
-                .realizedPnL(decimal(trade.realizedPnL()))
-                .unrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP))
-                .maxFavorableExcursion(decimal(trade.mfe()))
-                .maxAdverseExcursion(decimal(trade.mae()))
-                .tp1Hit(trade.tp1Hit())
-                .runnerActive(trade.runnerActive())
-                .tailHalfLocked(trade.tailHalfLocked())
-                .trailingStopLoss(decimal(trade.trailingSL()))
-                .entryLatencyMs(fill.latencyMs())
-                .entrySlippage(decimal(calculateEntrySlippage(trade.direction(), signal.getEntry(), trade.entryPrice())))
-                .status("ACTIVE")
-                .exitReason("OPEN")
-                .exitType("REAL")
-                .signalTime(signalTime)
-                .entryTime(entryTime)
-                .build();
-            persistedTrade = tradeRepository.save(persistedTrade);
-            activeTradeId = persistedTrade.getId();
-        } catch (Exception e) {
-            log.warn("Unable to persist opened shadow trade: {}", e.getMessage());
-        }
+        transactionTemplate.execute(status -> {
+            try {
+                cancelPersistedActiveTrade("STALE_RECOVERY");
+                Trade persistedTrade = Trade.builder()
+                    .symbol(resolveSignalSymbol(signal))
+                    .direction(trade.direction())
+                    .entryPrice(decimal(trade.entryPrice()))
+                    .expectedEntryPrice(decimal(signal.getEntry()))
+                    .stopLoss(decimal(trade.stopLoss()))
+                    .initialRiskPoints(decimal(trade.initialRiskPoints()))
+                    .targetPrice(decimal(trade.tp1Level()))
+                    .expectedExitPrice(decimal(trade.tp1Level()))
+                    .positionSize(BigDecimal.valueOf(Math.max(0, trade.quantity())))
+                    .remainingSize(BigDecimal.valueOf(Math.max(0, trade.remainingQuantity())))
+                    .quantity(Math.max(0, trade.quantity()))
+                    .remainingQuantity(Math.max(0, trade.remainingQuantity()))
+                    .lotSize(trade.lotSize())
+                    .pointValue(decimal(trade.pointValue()))
+                    .realizedPnL(decimal(trade.realizedPnL()))
+                    .unrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP))
+                    .maxFavorableExcursion(decimal(trade.mfe()))
+                    .maxAdverseExcursion(decimal(trade.mae()))
+                    .tp1Hit(trade.tp1Hit())
+                    .runnerActive(trade.runnerActive())
+                    .tailHalfLocked(trade.tailHalfLocked())
+                    .trailingStopLoss(decimal(trade.trailingSL()))
+                    .entryLatencyMs(fill.latencyMs())
+                    .entrySlippage(decimal(calculateEntrySlippage(trade.direction(), signal.getEntry(), trade.entryPrice())))
+                    .status("ACTIVE")
+                    .exitReason("OPEN")
+                    .exitType("REAL")
+                    .signalTime(signalTime)
+                    .entryTime(entryTime)
+                    .build();
+                persistedTrade = tradeRepository.save(persistedTrade);
+                activeTradeId = persistedTrade.getId();
+            } catch (Exception e) {
+                log.warn("Unable to persist opened shadow trade: {}", e.getMessage());
+            }
+            return null;
+        });
     }
 
     private void syncPersistedActiveTrade(ActiveTradeExecution trade, double currentPrice) {
@@ -1157,6 +1166,15 @@ public class ShadowExecutionEngine {
             activeExecutionTime = trade.getEntryTime();
             activeExpectedEntry = trade.getExpectedEntryPrice() != null ? trade.getExpectedEntryPrice().doubleValue() : trade.getEntryPrice().doubleValue();
             activeEntryLatencyMs = trade.getEntryLatencyMs() == null ? 0L : trade.getEntryLatencyMs();
+
+            double todayR = tradeLogRepository
+                .findTop200ByGateDecisionOrderBySignalTimeDesc("ALLOW")
+                .stream()
+                .filter(log -> log.getTradingDay() != null &&
+                    log.getTradingDay().equals(LocalDate.now(marketSessionService.zoneId())))
+                .mapToDouble(log -> log.getRealizedR() != null ? log.getRealizedR() : 0.0)
+                .sum();
+
             stateManager.update(current -> new TradingSessionSnapshot(
                 marketSessionService.isTradingSessionActive(marketSessionService.now()),
                 current.regime(),
@@ -1168,7 +1186,7 @@ public class ShadowExecutionEngine {
                 current.heartbeatAlive(),
                 current.orHigh(),
                 current.orLow(),
-                current.cumulativeDailyLossR(),
+                todayR,
                 activeTrade,
                 "STATE_RESTORED"
             ));
@@ -1204,7 +1222,18 @@ public class ShadowExecutionEngine {
         return Math.max(1L, config.getInfra().getHeartbeat().getMaxSilenceMs());
     }
 
-    private double pnlInr(ActiveTradeExecution trade, double price, int lots) {
+    /**
+     * Calculate futures P&L in INR for NIFTY index options.
+     * WARNING: This method calculates P&L for index futures, not options.
+     * For options P&L calculation, use the appropriate options pricing model.
+     * Formula: points x lots x lotSize x pointValue.
+     *
+     * @param trade the active trade execution
+     * @param price current market price
+     * @param lots number of lots
+     * @return P&L in INR
+     */
+    private double futuresPnlInr(ActiveTradeExecution trade, double price, int lots) {
         double pnlPoints = "SHORT".equalsIgnoreCase(trade.direction())
             ? trade.entryPrice() - price
             : price - trade.entryPrice();

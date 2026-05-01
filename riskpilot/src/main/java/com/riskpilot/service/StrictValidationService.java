@@ -245,6 +245,9 @@ public class StrictValidationService {
             tick.rawExchangeTime(),
             !marketOpen
         );
+        log.info("TICK_ACCEPTED seq={} price={} afterHours={} allowExecution={}",
+            acceptedTick.sequenceId(), acceptedTick.price(),
+            acceptedTick.afterHours(), marketOpen);
         return new ValidationResult(true, marketOpen, acceptedTick);
     }
 

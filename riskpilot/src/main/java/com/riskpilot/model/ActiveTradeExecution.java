@@ -32,7 +32,7 @@ public record ActiveTradeExecution(
             return trade;
         }
 
-        int tp1Lots = trade.quantity() >= 2 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 0;
+        int tp1Lots = trade.quantity() >= 5 ? Math.max(1, (int) Math.round(trade.quantity() * 0.20)) : 0;
         int remainingLots = Math.max(0, trade.quantity() - tp1Lots);
         double pnlInr = pnlPoints(trade, currentPrice) * tp1Lots * trade.lotSize() * trade.pointValue();
 

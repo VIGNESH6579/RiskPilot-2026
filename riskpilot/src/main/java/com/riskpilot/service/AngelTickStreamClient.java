@@ -203,6 +203,8 @@ public class AngelTickStreamClient {
         } catch (Exception e) {
             int rejected = marketDataStateService.markRejectedTick(e.getMessage(), tick.transport());
             candleAggregator.markUnstable();
+            log.error("TICK_REJECTED reason={} price={} seq={}",
+                e.getMessage(), tick.price(), tick.sequenceId());
             if (rejected >= properties.getInfra().getFeed().getMaxMissingTicks()) {
                 log.error("SYSTEM_WARNING_CONSECUTIVE_REJECTIONS count={} lastReason={}", rejected, e.getMessage());
             }
