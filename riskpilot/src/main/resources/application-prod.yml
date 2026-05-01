@@ -28,7 +28,7 @@ riskpilot:
   instrument:
     symbol: "NIFTY"
     lot-size: 75
-    point-value: 1.0
+    point-value: 50.0
   account:
     initial-capital: 500000
     risk-per-trade-pct: 1.0

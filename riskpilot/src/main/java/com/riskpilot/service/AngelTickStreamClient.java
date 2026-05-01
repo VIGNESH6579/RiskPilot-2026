@@ -184,7 +184,7 @@ public class AngelTickStreamClient {
                 );
             }
             shadowExecutionEngine.evaluateTick(validationResult);
-            log.info(
+            log.debug(
                 "INGESTION_ACCEPTED mode={} marketOpen={} allowExecution={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                 properties.getMode(),
                 marketSessionService.isMarketOpen(),
@@ -240,7 +240,7 @@ public class AngelTickStreamClient {
             Instant receivedAt = Instant.now();
             double price = rawLtp / 100.0;
             long computedAgeMs = Math.max(0L, receivedAt.toEpochMilli() - exchangeFeedEpochMs);
-            log.info(
+            log.debug(
                 "Angel WS tick token={} seq={} price={} rawExchangeTime={} normalizedExchangeTime={} exchangeTs={} receiveTs={} ageMs={} rawPacket={}",
                 token,
                 sequenceNumber,

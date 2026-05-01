@@ -208,7 +208,7 @@ public class StrictValidationService {
         }
 
         if (!marketOpen) {
-            log.info(
+            log.debug(
                 "AFTER_HOURS_TICK seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={}",
                 tick.sequenceId(),
                 tick.price(),
@@ -218,7 +218,7 @@ public class StrictValidationService {
                 ageMs
             );
         } else {
-            log.info(
+            log.debug(
                 "LIVE_VALIDATION_PASSED seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} allowExecution={}",
                 tick.sequenceId(),
                 tick.price(),
