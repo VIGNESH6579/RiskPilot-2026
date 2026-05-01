@@ -33,7 +33,7 @@ public class AngelOneMarketDataService {
     private static final String NIFTY_INDEX_TOKEN = "99926000";
 
     private final AngelAuthService authService;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final DateTimeFormatter[] FEED_TIME_FORMATS = new DateTimeFormatter[] {
@@ -43,6 +43,15 @@ public class AngelOneMarketDataService {
 
     public AngelOneMarketDataService(AngelAuthService authService) {
         this.authService = authService;
+    }
+
+    private static RestTemplate buildRestTemplate() {
+        var factory =
+            new org.springframework.http.client
+                .SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
     }
 
     public Optional<Double> getNiftyLtp() {

@@ -32,6 +32,8 @@ riskpilot:
     initial-capital: 500000
     risk-per-trade-pct: 1.0
     daily-loss-limit-pct: 2.0
+    size-reduction-after-losses: 2
+    reduced-risk-factor: 0.5
   market:
     open: "09:15"
     close: "15:30"

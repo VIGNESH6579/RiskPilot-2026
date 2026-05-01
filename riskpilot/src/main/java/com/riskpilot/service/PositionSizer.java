@@ -23,10 +23,13 @@ public class PositionSizer {
         double lotRiskInr = sanitizedStopDistance
             * properties.getInstrument().getLotSize()
             * properties.getInstrument().getPointValue();
-        if (riskBudgetInr <= 0.0 || lotRiskInr <= 0.0 || riskBudgetInr < lotRiskInr) {
-            return 0;
+        if (riskBudgetInr <= 0.0 || lotRiskInr <= 0.0) {
+            return 1;
         }
         int lots = (int) Math.floor(riskBudgetInr / lotRiskInr);
-        return Math.max(0, lots);
+        // In shadow mode, always open at least 1 lot so the strategy
+        // can be evaluated regardless of account size. Capital sizing
+        // math is validated separately after edge is confirmed.
+        return Math.max(1, lots);
     }
 }

@@ -48,16 +48,30 @@ public class AngelAuthService {
     @Value("${ANGEL_CLIENT_MAC:}")
     private String configuredMac;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectProvider<AngelTickStreamClient> tickStreamClientProvider;
+    private final MarketSessionService marketSessionService;
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
     private volatile String cachedPublicIp = null;
     private volatile long publicIpCachedAt = 0L;
 
-    public AngelAuthService(ObjectProvider<AngelTickStreamClient> tickStreamClientProvider) {
+    public AngelAuthService(
+        ObjectProvider<AngelTickStreamClient> tickStreamClientProvider,
+        MarketSessionService marketSessionService
+    ) {
         this.tickStreamClientProvider = tickStreamClientProvider;
+        this.marketSessionService = marketSessionService;
+    }
+
+    private static RestTemplate buildRestTemplate() {
+        var factory =
+            new org.springframework.http.client
+                .SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
     }
 
     @PostConstruct
@@ -156,6 +170,12 @@ public class AngelAuthService {
 
     @Scheduled(cron = "0 0 9 * * MON-FRI", zone = "Asia/Kolkata")
     public void preMarketAuth() {
+        if (!marketSessionService.isTradingDay(
+            java.time.LocalDate.now(
+                marketSessionService.zoneId()))) {
+            log.info("preMarketAuth skipped — NSE holiday or weekend");
+            return;
+        }
         log.info("Pre-market auth starting");
         invalidateSession();
         boolean success = authenticate();

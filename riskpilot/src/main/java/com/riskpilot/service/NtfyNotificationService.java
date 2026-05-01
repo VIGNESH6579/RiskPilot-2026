@@ -23,8 +23,17 @@ public class NtfyNotificationService {
     private static final String BASE_URL = "https://ntfy.sh/";
 
     private final RiskPilotProperties properties;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final AtomicLong lastNotificationEpochMs = new AtomicLong(0L);
+
+    private static RestTemplate buildRestTemplate() {
+        var factory =
+            new org.springframework.http.client
+                .SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
+    }
 
     public void notifyTradeEntry(Signal signal, ActiveTradeExecution trade) {
         String title = "RiskPilot Entry";

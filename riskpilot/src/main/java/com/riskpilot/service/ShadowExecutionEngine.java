@@ -81,7 +81,19 @@ public class ShadowExecutionEngine {
     private final TradingSessionService tradingSessionService;
     private final TransactionTemplate transactionTemplate;
     private final ReentrantLock tradeStateLock = new ReentrantLock();
-    private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService broadcastExecutor =
+        new java.util.concurrent.ThreadPoolExecutor(
+            1, 1,
+            0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>(500),
+            r -> {
+                Thread t = new Thread(r, "riskpilot-broadcast");
+                t.setDaemon(true);
+                return t;
+            },
+            new java.util.concurrent.ThreadPoolExecutor
+                .DiscardOldestPolicy()
+        );
     private final ConcurrentHashMap<String, AtomicInteger> rejectReasonCounts = new ConcurrentHashMap<>();
     private final AtomicLong signalOpportunityCount = new AtomicLong();
     private final AtomicLong rejectedSignalCount = new AtomicLong();

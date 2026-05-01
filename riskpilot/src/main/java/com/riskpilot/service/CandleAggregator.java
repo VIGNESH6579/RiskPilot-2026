@@ -183,6 +183,10 @@ public class CandleAggregator {
         }
 
         if (candleToPublish != null) {
+            candleRecordRepository.save(CandleRecord.fromCandle(
+                properties.getInstrument().getSymbol(),
+                candleToPublish
+            ));
             publisher.publishEvent(new CandleClosedEvent(candleToPublish));
         }
     }
@@ -197,7 +201,8 @@ public class CandleAggregator {
         if (sessionBuffer.size() > 50) {
             sessionBuffer.remove(0);
         }
-        candleRecordRepository.save(CandleRecord.fromCandle(properties.getInstrument().getSymbol(), copy));
+        // DB persistence happens outside the synchronized block
+        // in the caller to avoid blocking tick processing.
         return copy;
     }
 
@@ -212,6 +217,10 @@ public class CandleAggregator {
         }
 
         if (candleToPublish != null) {
+            candleRecordRepository.save(CandleRecord.fromCandle(
+                properties.getInstrument().getSymbol(),
+                candleToPublish
+            ));
             publisher.publishEvent(new CandleClosedEvent(candleToPublish));
         }
     }
