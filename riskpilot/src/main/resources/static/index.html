@@ -357,12 +357,21 @@
         spotMetaEl.textContent = "";
       } else if (lastClose) {
         spotEl.textContent = formatNum(health.lastPrice);
-        spotTagEl.textContent = "(last close)";
-        spotTagEl.className = "small muted";
-        const at = health.lastPriceAt
-          ? new Date(health.lastPriceAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+        // FIX: Check if data is stale (> 30 seconds old)
+        const now = new Date();
+        const priceTime = health.lastPriceAt ? new Date(health.lastPriceAt) : null;
+        const ageSeconds = priceTime ? Math.floor((now - priceTime) / 1000) : null;
+        const isStale = ageSeconds && ageSeconds > 30;
+        
+        spotTagEl.textContent = isStale ? "(STALE)" : "(last close)";
+        spotTagEl.className = isStale ? "small bad" : "small muted";
+        
+        // FIX: Use 24-hour format for consistency with top clock
+        const at = priceTime
+          ? priceTime.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })
           : null;
-        spotMetaEl.textContent = at ? "as of " + at : (health.marketStatus === "CLOSED" ? "Market closed" : "");
+        const ageText = isStale ? ` (${ageSeconds}s old)` : "";
+        spotMetaEl.textContent = at ? "as of " + at + ageText : (health.marketStatus === "CLOSED" ? "Market closed" : "");
       } else {
         spotEl.textContent = "--";
         spotTagEl.textContent = health.marketStatus === "CLOSED" ? "(market closed)" : "";
