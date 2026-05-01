@@ -1012,7 +1012,6 @@ public class ShadowExecutionEngine {
         });
     }
 
-    @Transactional
     private void finalizePersistedTrade(
         ActiveTradeExecution trade,
         TradeExit exit,
@@ -1022,37 +1021,40 @@ public class ShadowExecutionEngine {
         double exitSlippage,
         String effectiveExitType
     ) {
-        try {
-            Optional<Trade> persistedTrade = findPersistedActiveTrade();
-            if (persistedTrade.isEmpty()) {
-                return;
-            }
+        transactionTemplate.execute(status -> {
+            try {
+                Optional<Trade> persistedTrade = findPersistedActiveTrade();
+                if (persistedTrade.isEmpty()) {
+                    return null;
+                }
 
-            Trade entity = persistedTrade.get();
-            entity.setStopLoss(decimal(trade.stopLoss()));
-            entity.setTargetPrice(decimal(trade.tp1Level()));
-            entity.setExpectedExitPrice(decimal(expectedExit));
-            entity.setActualExitPrice(decimal(exit.exitPrice()));
-            entity.setExitLatencyMs(exitLatencyMs);
-            entity.setExitSlippage(decimal(exitSlippage));
-            entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-            entity.setRemainingQuantity(0);
-            entity.setRealizedPnL(decimal(finalRealizedPnL));
-            entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-            entity.setMaxFavorableExcursion(decimal(trade.mfe()));
-            entity.setMaxAdverseExcursion(decimal(trade.mae()));
-            entity.setTp1Hit(trade.tp1Hit());
-            entity.setRunnerActive(trade.runnerActive());
-            entity.setTailHalfLocked(trade.tailHalfLocked());
-            entity.setTrailingStopLoss(decimal(trade.trailingSL()));
-            entity.setStatus("CLOSED");
-            entity.setExitReason(exit.reason());
-            entity.setExitType(effectiveExitType);
-            entity.setExitTime(LocalDateTime.now());
-            tradeRepository.save(entity);
-        } catch (Exception e) {
-            log.warn("Unable to finalize shadow trade record: {}", e.getMessage());
-        }
+                Trade entity = persistedTrade.get();
+                entity.setStopLoss(decimal(trade.stopLoss()));
+                entity.setTargetPrice(decimal(trade.tp1Level()));
+                entity.setExpectedExitPrice(decimal(expectedExit));
+                entity.setActualExitPrice(decimal(exit.exitPrice()));
+                entity.setExitLatencyMs(exitLatencyMs);
+                entity.setExitSlippage(decimal(exitSlippage));
+                entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+                entity.setRemainingQuantity(0);
+                entity.setRealizedPnL(decimal(finalRealizedPnL));
+                entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+                entity.setMaxFavorableExcursion(decimal(trade.mfe()));
+                entity.setMaxAdverseExcursion(decimal(trade.mae()));
+                entity.setTp1Hit(trade.tp1Hit());
+                entity.setRunnerActive(trade.runnerActive());
+                entity.setTailHalfLocked(trade.tailHalfLocked());
+                entity.setTrailingStopLoss(decimal(trade.trailingSL()));
+                entity.setStatus("CLOSED");
+                entity.setExitReason(exit.reason());
+                entity.setExitType(effectiveExitType);
+                entity.setExitTime(LocalDateTime.now());
+                tradeRepository.save(entity);
+            } catch (Exception e) {
+                log.warn("Unable to finalize shadow trade record: {}", e.getMessage());
+            }
+            return null;
+        });
     }
 
     private void cancelPersistedActiveTrade(String reason) {
