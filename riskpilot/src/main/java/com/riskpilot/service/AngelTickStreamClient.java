@@ -53,7 +53,12 @@ public class AngelTickStreamClient {
     private final MarketSessionService marketSessionService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
+    private final ScheduledExecutorService executor =
+        Executors.newScheduledThreadPool(2, r -> {
+            Thread t = new Thread(r, "angel-ws-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
     private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
     private final AtomicInteger parseFailureCounter = new AtomicInteger(0);
 

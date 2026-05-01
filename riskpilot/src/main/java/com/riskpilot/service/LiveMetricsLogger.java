@@ -85,6 +85,8 @@ public class LiveMetricsLogger {
             .regime(regime != null ? regime.name() : null)
             .timePhase(timePhase != null ? timePhase.name() : null)
             .feedStable(feedStable)
+            .tradingDay(java.time.LocalDate.now(
+                java.time.ZoneId.of("Asia/Kolkata")))
             .build());
     }
 
@@ -190,6 +192,8 @@ public class LiveMetricsLogger {
             .exitReason(exitReason)
             .exitType(exitType)
             .exitTime(effectiveExitTime)
+            .tradingDay(java.time.LocalDate.now(
+                java.time.ZoneId.of("Asia/Kolkata")))
             .build());
     }
 

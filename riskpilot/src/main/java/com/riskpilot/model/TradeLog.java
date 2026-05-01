@@ -10,6 +10,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -54,4 +55,5 @@ public class TradeLog {
     private String exitReason;
     private String exitType;
     private LocalDateTime exitTime;
+    private LocalDate tradingDay;
 }
