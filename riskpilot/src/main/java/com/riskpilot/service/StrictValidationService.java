@@ -178,7 +178,7 @@ public class StrictValidationService {
 
         if (marketOpen && skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
             log.warn(
-                "LIVE_REJECTED_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} clockSkewMs={} maxClockSkewMs={}",
+                "LIVE_CLOCK_SKEW_ACCEPTED_AS_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} clockSkewMs={} maxClockSkewMs={}",
                 tick.sequenceId(),
                 tick.price(),
                 tick.rawExchangeTime(),
@@ -188,7 +188,9 @@ public class StrictValidationService {
                 skewMs,
                 properties.getInfra().getFeed().getMaxClockSkewMs()
             );
-            throw new MarketDataException("LIVE_TICK_CLOCK_SKEW");
+            // FIX: Accept stale ticks but mark as afterHours to prevent trading
+            // This ensures price is displayed in dashboard even with delayed data
+            marketOpen = false;
         }
 
         if (marketOpen
