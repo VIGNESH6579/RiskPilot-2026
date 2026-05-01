@@ -5,6 +5,7 @@ import com.riskpilot.exception.TradingException;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradingSignal;
 import com.riskpilot.model.TradingSession;
+import com.riskpilot.service.MarketSessionService;
 import com.riskpilot.service.ShadowExecutionEngine;
 import com.riskpilot.service.TradingSessionService;
 import jakarta.validation.Valid;
@@ -32,14 +33,16 @@ public class TradingController {
 
     private final ShadowExecutionEngine shadowExecutionEngine;
     private final TradingSessionService tradingSessionService;
+    private final MarketSessionService marketSessionService;
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getTradingStatus() {
+        boolean marketOpen = marketSessionService.isMarketOpen();
         return ResponseEntity.ok(Map.of(
-            "status", "ACTIVE",
+            "status", marketOpen ? "ACTIVE" : "DORMANT",
             "timestamp", LocalDateTime.now(),
             "engine", "SHADOW_EXECUTION",
-            "message", "RiskPilot trading engine is running"
+            "message", marketOpen ? "RiskPilot trading engine is running" : "Market closed - trading dormant"
         ));
     }
 

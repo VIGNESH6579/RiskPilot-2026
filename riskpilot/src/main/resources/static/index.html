@@ -190,8 +190,9 @@
         <div id="regime" class="value small">--</div>
       </div>
       <div class="card">
-        <div class="label">Today P&L (R)</div>
+        <div class="label">Today P&L</div>
         <div id="todayPnl" class="value">0.0</div>
+        <div id="pnlNote" class="value small muted"></div>
       </div>
       <div class="card">
         <div class="label">Last Reject</div>
@@ -252,6 +253,7 @@
     const tradesEl = document.getElementById("trades");
     const regimeEl = document.getElementById("regime");
     const todayPnlEl = document.getElementById("todayPnl");
+    const pnlNoteEl = document.getElementById("pnlNote");
     const rejectEl = document.getElementById("reject");
     const operationalStatusEl = document.getElementById("operationalStatus");
     const activeTradePanel = document.getElementById("activeTradePanel");
@@ -296,12 +298,27 @@
 
       const operationalStatus = state.operationalStatus || "ACTIVE";
       operationalStatusEl.textContent = operationalStatus;
-      operationalStatusEl.className = "value small " + (operationalStatus === "ACTIVE" ? "good" : "bad");
+      operationalStatusEl.className = "value small " + (operationalStatus === "ACTIVE" ? "good" : operationalStatus === "DORMANT" ? "muted" : "warn");
 
       regimeEl.textContent = state.regime || "--";
       const todayPnl = state.dailyLossR ?? 0;
       todayPnlEl.textContent = formatNum(todayPnl);
       todayPnlEl.className = "value " + (todayPnl >= 0 ? "good" : "bad");
+    }
+
+    function renderPnl(dayPnl, state) {
+      if (!dayPnl || typeof dayPnl !== "object") {
+        pnlNoteEl.textContent = "";
+        return;
+      }
+      const total = Number(dayPnl.totalPnl ?? 0);
+      todayPnlEl.textContent = "INR " + formatNum(total);
+      todayPnlEl.className = "value " + (total >= 0 ? "good" : "bad");
+      pnlNoteEl.textContent = dayPnl.displayNote || "";
+      pnlNoteEl.className = "value small " + (dayPnl.displayNote ? "warn" : "muted");
+      if (state && typeof state.tradesTaken === "number" && dayPnl.totalTrades > state.tradesTaken) {
+        tradesEl.textContent = String(dayPnl.totalTrades);
+      }
     }
 
     function renderTrades() {
@@ -348,30 +365,13 @@
         spotMetaEl.textContent = "";
         return;
       }
-      const live = typeof health.spot === "number" && Number.isFinite(health.spot);
-      const lastClose = typeof health.lastPrice === "number" && Number.isFinite(health.lastPrice);
-      if (live) {
-        spotEl.textContent = formatNum(health.spot);
-        spotTagEl.textContent = "(LIVE)";
-        spotTagEl.className = "small good";
-        spotMetaEl.textContent = "";
-      } else if (lastClose) {
-        spotEl.textContent = formatNum(health.lastPrice);
-        // FIX: Check if data is stale (> 30 seconds old)
-        const now = new Date();
-        const priceTime = health.lastPriceAt ? new Date(health.lastPriceAt) : null;
-        const ageSeconds = priceTime ? Math.floor((now - priceTime) / 1000) : null;
-        const isStale = ageSeconds && ageSeconds > 30;
-        
-        spotTagEl.textContent = isStale ? "(STALE)" : "(last close)";
-        spotTagEl.className = isStale ? "small bad" : "small muted";
-        
-        // FIX: Use 24-hour format for consistency with top clock
-        const at = priceTime
-          ? priceTime.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })
-          : null;
-        const ageText = isStale ? ` (${ageSeconds}s old)` : "";
-        spotMetaEl.textContent = at ? "as of " + at + ageText : (health.marketStatus === "CLOSED" ? "Market closed" : "");
+      const display = health.spotDisplay;
+      if (display && typeof display === "object") {
+        spotEl.textContent = display.displayText || "--";
+        const status = display.status || "STALE";
+        spotTagEl.textContent = "(" + status + ")";
+        spotTagEl.className = "small " + (status === "LIVE" ? "good" : status === "DEGRADED" ? "warn" : "bad");
+        spotMetaEl.textContent = display.staleSeconds > 0 ? "age " + display.staleSeconds + "s" : "";
       } else {
         spotEl.textContent = "--";
         spotTagEl.textContent = health.marketStatus === "CLOSED" ? "(market closed)" : "";
@@ -423,11 +423,12 @@
         expiryEl.textContent = health.expiryDate || health.expiry || "--";
         sourceEl.textContent = health.priceSource || health.source || health.optionChainSource || "--";
         sourceEl.className = "value small " + (health.healthy ? "good" : "warn");
-        if (health.priceSource === "STALE" || health.feedBlocked) {
-          spotTagEl.textContent = "(STALE)";
-          spotTagEl.className = "small bad";
-        }
         applySessionState(state);
+        renderPnl(health.dayPnl, state);
+        if (health.streamStatusText) {
+          const kind = health.streamStatus === "LIVE" ? "ok" : health.streamStatus === "DISCONNECTED" || health.streamStatus === "STALE" ? "bad" : "";
+          setStatus(health.streamStatusText, kind);
+        }
         renderActiveTrade(health.activeTrade);
 
         if (Array.isArray(history) && history.length > 0) {
@@ -459,7 +460,7 @@
       const protocol = location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(`${protocol}://${location.host}/ws`);
 
-      socket.onopen = () => setStatus("Live stream connected", "ok");
+      socket.onopen = () => setStatus("Dashboard channel connected", "ok");
 
       socket.onmessage = (event) => {
         try {

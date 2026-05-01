@@ -8,6 +8,7 @@ import com.riskpilot.model.MarketTick;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -16,6 +17,7 @@ import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
@@ -63,6 +65,10 @@ public class AngelTickStreamClient {
     private final AtomicInteger parseFailureCounter = new AtomicInteger(0);
 
     private volatile WebSocket webSocket;
+    private volatile boolean tcpConnected = false;
+    private volatile Instant lastDataTime = Instant.EPOCH;
+    private volatile String streamStatus = "DISCONNECTED";
+    private volatile String streamStatusText = "Stream disconnected";
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
@@ -88,7 +94,13 @@ public class AngelTickStreamClient {
     public void init() {
         if (!angelAuthService.hasCredentials()) {
             marketDataStateService.markFeedFailure("ANGEL_CREDENTIALS_MISSING", MarketDataTransport.WEBSOCKET);
-            throw new IllegalStateException("ANGEL_CREDENTIALS_MISSING");
+            streamStatus = "DISCONNECTED";
+            streamStatusText = "Stream disconnected - Angel credentials missing";
+            if (properties.getInfra().getFeed().isStartupFailFast()) {
+                throw new IllegalStateException("ANGEL_CREDENTIALS_MISSING");
+            }
+            log.warn("Angel credentials missing; startup continues because startup-fail-fast=false");
+            return;
         }
 
         if (properties.getInfra().getFeed().getTransport() != MarketDataTransport.WEBSOCKET) {
@@ -115,7 +127,8 @@ public class AngelTickStreamClient {
         executor.execute(() -> {
             try {
                 String feedToken = requireFeedToken();
-                marketDataStateService.markConnected(MarketDataTransport.WEBSOCKET);
+                streamStatus = "CONNECTING";
+                streamStatusText = "Stream connecting...";
                 log.info("Connecting Angel websocket to {}", SMART_STREAM_URI);
                 httpClient.newWebSocketBuilder()
                     .header("x-client-code", angelAuthService.getClientCode())
@@ -123,11 +136,17 @@ public class AngelTickStreamClient {
                     .header("x-client-lib", "JAVA")
                     .buildAsync(URI.create(SMART_STREAM_URI), new AngelWebSocketListener())
                     .exceptionally(error -> {
+                        tcpConnected = false;
+                        streamStatus = "DISCONNECTED";
+                        streamStatusText = "Stream disconnected";
                         marketDataStateService.markFeedFailure(error.getMessage(), MarketDataTransport.WEBSOCKET);
                         scheduleReconnect();
                         return null;
                     });
             } catch (Exception e) {
+                tcpConnected = false;
+                streamStatus = "DISCONNECTED";
+                streamStatusText = "Stream disconnected";
                 marketDataStateService.markFeedFailure(e.getMessage(), MarketDataTransport.WEBSOCKET);
                 scheduleReconnect();
             }
@@ -137,6 +156,9 @@ public class AngelTickStreamClient {
     public void disconnect() {
         WebSocket current = this.webSocket;
         this.webSocket = null;
+        tcpConnected = false;
+        streamStatus = "DISCONNECTED";
+        streamStatusText = "Stream disconnected";
         if (current != null) {
             try {
                 current.sendClose(WebSocket.NORMAL_CLOSURE, "reconnect");
@@ -161,6 +183,7 @@ public class AngelTickStreamClient {
 
     private void ingestTick(MarketTick tick) {
         try {
+            lastDataTime = Instant.now();
             log.debug(
                 "INGESTION_RECEIVED mode={} marketOpen={} transport={} seq={} price={} exchangeTs={} receiveTs={} ageMs={}",
                 properties.getMode(),
@@ -176,6 +199,10 @@ public class AngelTickStreamClient {
             MarketTick acceptedTick = validationResult.tick();
             marketDataStateService.recordAcceptedTick(acceptedTick);
             marketDataStateService.markReady(acceptedTick.transport());
+            if (!"LIVE".equals(streamStatus)) {
+                streamStatus = "LIVE";
+                streamStatusText = "Live stream connected";
+            }
             heartbeatMonitor.registerFreshTick(acceptedTick);
             candleAggregator.processTick(acceptedTick);
             if (!validationResult.allowExecution()) {
@@ -335,10 +362,58 @@ public class AngelTickStreamClient {
         }, 5L, TimeUnit.SECONDS);
     }
 
+    @Scheduled(fixedRate = 5000)
+    public void checkStreamHealth() {
+        WebSocket current = this.webSocket;
+        if (!tcpConnected || current == null) {
+            streamStatus = "DISCONNECTED";
+            streamStatusText = "Stream disconnected";
+            marketDataStateService.markDisconnected("ANGEL_WS_DISCONNECTED", MarketDataTransport.WEBSOCKET);
+            return;
+        }
+
+        long dataAgeSeconds = Duration.between(lastDataTime, Instant.now()).getSeconds();
+        if (lastDataTime.equals(Instant.EPOCH)) {
+            streamStatus = "CONNECTING";
+            streamStatusText = "Stream connecting...";
+            return;
+        }
+        if (dataAgeSeconds > 15) {
+            streamStatus = "STALE";
+            streamStatusText = "Stream stale (" + dataAgeSeconds + "s no data)";
+            marketDataStateService.markFeedFailure("DATA_FLOW_STALE", MarketDataTransport.WEBSOCKET);
+        } else if (dataAgeSeconds > 5) {
+            streamStatus = "DELAYED";
+            streamStatusText = "Stream delayed (" + dataAgeSeconds + "s)";
+        } else if (!"LIVE".equals(streamStatus)) {
+            streamStatus = "LIVE";
+            streamStatusText = "Live stream connected";
+        }
+    }
+
+    public String streamStatus() {
+        return streamStatus;
+    }
+
+    public String streamStatusText() {
+        return streamStatusText;
+    }
+
+    public boolean tcpConnected() {
+        return tcpConnected;
+    }
+
+    public Instant lastDataTime() {
+        return lastDataTime;
+    }
+
     private final class AngelWebSocketListener implements WebSocket.Listener {
         @Override
         public void onOpen(WebSocket webSocket) {
             AngelTickStreamClient.this.webSocket = webSocket;
+            tcpConnected = true;
+            streamStatus = "CONNECTING";
+            streamStatusText = "Stream connecting...";
             marketDataStateService.markConnected(MarketDataTransport.WEBSOCKET);
             log.info("Angel websocket connected");
             subscribeNifty();
@@ -361,6 +436,9 @@ public class AngelTickStreamClient {
 
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            tcpConnected = false;
+            streamStatus = "DISCONNECTED";
+            streamStatusText = "Stream disconnected";
             marketDataStateService.markDisconnected(reason == null || reason.isBlank() ? "ANGEL_WS_CLOSED" : reason, MarketDataTransport.WEBSOCKET);
             scheduleReconnect();
             return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
@@ -368,6 +446,9 @@ public class AngelTickStreamClient {
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
+            tcpConnected = false;
+            streamStatus = "DISCONNECTED";
+            streamStatusText = "Stream disconnected";
             marketDataStateService.markFeedFailure(error.getMessage(), MarketDataTransport.WEBSOCKET);
             scheduleReconnect();
         }

@@ -3,15 +3,19 @@ package com.riskpilot.controller;
 import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.model.ActiveTradeExecution;
 import com.riskpilot.model.MarketTick;
+import com.riskpilot.model.PnlDTO;
+import com.riskpilot.model.SpotPriceDTO;
 import com.riskpilot.model.TradeLog;
 import com.riskpilot.model.TradeView;
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.repository.TradeLogRepository;
 import com.riskpilot.service.MarketDataStateService;
 import com.riskpilot.service.MarketSessionService;
+import com.riskpilot.service.PnlService;
 import com.riskpilot.service.RiskEngine;
 import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
+import com.riskpilot.service.AngelTickStreamClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -44,6 +49,8 @@ public class DataController {
     private final RiskPilotProperties riskPilotProperties;
     private final RiskEngine riskEngine;
     private final SessionStateManager sessionStateManager;
+    private final PnlService pnlService;
+    private final AngelTickStreamClient angelTickStreamClient;
 
     @GetMapping("/health")
     public Map<String, Object> health() {
@@ -62,12 +69,18 @@ public class DataController {
         // display the last close when the market is closed or the feed is
         // stale, even though `spot` itself is only set when LIVE.
         Double lastPrice = (lastTick != null && lastTick.price() > 0.0) ? lastTick.price() : null;
+        SpotPriceDTO spotDisplay = buildSpotDisplay(lastPrice, snapshot.lastAcceptedAt());
+        PnlDTO dayPnl = pnlService.calculateDayPnl(
+            riskPilotProperties.getInstrument().getSymbol(),
+            marketSessionService.sessionDate(marketSessionService.now())
+        );
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", snapshot.transport() != null ? snapshot.transport().name() : null);
-        payload.put("price", liveSpot);
-        payload.put("spot", liveSpot);
-        payload.put("lastPrice", lastPrice);
+        payload.put("price", spotDisplay.value());
+        payload.put("spot", spotDisplay.value());
+        payload.put("spotDisplay", spotDisplay);
+        payload.put("lastPrice", spotDisplay.value());
         payload.put("lastPriceAt", snapshot.lastAcceptedAt());
         payload.put("sourceAgeMs", lastTick != null ? lastTick.sourceAgeMs() : null);
         payload.put("lastFreshTickAt", snapshot.lastAcceptedAt());
@@ -77,16 +90,21 @@ public class DataController {
         payload.put("feedBlockReason", snapshot.blockReason());
         payload.put("ready", snapshot.ready());
         payload.put("parseFailureCount", snapshot.parseFailureCount());
-        payload.put("marketStatus", marketOpen ? "OPEN" : "CLOSED");
+        payload.put("marketStatus", marketSessionService.marketStatus());
         payload.put("priceSource", priceSource);
         payload.put("expiryDate", nextExpiryDate());
         payload.put("symbol", riskPilotProperties.getInstrument().getSymbol());
         payload.put("currentEquity", riskEngine.snapshot().currentEquity());
         payload.put("realizedPnlInr", riskEngine.snapshot().realizedPnlInr());
         payload.put("unrealizedPnlInr", riskEngine.snapshot().unrealizedPnlInr());
-        payload.put("activeTrade", buildActiveTradeView(lastPrice));
+        payload.put("dayPnl", dayPnl);
+        payload.put("activeTrade", buildActiveTradeView(spotDisplay.value()));
         payload.put("rejectReasonCounts", shadowExecutionEngine.getTopRejectReasons());
-        payload.put("operationalStatus", shadowExecutionEngine.isOperationallyBlocked() ? "OPERATIONALLY_BLOCKED" : "ACTIVE");
+        payload.put("streamStatus", angelTickStreamClient.streamStatus());
+        payload.put("streamStatusText", angelTickStreamClient.streamStatusText());
+        payload.put("tcpConnected", angelTickStreamClient.tcpConnected());
+        payload.put("lastDataTime", angelTickStreamClient.lastDataTime().equals(Instant.EPOCH) ? null : angelTickStreamClient.lastDataTime());
+        payload.put("operationalStatus", resolveOperationStatus(priceSource));
         payload.put("timestamp", Instant.now().toString());
         return payload;
     }
@@ -126,6 +144,45 @@ public class DataController {
         } catch (IllegalArgumentException ex) {
             return DayOfWeek.THURSDAY;
         }
+    }
+
+    private SpotPriceDTO buildSpotDisplay(Double lastPrice, Instant lastAcceptedAt) {
+        if (lastPrice == null || lastAcceptedAt == null) {
+            return new SpotPriceDTO(null, "STALE", 0L, "Awaiting fresh tick");
+        }
+
+        long elapsedSeconds = Math.max(0L, Duration.between(lastAcceptedAt, Instant.now()).getSeconds());
+        if (elapsedSeconds > 60) {
+            return new SpotPriceDTO(
+                null,
+                "STALE",
+                elapsedSeconds,
+                "Stale (" + elapsedSeconds + "s ago) - awaiting fresh tick"
+            );
+        }
+        if (elapsedSeconds > 10) {
+            return new SpotPriceDTO(
+                lastPrice,
+                "DEGRADED",
+                elapsedSeconds,
+                formatPrice(lastPrice) + " (" + elapsedSeconds + "s delayed)"
+            );
+        }
+        return new SpotPriceDTO(lastPrice, "LIVE", 0L, formatPrice(lastPrice));
+    }
+
+    private String resolveOperationStatus(String priceSource) {
+        if ("MARKET_CLOSED".equals(priceSource)) {
+            return "DORMANT";
+        }
+        if ("STALE".equals(priceSource)) {
+            return "DEGRADED";
+        }
+        return shadowExecutionEngine.isOperationallyBlocked() ? "OPERATIONALLY_BLOCKED" : "ACTIVE";
+    }
+
+    private String formatPrice(Double value) {
+        return value == null ? "--" : String.format(Locale.ENGLISH, "%.2f", value);
     }
 
     private Map<String, Object> buildActiveTradeView(Double currentPrice) {

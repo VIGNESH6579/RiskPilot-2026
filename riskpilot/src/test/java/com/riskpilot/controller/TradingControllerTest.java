@@ -5,9 +5,11 @@ import com.riskpilot.engine.KillSwitchEngine;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradingSignal;
 import com.riskpilot.model.TradingSession;
+import com.riskpilot.service.MarketSessionService;
 import com.riskpilot.service.ShadowExecutionEngine;
 import com.riskpilot.service.StrictValidationService;
 import com.riskpilot.service.TradingSessionService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -46,6 +48,15 @@ class TradingControllerTest {
 
     @MockitoBean
     private AdaptiveRegimeEngine adaptiveRegimeEngine;
+
+    @MockitoBean
+    private MarketSessionService marketSessionService;
+
+    @BeforeEach
+    void setUp() {
+        when(marketSessionService.isMarketOpen()).thenReturn(true);
+    }
+
     @Test
     void getTradingStatus_ReturnsOkStatus() throws Exception {
         mockMvc.perform(get("/api/v1/trading/status"))

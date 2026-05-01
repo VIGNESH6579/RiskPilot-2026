@@ -57,6 +57,7 @@ import java.util.concurrent.locks.ReentrantLock;
 @RequiredArgsConstructor
 public class ShadowExecutionEngine {
     private static final String DEFAULT_SYMBOL = "NIFTY";
+    private static final int MIN_REGIME_CANDLES = 7;
 
     private final RiskPilotProperties config;
     private final RiskGateEngine riskGateEngine;
@@ -76,6 +77,7 @@ public class ShadowExecutionEngine {
     private final NtfyNotificationService ntfyNotificationService;
     private final TradeRepository tradeRepository;
     private final TradeLogRepository tradeLogRepository;
+    private final ShadowTradeService shadowTradeService;
     private final MarketSessionService marketSessionService;
     private final PositionSizer positionSizer;
     private final ExecutionSimulator executionSimulator;
@@ -322,7 +324,7 @@ public class ShadowExecutionEngine {
         }
 
         try {
-            MarketTick entryTick = requireLiveTick("ENTRY_TICK_REQUIRED");
+            MarketTick entryTick = waitForFreshLiveTick("ENTRY_TICK_REQUIRED", Duration.ofSeconds(3));
             StrictValidationService.ValidationResult validationResult = strictValidationService.validateFreshTick(entryTick);
             if (!validationResult.allowExecution()) {
                 logReject(state, "MARKET_CLOSED_EXECUTION_BLOCK");
@@ -778,9 +780,10 @@ public class ShadowExecutionEngine {
     private void broadcastCurrentSessionState() {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         RiskEngine.EquitySnapshot equitySnapshot = riskEngine.refresh(state.activeTradeReference(), marketDataStateService.lastAcceptedTick().map(MarketTick::price).orElse(null));
+        boolean marketOpen = marketSessionService.isMarketOpen();
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("sessionActive", state.sessionActive());
-        payload.put("regime", state.regime().name());
+        payload.put("sessionActive", marketOpen && state.sessionActive());
+        payload.put("regime", regimeDisplayText(state));
         payload.put("volatilityQualified", state.volatilityQualified());
         payload.put("timePhase", state.timePhase().name());
         payload.put("tradeActive", state.tradeActive());
@@ -795,7 +798,6 @@ public class ShadowExecutionEngine {
         payload.put("orHigh", isValidNumber(state.orHigh()) ? state.orHigh() : null);
         payload.put("orLow", isValidNumber(state.orLow()) ? state.orLow() : null);
         MarketDataStateService.MarketDataSnapshot marketDataSnapshot = marketDataStateService.snapshot();
-        boolean marketOpen = marketSessionService.isMarketOpen();
         String priceSource = marketDataStateService.resolvePriceSource(marketOpen, config.getInfra().getHeartbeat().getMaxSilenceMs());
         Double liveLastPrice = "LIVE".equals(priceSource) && marketDataSnapshot.lastTick() != null
             ? marketDataSnapshot.lastTick().price()
@@ -806,13 +808,12 @@ public class ShadowExecutionEngine {
         // weekend / NSE holiday.
         payload.put("marketStatus", marketSessionService.marketStatus());
         payload.put("priceSource", priceSource);
-        payload.put("sessionActive", marketOpen && state.sessionActive());
         payload.put("lastPrice", liveLastPrice);
         payload.put("sourceAgeMs", marketDataSnapshot.lastTick() != null ? marketDataSnapshot.lastTick().sourceAgeMs() : null);
         payload.put("feedBlocked", marketDataSnapshot.feedBlocked());
         payload.put("feedBlockReason", marketDataSnapshot.blockReason());
         payload.put("rejectReasonCounts", getTopRejectReasons());
-        payload.put("operationalStatus", isOperationallyBlocked() ? "OPERATIONALLY_BLOCKED" : "ACTIVE");
+        payload.put("operationalStatus", resolveOperationStatus(priceSource));
         RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
         payload.put("regimeFilterScore", regimeMetrics != null ? regimeMetrics.getRegimeScore() : null);
         payload.put("regimeConfidenceScore", lastRegimeConfidenceScore != null ? lastRegimeConfidenceScore.getTotalScore() : null);
@@ -963,7 +964,7 @@ public class ShadowExecutionEngine {
                     .signalTime(signalTime)
                     .entryTime(entryTime)
                     .build();
-                persistedTrade = tradeRepository.save(persistedTrade);
+                persistedTrade = shadowTradeService.saveShadowTrade(persistedTrade);
                 activeTradeId = persistedTrade.getId();
             } catch (Exception e) {
                 log.warn("Unable to persist opened shadow trade: {}", e.getMessage());
@@ -1004,7 +1005,7 @@ public class ShadowExecutionEngine {
                 entity.setStatus("ACTIVE");
                 entity.setExitReason("OPEN");
                 entity.setExitType("REAL");
-                tradeRepository.save(entity);
+                shadowTradeService.saveShadowTrade(entity);
                 activeTradeId = entity.getId();
             } catch (Exception e) {
                 log.warn("Unable to sync active shadow trade: {}", e.getMessage());
@@ -1049,7 +1050,7 @@ public class ShadowExecutionEngine {
                 entity.setExitReason(exit.reason());
                 entity.setExitType(effectiveExitType);
                 entity.setExitTime(LocalDateTime.now());
-                tradeRepository.save(entity);
+                shadowTradeService.saveShadowTrade(entity);
             } catch (Exception e) {
                 log.warn("Unable to finalize shadow trade record: {}", e.getMessage());
             }
@@ -1072,7 +1073,7 @@ public class ShadowExecutionEngine {
             entity.setUnrealizedPnL(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setRemainingSize(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
             entity.setRemainingQuantity(0);
-            tradeRepository.save(entity);
+            shadowTradeService.saveShadowTrade(entity);
         } catch (Exception e) {
             log.warn("Unable to cancel stale active shadow trade: {}", e.getMessage());
         }
@@ -1112,6 +1113,33 @@ public class ShadowExecutionEngine {
 
     private BigDecimal decimal(double value) {
         return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private MarketTick waitForFreshLiveTick(String reason, Duration timeout) {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            Optional<MarketTick> latestTick = marketDataStateService.lastAcceptedTick();
+            if (latestTick.isPresent()) {
+                MarketTick tick = latestTick.get();
+                long tickAgeMs = marketDataStateService.silenceMs(Instant.now());
+                if (!tick.afterHours() && tickAgeMs <= 2000L) {
+                    return tick;
+                }
+            }
+
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new StaleFeedException(reason + " - interrupted while waiting for fresh tick");
+            }
+        }
+
+        long tickAgeMs = marketDataStateService.silenceMs(Instant.now());
+        if (tickAgeMs != Long.MAX_VALUE) {
+            throw new StaleFeedException(reason + " - tick is " + tickAgeMs + "ms stale");
+        }
+        throw new StaleFeedException(reason + " - no fresh tick after " + timeout.toSeconds() + "s wait");
     }
 
     private MarketTick requireLiveTick(String reason) {
@@ -1259,6 +1287,28 @@ public class ShadowExecutionEngine {
             return false;
         }
         return rejectedSignalCount.get() * 100L > opportunities * 90L;
+    }
+
+    private String resolveOperationStatus(String priceSource) {
+        if ("MARKET_CLOSED".equals(priceSource)) {
+            return "DORMANT";
+        }
+        if ("STALE".equals(priceSource)) {
+            return "DEGRADED";
+        }
+        if (isOperationallyBlocked()) {
+            return "OPERATIONALLY_BLOCKED";
+        }
+        return "ACTIVE";
+    }
+
+    private String regimeDisplayText(TradingSessionSnapshot state) {
+        int candleCount = candleAggregator.getValidHistory().size();
+        if (candleCount < MIN_REGIME_CANDLES) {
+            log.info("Regime detection: need {} candles, have {}", MIN_REGIME_CANDLES, candleCount);
+            return "INITIALIZING (" + candleCount + "/" + MIN_REGIME_CANDLES + ")";
+        }
+        return state.regime().name();
     }
 
     private String normalizeDirection(String direction) {

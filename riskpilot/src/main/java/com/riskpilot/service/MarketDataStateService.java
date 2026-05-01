@@ -181,10 +181,13 @@ public class MarketDataStateService {
 
     public String resolvePriceSource(boolean marketOpen, long maxSilenceMs) {
         MarketDataSnapshot current = snapshotRef.get();
+        if (!marketOpen) {
+            return "MARKET_CLOSED";
+        }
         if (current.lastTick() == null) {
             return "STALE";
         }
-        if (current.lastTick().afterHours() || !current.ready() || !marketOpen) {
+        if (current.lastTick().afterHours() || !current.ready()) {
             return "MARKET_CLOSED";
         }
         long ageMs = lastTickAgeMs(Instant.now());

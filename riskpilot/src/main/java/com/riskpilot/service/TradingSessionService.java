@@ -45,6 +45,7 @@ public class TradingSessionService {
     @Transactional
     public TradingSession createNewSession(String symbol) {
         LocalDate today = currentSessionDate();
+        boolean marketOpen = marketSessionService.isMarketOpen();
         TradingSession session = sessionRepository
             .findBySymbolAndSessionDate(symbol, today)
             .orElseGet(() -> sessionRepository.save(TradingSession.builder()
@@ -67,9 +68,9 @@ public class TradingSessionService {
                 .accountEquity(BigDecimal.valueOf(initialCapital()))
                 .maxDrawdown(BigDecimal.ZERO)
                 .maxProfit(BigDecimal.ZERO)
-                .sessionActive(true)
+                .sessionActive(marketOpen)
                 .dayBlockedByFirstTradeFailure(false)
-                .status("ACTIVE")
+                .status(marketOpen ? "ACTIVE" : "DORMANT")
                 .build()));
 
         log.info("Resolved trading session for symbol: {} on date: {}", symbol, today);
@@ -79,7 +80,8 @@ public class TradingSessionService {
     @Transactional
     public void updateRuntimeState(String symbol, TradingSessionSnapshot snapshot, RiskEngine.EquitySnapshot equitySnapshot) {
         TradingSession session = getCurrentSession(symbol);
-        session.setSessionActive(snapshot.sessionActive());
+        boolean marketOpen = marketSessionService.isMarketOpen();
+        session.setSessionActive(marketOpen && snapshot.sessionActive());
         session.setRegime(snapshot.regime().name());
         session.setTradesExecuted(snapshot.tradesTaken());
         session.setTotalPnL(BigDecimal.valueOf(equitySnapshot.realizedPnlInr() + equitySnapshot.unrealizedPnlInr()).setScale(2, RoundingMode.HALF_UP));
@@ -88,7 +90,13 @@ public class TradingSessionService {
         session.setAccountEquity(BigDecimal.valueOf(equitySnapshot.currentEquity()).setScale(2, RoundingMode.HALF_UP));
         session.setOrHigh(snapshot.orHigh() == Double.NEGATIVE_INFINITY ? BigDecimal.ZERO : BigDecimal.valueOf(snapshot.orHigh()).setScale(2, RoundingMode.HALF_UP));
         session.setOrLow(snapshot.orLow() == Double.POSITIVE_INFINITY ? BigDecimal.ZERO : BigDecimal.valueOf(snapshot.orLow()).setScale(2, RoundingMode.HALF_UP));
-        session.setStatus(snapshot.heartbeatAlive() ? "ACTIVE" : "HALTED");
+        if (!marketOpen) {
+            session.setStatus("DORMANT");
+        } else if (!snapshot.heartbeatAlive()) {
+            session.setStatus("HALTED");
+        } else {
+            session.setStatus("ACTIVE");
+        }
         sessionRepository.save(session);
     }
 

@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -22,6 +23,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 @RequiredArgsConstructor
 public class StrictValidationService {
+    private static final Duration TIME_TOLERANCE = Duration.ofMillis(2000L);
+    private static final Duration CLOCK_DRIFT_WARN_THRESHOLD = Duration.ofMillis(500L);
 
     private final RiskPilotProperties properties;
     private final MarketSessionService marketSessionService;
@@ -164,7 +167,7 @@ public class StrictValidationService {
         Instant now = marketSessionService.now();
         boolean marketOpen = marketSessionService.isMarketOpen(now);
         long ageMs = Math.max(0L, now.toEpochMilli() - tick.exchangeTimestamp().toEpochMilli());
-        long skewMs = Math.abs(now.toEpochMilli() - tick.exchangeTimestamp().toEpochMilli());
+        long skewMs = Math.abs(Duration.between(tick.exchangeTimestamp(), now).toMillis());
         log.info(
             "Tick validation seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} marketOpen={}",
             tick.sequenceId(),
@@ -176,7 +179,11 @@ public class StrictValidationService {
             marketOpen
         );
 
-        if (marketOpen && skewMs > properties.getInfra().getFeed().getMaxClockSkewMs()) {
+        if (marketOpen && skewMs > CLOCK_DRIFT_WARN_THRESHOLD.toMillis()) {
+            log.warn("Clock drift detected: {}ms - consider NTP sync", skewMs);
+        }
+
+        if (marketOpen && skewMs > TIME_TOLERANCE.toMillis()) {
             log.warn(
                 "LIVE_CLOCK_SKEW_ACCEPTED_AS_STALE seq={} price={} rawExchangeTime={} parsedExchangeTime={} systemTime={} ageMs={} clockSkewMs={} maxClockSkewMs={}",
                 tick.sequenceId(),
@@ -186,7 +193,7 @@ public class StrictValidationService {
                 marketSessionService.toMarketTime(now),
                 ageMs,
                 skewMs,
-                properties.getInfra().getFeed().getMaxClockSkewMs()
+                TIME_TOLERANCE.toMillis()
             );
             // FIX: Accept stale ticks but mark as afterHours to prevent trading
             // This ensures price is displayed in dashboard even with delayed data

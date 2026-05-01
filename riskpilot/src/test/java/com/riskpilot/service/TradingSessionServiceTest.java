@@ -14,8 +14,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +38,9 @@ class TradingSessionServiceTest {
     
     @Mock
     private TradingSignalRepository signalRepository;
+
+    @Mock
+    private MarketSessionService marketSessionService;
     
     @InjectMocks
     private TradingSessionService tradingSessionService;
@@ -45,6 +51,11 @@ class TradingSessionServiceTest {
     
     @BeforeEach
     void setUp() {
+        lenient().when(marketSessionService.now()).thenReturn(Instant.now());
+        lenient().when(marketSessionService.sessionDate(any(Instant.class))).thenReturn(LocalDate.now());
+        lenient().when(marketSessionService.isMarketOpen()).thenReturn(true);
+        lenient().when(marketSessionService.nowIst()).thenReturn(ZonedDateTime.now(ZoneId.of("Asia/Kolkata")));
+
         testSession = TradingSession.builder()
                 .id(1L)
                 .sessionDate(LocalDate.now())
