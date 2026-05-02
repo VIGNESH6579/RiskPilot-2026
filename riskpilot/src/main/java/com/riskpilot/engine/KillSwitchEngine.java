@@ -2,11 +2,13 @@ package com.riskpilot.engine;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,8 +16,13 @@ import java.util.List;
 @Component
 public class KillSwitchEngine {
 
-    private static final String KILL_FLAG_FILE = "KILL_SWITCH.flag";
-    private static final Path KILL_PATH = Paths.get(KILL_FLAG_FILE);
+    // BUG-025: Configurable kill-switch path
+    @Value("${KILL_SWITCH_PATH:KILL_SWITCH.flag}")
+    private String killSwitchPath;
+
+    private Path getKillPath() {
+        return Paths.get(killSwitchPath);
+    }
 
     @Data
     public static class KillSwitchSnapshot {
@@ -54,12 +61,14 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Check if kill-switch is triggered by external system (Python forward_scorecard)
+     * Check if kill-switch is triggered by external system.
+     * BUG-025: Uses configurable path from KILL_SWITCH_PATH env var.
      */
     public boolean isKillSwitchTriggered() {
-        if (Files.exists(KILL_PATH)) {
+        Path killPath = getKillPath();
+        if (Files.exists(killPath)) {
             try {
-                List<String> lines = Files.readAllLines(KILL_PATH);
+                List<String> lines = Files.readAllLines(killPath);
                 if (!lines.isEmpty()) {
                     log.error("🚨 KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
                     return true;
@@ -73,12 +82,13 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Get current kill-switch state
+     * Get current kill-switch state.
+     * BUG-025: Uses configurable path from KILL_SWITCH_PATH env var.
      */
     public KillSwitchSnapshot getCurrentState() {
         if (isKillSwitchTriggered()) {
             try {
-                List<String> lines = Files.readAllLines(KILL_PATH);
+                List<String> lines = Files.readAllLines(getKillPath());
                 return new KillSwitchSnapshot(true, lines, java.time.LocalDateTime.now().toString());
             } catch (Exception e) {
                 return new KillSwitchSnapshot(true, List.of("FILE_READ_ERROR"), java.time.LocalDateTime.now().toString());
@@ -88,11 +98,12 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Clear kill-switch (for manual restart after investigation)
+     * Clear kill-switch (for manual restart after investigation).
+     * BUG-025: Uses configurable path from KILL_SWITCH_PATH env var.
      */
     public void clearKillSwitch() {
         try {
-            Files.deleteIfExists(KILL_PATH);
+            Files.deleteIfExists(getKillPath());
             log.info("✅ Kill-switch cleared - system can restart");
         } catch (Exception e) {
             log.error("Failed to clear kill-switch: {}", e.getMessage());
@@ -155,11 +166,18 @@ public class KillSwitchEngine {
     }
 
     /**
-     * Write kill-switch file (called by Python forward_scorecard)
+     * Write kill-switch file.
+     * BUG-025: Uses configurable path from KILL_SWITCH_PATH env var.
+     * BUG-037: Uses SYNC option for fsync to disk.
      */
     public void writeKillSwitch(List<String> reasons) {
         try {
-            Files.write(KILL_PATH, String.join("\n", reasons).getBytes());
+            Path killPath = getKillPath();
+            // BUG-037: Files.write with SYNC option for durability
+            Files.write(killPath, String.join("\n", reasons).getBytes(),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.SYNC);
             log.error("🚨 KILL SWITCH WRITTEN - System will halt");
         } catch (Exception e) {
             log.error("Failed to write kill-switch file: {}", e.getMessage());

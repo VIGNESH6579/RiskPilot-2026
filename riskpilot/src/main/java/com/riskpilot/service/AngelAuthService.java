@@ -10,12 +10,16 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
@@ -44,7 +48,15 @@ public class AngelAuthService {
     @Value("${ANGEL_CLIENT_MAC:}")
     private String configuredMac;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    // BUG-029: RestTemplate with proper timeouts
+    private final RestTemplate restTemplate = buildRestTemplate();
+    
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
+    }
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
@@ -91,7 +103,17 @@ public class AngelAuthService {
                 log.info("Angel auth success");
                 return true;
             } else {
-                log.warn("Angel auth rejected: {}", response.getBody());
+                // BUG-038: Sanitized log - never log full response body
+                Map<?, ?> respBody = response.getBody();
+                String errorCode = respBody != null ? String.valueOf(respBody.get("errorcode")) : "UNKNOWN";
+                String message = respBody != null ? String.valueOf(respBody.get("message")) : "NO_RESPONSE";
+                log.warn("Angel auth rejected errorCode={} message={}", errorCode, message);
+                
+                // BUG-028: If TOTP error (AB1010), try forward bucket
+                if ("AB1010".equals(errorCode)) {
+                    log.info("TOTP validation failed, trying forward bucket...");
+                    return tryForwardBucketAuth(body, headers);
+                }
             }
         } catch (Exception e) {
             log.warn("Angel auth request failed: {}", e.getMessage());
@@ -148,6 +170,10 @@ public class AngelAuthService {
         return resolveLocalIp();
     }
 
+    /**
+     * BUG-039: Resolve MAC address with proper fallback.
+     * If no real MAC found, generates stable pseudo-MAC from clientCode hash.
+     */
     private String resolveMacAddress() {
         if (configuredMac != null && !configuredMac.isBlank()) {
             return configuredMac.trim();
@@ -168,6 +194,64 @@ public class AngelAuthService {
             }
         } catch (SocketException ignored) {
         }
-        return "00:00:00:00:00:00";
+        
+        // BUG-039: Generate stable pseudo-MAC from clientCode hash
+        return generatePseudoMac();
+    }
+    
+    /**
+     * BUG-039: Generate stable pseudo-MAC from clientCode hash.
+     * Angel flags zero-MAC as suspicious, so we generate a valid-looking MAC.
+     */
+    private String generatePseudoMac() {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                .digest(clientCode.getBytes(StandardCharsets.UTF_8));
+            // First 6 bytes as MAC address
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 6; i++) {
+                if (i > 0) sb.append(":");
+                // Locally administered, unicast: set bit 1 of first byte
+                byte b = (i == 0) ? (byte)(hash[i] & 0xFE | 0x02) : hash[i];
+                sb.append(String.format("%02X", b));
+            }
+            log.debug("Generated pseudo-MAC from clientCode hash");
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            log.error("Failed to generate pseudo-MAC: {}", e.getMessage());
+            return "02:00:00:00:00:01"; // Fallback: locally administered MAC
+        }
+    }
+    
+    /**
+     * BUG-028: Forward-bucket TOTP retry for clock drift > 30s ahead.
+     */
+    private boolean tryForwardBucketAuth(Map<String, String> originalBody, HttpHeaders originalHeaders) {
+        try {
+            Map<String, String> retryBody = new HashMap<>(originalBody);
+            // BUG-028: Try forward bucket (currentBucket + 1)
+            DefaultCodeGenerator generator = new DefaultCodeGenerator(HashingAlgorithm.SHA1, 6);
+            long currentBucket = Math.floorDiv(System.currentTimeMillis() / 1000, 30);
+            retryBody.put("totp", generator.generate(totpSecret, currentBucket + 1));
+
+            HttpEntity<Map<String, String>> retryRequest = new HttpEntity<>(retryBody, originalHeaders);
+            ResponseEntity<Map> response = restTemplate.postForEntity(AUTH_URL, retryRequest, Map.class);
+            
+            if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
+                Map<String, String> data = (Map<String, String>) response.getBody().get("data");
+                currentJwtToken = data.get("jwtToken");
+                currentFeedToken = data.get("feedToken");
+                log.info("Angel auth success with forward bucket TOTP");
+                return true;
+            } else {
+                // BUG-038: Sanitized log
+                Map<?, ?> respBody = response.getBody();
+                String errorCode = respBody != null ? String.valueOf(respBody.get("errorcode")) : "UNKNOWN";
+                log.warn("Forward bucket auth also failed errorCode={}", errorCode);
+            }
+        } catch (Exception e) {
+            log.warn("Forward bucket auth failed: {}", e.getMessage());
+        }
+        return false;
     }
 }

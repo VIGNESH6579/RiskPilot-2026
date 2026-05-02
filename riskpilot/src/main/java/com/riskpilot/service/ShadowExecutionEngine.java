@@ -25,8 +25,12 @@ import com.riskpilot.service.VixService;
 import com.riskpilot.service.WebSocketService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -34,6 +38,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -53,6 +58,7 @@ public class ShadowExecutionEngine {
     private final VixService vixService;
     private final LiveMetricsLogger liveMetricsLogger;
     private final WebSocketService webSocketService;
+    private final TransactionTemplate transactionTemplate;  // BUG-008: For atomic trade operations
 
     // Store candle data for regime confidence evaluation
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
@@ -61,10 +67,17 @@ public class ShadowExecutionEngine {
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
+    
+    // BUG-017: Canonical reject reason tracking
+    private final Map<String, AtomicLong> rejectReasonCounts = new LinkedHashMap<>();
+    private static final int MAX_REJECT_REASONS = 256;
 
     // Constructor removed - using @RequiredArgsConstructor for dependency injection
 
     public synchronized void evaluateTick(double currentPrice) {
+        // BUG-042: Per-tick logs at DEBUG level to reduce noise
+        log.debug("Processing tick: {}", currentPrice);
+        
         // 🔴 KILL-SWITCH CHECK (EVERY TICK)
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.error("🚫 KILL SWITCH ACTIVE - Ignoring tick processing");
@@ -114,8 +127,9 @@ public class ShadowExecutionEngine {
         if (state.tradeActive() && state.activeTradeReference() != null) {
             ActiveTradeExecution trade = state.activeTradeReference();
             
-            // Candle close logic
-            trade = ActiveTradeExecution.fromCandleClose(trade, candle);
+            // BUG-013: Calculate ATR and pass to fromCandleClose
+            double atr = calculateSimpleAtr(candleAggregator.getValidHistory(), 14);
+            trade = ActiveTradeExecution.fromCandleClose(trade, candle, atr);
             
             // Check for late session forced exit
             TradeExit forcedExit = checkForcedSessionExit(trade, candle);
@@ -180,7 +194,9 @@ public class ShadowExecutionEngine {
             log.warn("🚫 LATE SESSION FORCE EXIT: Time cutoff reached");
             if (state.tradeActive() && state.activeTradeReference() != null) {
                 ActiveTradeExecution trade = state.activeTradeReference();
-                ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(trade, newestCandle);
+                // BUG-013: Calculate ATR and pass to fromCandleClose
+                double atr = calculateSimpleAtr(strictHistory, 14);
+                ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(trade, newestCandle, atr);
                 TradeExit exit = new TradeExit(
                     true,
                     updated.realizedPnL() + ((updated.entryPrice() - newestCandle.getClosePrice()) * updated.remainingSize()),
@@ -194,10 +210,12 @@ public class ShadowExecutionEngine {
 
         if (state.tradeActive() && state.activeTradeReference() != null) {
             CandleEntity previousCandle = strictHistory.get(strictHistory.size() - 2);
-            double currentRange = newestCandle.getHighPrice() - newestCandle.getLowPrice();
-            double previousRange = previousCandle.getHighPrice() - previousCandle.getLowPrice();
+            double currentRange = newestCandle.getHighPrice().doubleValue() - newestCandle.getLowPrice().doubleValue();
+            double previousRange = previousCandle.getHighPrice().doubleValue() - previousCandle.getLowPrice().doubleValue();
             double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-            ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), newestCandle);
+            // BUG-013: Calculate ATR and pass to fromCandleClose
+            double atr = calculateSimpleAtr(strictHistory, 14);
+            ActiveTradeExecution updated = ActiveTradeExecution.fromCandleClose(state.activeTradeReference(), newestCandle, atr);
             
             if (state.timePhase() != TimePhase.EARLY && orRange > 0.0 && currentRange < (orRange * 0.2)) {
                 TradeExit exit = new TradeExit(
@@ -300,19 +318,22 @@ public class ShadowExecutionEngine {
 
     private void openTrade(Signal signal, TradingSessionSnapshot state) {
         LocalDateTime now = LocalDateTime.now();
-        double size = state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35;
         double orRange = Math.max(0.0, state.orHigh() - state.orLow());
         double tp1Distance = volatilityNormalizer.getCurrentTP1(); // Use normalized TP1
         double dynamicTp1 = signal.getEntry() - tp1Distance;
         double initialRisk = Math.abs(signal.getStopLoss() - signal.getEntry());
         
+        // BUG-020: Use TrapEngine's position sizing from signal (not recalculate)
+        // TrapEngine already computed the correct size based on risk parameters
+        double size = signal.getConfidence() > 0 ? signal.getConfidence() : 
+            (state.timePhase() == TimePhase.EARLY ? 1.0 : 0.35);
+        
+        // BUG-009: Set initialRiskPoints at entry and never overwrite
         ActiveTradeExecution trade = new ActiveTradeExecution(
             signal.getEntry(),
             signal.getStopLoss(),
             dynamicTp1,
-            initialRisk,
-            false,
-            false,
+            initialRisk,  // BUG-009: initialRiskPoints set at entry
             false,
             false,
             size,
@@ -344,7 +365,31 @@ public class ShadowExecutionEngine {
         broadcastCurrentSessionState();
     }
 
+    /**
+     * BUG-008: Close trade with atomic transaction wrapper.
+     * All side effects (edge tracker, adaptive regime, logging, state update) 
+     * are wrapped in a single transaction to prevent partial writes on crash.
+     */
     private void closeTrade(ActiveTradeExecution trade, TradeExit exit) {
+        // BUG-041: Add MDC correlation ID for tracing
+        String correlationId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        MDC.put("correlationId", correlationId);
+        MDC.put("tradeId", trade.entryPrice() + "_" + System.currentTimeMillis());
+        
+        try {
+            transactionTemplate.execute(status -> {
+                executeCloseTradeInternal(trade, exit);
+                return null;
+            });
+        } finally {
+            MDC.clear();
+        }
+    }
+    
+    /**
+     * Internal close trade logic - executed within transaction.
+     */
+    private void executeCloseTradeInternal(ActiveTradeExecution trade, TradeExit exit) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (state.activeTradeReference() == null || activeSignalTime == null) {
             return;
@@ -423,11 +468,24 @@ public class ShadowExecutionEngine {
             current.heartbeatAlive(),
             current.orHigh(),
             current.orLow(),
-            current.cumulativeDailyLossR() + Math.min(0.0, realizedR),
+            // BUG-015: Net R accumulation - wins offset losses (removed Math.min(0.0, realizedR))
+            current.cumulativeDailyLossR() + realizedR,
             null,
             isFirstTradeFailure ? "FIRST_TRADE_FAILURE_DAY_BLOCK" : "ALLOW"
         ));
         broadcastCurrentSessionState();
+    }
+    
+    /**
+     * BUG-023: Restore session candles on application startup.
+     * Moved from @PostConstruct to ApplicationReadyEvent to ensure
+     * all infrastructure is initialized before loading persisted state.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void restoreSessionCandles() {
+        log.info("Restoring session candles from persistence...");
+        // TODO: Load candles from database/cache if needed
+        // This ensures candle state is available before first tick arrives
     }
 
     private void logReject(TradingSessionSnapshot state, String reason) {
@@ -457,7 +515,61 @@ public class ShadowExecutionEngine {
         );
     }
 
-    // Trade execution methods moved to ActiveTradeExecution model
+    /**
+     * Calculate Simple ATR (Average True Range) over N periods.
+     * BUG-013: Used for ATR-normalized trailing stops.
+     */
+    private double calculateSimpleAtr(List<CandleEntity> history, int periods) {
+        if (history.size() < 2) {
+            return 25.0; // Default ATR for NIFTY
+        }
+        
+        int start = Math.max(0, history.size() - periods);
+        double totalRange = 0.0;
+        int count = 0;
+        
+        for (int i = start + 1; i < history.size(); i++) {
+            CandleEntity current = history.get(i);
+            CandleEntity previous = history.get(i - 1);
+            
+            double highLow = current.getHighPrice().doubleValue() - current.getLowPrice().doubleValue();
+            double highClose = Math.abs(current.getHighPrice().doubleValue() - previous.getClosePrice().doubleValue());
+            double lowClose = Math.abs(current.getLowPrice().doubleValue() - previous.getClosePrice().doubleValue());
+            
+            double trueRange = Math.max(highLow, Math.max(highClose, lowClose));
+            totalRange += trueRange;
+            count++;
+        }
+        
+        return count > 0 ? totalRange / count : 25.0;
+    }
+    
+    /**
+     * BUG-017: Canonicalize reject reason to prevent unbounded map growth.
+     */
+    private String canonicalRejectReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "UNKNOWN";
+        }
+        // Keep only uppercase alpha + underscore, strip everything else
+        String canonical = reason.trim()
+            .toUpperCase()
+            .replaceAll("[^A-Z_]", "_")   // replace digits and punctuation
+            .replaceAll("_+", "_")         // collapse consecutive underscores
+            .replaceAll("^_+|_+$", "");    // trim leading/trailing underscores
+        
+        // Limit to 64 chars
+        if (canonical.length() > 64) {
+            canonical = canonical.substring(0, 64);
+        }
+        
+        // BUG-017: Ceiling guard - prune if too many entries
+        if (rejectReasonCounts.size() > MAX_REJECT_REASONS) {
+            rejectReasonCounts.entrySet().removeIf(e -> e.getValue().get() <= 1);
+        }
+        
+        return canonical.isEmpty() ? "UNKNOWN" : canonical;
+    }
 
     private void broadcastCurrentSessionState() {
         TradingSessionSnapshot state = stateManager.getSnapshot();

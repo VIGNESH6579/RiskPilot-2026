@@ -6,12 +6,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 
+/**
+ * LiveMetricsLogger logs shadow trading metrics to CSV for analysis.
+ * 
+ * BUG-043: Uses persistent FileWriter to avoid repeated file open/close cycles.
+ */
 @Service
 public class LiveMetricsLogger {
 
@@ -21,6 +29,39 @@ public class LiveMetricsLogger {
         "signalTime,executionTime,latencySec,expectedEntry,actualEntry,entrySlippage," +
         "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR," +
         "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitTime";
+    
+    // BUG-043: Persistent FileWriter for performance
+    private PrintWriter csvWriter;
+    private BufferedWriter bufferedWriter;
+    private final Object writerLock = new Object();
+    
+    @PostConstruct
+    public void init() {
+        try {
+            File csv = new File(CSV_PATH);
+            boolean exists = csv.exists() && csv.length() > 0;
+            bufferedWriter = new BufferedWriter(new FileWriter(CSV_PATH, true));
+            csvWriter = new PrintWriter(bufferedWriter);
+            if (!exists) {
+                csvWriter.println(CSV_HEADER);
+                csvWriter.flush();
+            }
+            log.info("LiveMetricsLogger initialized with persistent CSV writer");
+        } catch (IOException e) {
+            log.error("Failed to initialize LiveMetricsLogger: {}", e.getMessage());
+        }
+    }
+    
+    @PreDestroy
+    public void cleanup() {
+        synchronized (writerLock) {
+            if (csvWriter != null) {
+                csvWriter.flush();
+                csvWriter.close();
+                log.info("LiveMetricsLogger CSV writer closed");
+            }
+        }
+    }
 
     public synchronized void logReject(
         LocalDateTime signalTime,
@@ -109,20 +150,24 @@ public class LiveMetricsLogger {
         log.info("Shadow execution logged with gateDecision={} exitReason={}", gateDecision, exitReason);
     }
 
-    private void ensureHeader() {
-        File csv = new File(CSV_PATH);
-        if (!csv.exists() || csv.length() == 0) {
-            appendRow(CSV_HEADER);
-        }
-    }
-
+    /**
+     * BUG-043: Append row using persistent writer.
+     * Synchronized to prevent concurrent writes.
+     */
     private void appendRow(String row) {
-        try (FileWriter fw = new FileWriter(CSV_PATH, true);
-             PrintWriter pw = new PrintWriter(fw)) {
-            pw.println(row);
-            pw.flush();
-        } catch (IOException e) {
-            log.error("CRITICAL: FAILED TO WRITE TO PERSISTENT CSV", e);
+        synchronized (writerLock) {
+            if (csvWriter != null) {
+                csvWriter.println(row);
+                csvWriter.flush();
+            } else {
+                // Fallback to file-per-write if writer failed to initialize
+                try (FileWriter fw = new FileWriter(CSV_PATH, true);
+                     PrintWriter pw = new PrintWriter(fw)) {
+                    pw.println(row);
+                } catch (IOException e) {
+                    log.error("CRITICAL: FAILED TO WRITE TO PERSISTENT CSV", e);
+                }
+            }
         }
     }
 

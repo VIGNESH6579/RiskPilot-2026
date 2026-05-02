@@ -29,12 +29,15 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/actuator/health").permitAll()
                 .requestMatchers("/api/actuator/info").permitAll()
+                // BUG-040: Admin endpoints now protected (removed permitAll)
                 .requestMatchers("/api/actuator/metrics").hasRole("ADMIN")
+                .requestMatchers("/api/actuator/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/trading/status").permitAll()
                 .requestMatchers("/api/v1/trading/**").hasRole("TRADER")
-                .requestMatchers("/h2-console/**").permitAll()
+                // BUG-040: H2 console and observer require admin (not permitAll)
+                .requestMatchers("/h2-console/**").hasRole("ADMIN")
+                .requestMatchers("/observer/**").hasRole("ADMIN")
                 .requestMatchers("/frontend.html").permitAll()
-                .requestMatchers("/observer/**").permitAll()
                 .anyRequest().authenticated()
             );
         

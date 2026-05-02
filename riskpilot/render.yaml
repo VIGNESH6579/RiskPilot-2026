@@ -12,3 +12,10 @@ services:
         value: "8765"
       - key: OBSERVER_HOST
         value: "127.0.0.1"
+      # BUG-046: ddl-auto=validate with Flyway for production safety
+      - key: SPRING_JPA_HIBERNATE_DDL_AUTO
+        value: "validate"
+      - key: SPRING_FLYWAY_ENABLED
+        value: "true"
+      - key: SPRING_FLYWAY_BASELINE_ON_MIGRATE
+        value: "true"
