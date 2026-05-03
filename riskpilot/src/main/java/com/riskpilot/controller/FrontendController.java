@@ -10,40 +10,34 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 @RestController
 @CrossOrigin(origins = "*")
 public class FrontendController {
 
+    private static final Path EXTERNAL_FRONTEND = Path.of("frontend.html");
+    private static final List<String> CLASSPATH_FRONTENDS = List.of(
+            "static/index.html",
+            "frontend.html"
+    );
+
     @GetMapping(value = "/", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> getFrontend() {
         try {
-            Resource resource = new ClassPathResource("frontend.html");
-            if (resource.exists()) {
-                String content;
-                try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
-                    content = FileCopyUtils.copyToString(reader);
-                }
-                return ResponseEntity.ok(content);
-            } else {
-                // Fallback to simple HTML if frontend.html not found
-                String fallbackHtml = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head><title>RiskPilot</title></head>
-                    <body>
-                        <h1>RiskPilot Trading System</h1>
-                        <p>Frontend file not found. Please check deployment.</p>
-                    </body>
-                    </html>
-                    """;
-                return ResponseEntity.ok(fallbackHtml);
-            }
+            return ResponseEntity.ok(loadFrontendHtml());
         } catch (IOException e) {
             return ResponseEntity.internalServerError().body("Error loading frontend");
         }
+    }
+
+    @GetMapping("/favicon.ico")
+    public ResponseEntity<Void> favicon() {
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/health")
@@ -74,5 +68,22 @@ public class FrontendController {
                 "message", "Failed to load initial data"
             ));
         }
+    }
+
+    private String loadFrontendHtml() throws IOException {
+        if (Files.isRegularFile(EXTERNAL_FRONTEND)) {
+            return Files.readString(EXTERNAL_FRONTEND, StandardCharsets.UTF_8);
+        }
+
+        for (String location : CLASSPATH_FRONTENDS) {
+            Resource resource = new ClassPathResource(location);
+            if (resource.exists()) {
+                try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
+                    return FileCopyUtils.copyToString(reader);
+                }
+            }
+        }
+
+        throw new IOException("No frontend asset found");
     }
 }
