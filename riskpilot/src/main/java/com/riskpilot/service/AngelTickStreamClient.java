@@ -76,15 +76,20 @@ public class AngelTickStreamClient {
             pollerFuture.cancel(false);
         }
 
-        // Production-safe fallback feed until SmartAPI WS integration is completed.
-        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
+        // Poll once per second so the dashboard and candle feed reflect Angel One LTP freshness.
+        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 1, TimeUnit.SECONDS);
         log.info("AngelTickStreamClient started with deduplication guard");
     }
 
     private void pollSpotAsTick() {
         try {
+            LocalDateTime receivedAt = marketSessionService.nowIst().toLocalDateTime();
+            if (!marketSessionService.isMarketOpen()) {
+                return;
+            }
+
             OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
-            if (snap == null || snap.spot() <= 0.0) {
+            if (snap == null || snap.spot() <= 0.0 || !snap.live()) {
                 candleAggregator.markUnstable();
                 return;
             }
@@ -94,16 +99,8 @@ public class AngelTickStreamClient {
             
             heartbeatMonitor.registerTick();
             
-            // BUG-001: Pass receivedAt time to preserve original timing
-            LocalDateTime receivedAt = marketSessionService.nowIst().toLocalDateTime();
             int candleMinute = (receivedAt.getMinute() / 5) * 5;
             LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
-
-            if (!marketSessionService.isMarketOpen()) {
-                candleAggregator.trackAfterHoursTick(new CandleAggregator.MarketTick(
-                    receivedAt, snap.spot(), 1L, sequenceCounter.incrementAndGet(), receivedAt));
-                return;
-            }
 
             candleAggregator.processTick(
                 receivedAt,

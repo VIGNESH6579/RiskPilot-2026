@@ -46,8 +46,15 @@ public class DataController {
         payload.put("optionChainSource", chain.source());
         payload.put("spot", chain.spot());
         payload.put("expiry", chain.expiry());
+        payload.put("previousClose", chain.previousClose());
+        payload.put("support", chain.support());
+        payload.put("resistance", chain.resistance());
+        payload.put("live", chain.live());
+        payload.put("marketOpen", optionChainService.isMarketOpen());
+        payload.put("updatedEpochMs", chain.updatedEpochMs());
+        payload.put("ageMs", chain.updatedEpochMs() > 0L ? System.currentTimeMillis() - chain.updatedEpochMs() : null);
         payload.put("vix", vixService.getIndiaVix());
-        payload.put("healthy", chain.spot() > 0.0);
+        payload.put("healthy", chain.live() && chain.spot() > 0.0);
         return payload;
     }
 

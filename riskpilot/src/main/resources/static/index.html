@@ -1,528 +1,135 @@
-<!-- <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RiskPilot Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
-        .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-        .grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .card { background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
-        .label { color: #94a3b8; font-size: 12px; }
-        .value { font-size: 20px; margin-top: 5px; font-weight: 700; }
-        .panel { margin-top: 14px; background: #111827; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
-        .clock { font-size: 14px; color: #93c5fd; }
-        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-        th, td { padding: 8px; border-bottom: 1px solid #334155; text-align: left; }
-        th { color: #94a3b8; font-weight: 600; }
-        .ok { color: #22c55e; }
-        .bad { color: #ef4444; }
-        .warn { color: #f59e0b; }
-        .mono { font-family: Consolas, monospace; }
-    </style>
-</head>
-<body>
-<div class="topbar">
-    <h2>RiskPilot Monitor (Read-Only)</h2>
-    <div id="clock" class="clock">IST: -</div>
-</div>
-<div id="wsStatus" class="warn">Socket: Connecting...</div>
-
-<div class="grid">
-    <div class="card"><div class="label">Regime</div><div id="regime" class="value">-</div></div>
-    <div class="card"><div class="label">Volatility Gate</div><div id="volatilityQualified" class="value">-</div></div>
-    <div class="card"><div class="label">Time Phase</div><div id="timePhase" class="value">-</div></div>
-    <div class="card"><div class="label">Trade Active</div><div id="tradeActive" class="value">-</div></div>
-    <div class="card"><div class="label">Trades Taken</div><div id="tradesTaken" class="value">-</div></div>
-    <div class="card"><div class="label">Daily Loss (R)</div><div id="dailyLossR" class="value">-</div></div>
-    <div class="card"><div class="label">Feed Stable</div><div id="feedStable" class="value">-</div></div>
-    <div class="card"><div class="label">Heartbeat Alive</div><div id="heartbeatAlive" class="value">-</div></div>
-    <div class="card"><div class="label">Session Active</div><div id="sessionActive" class="value">-</div></div>
-    <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">-</div></div>
-    <div class="card"><div class="label">Prev Close</div><div id="prevClose" class="value">-</div></div>
-    <div class="card"><div class="label">Nearest Expiry</div><div id="expiry" class="value" style="font-size:16px;">-</div></div>
-    <div class="card"><div class="label">Option Chain Health</div><div id="chainHealth" class="value">-</div></div>
-    <div class="card"><div class="label">Price Source</div><div id="spotSource" class="value" style="font-size:14px;">-</div></div>
-</div>
-
-<div class="panel">
-    <div class="label">Last Reject Reason</div>
-    <div id="lastRejectReason" class="value mono" style="font-size:14px;">-</div>
-</div>
-
-<div class="panel">
-    <div class="label">Recent Trade History</div>
-    <table>
-        <thead>
-            <tr>
-                <th>Signal Time</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>R</th>
-                <th>MFE</th>
-                <th>MAE</th>
-                <th>Reason</th>
-            </tr>
-        </thead>
-        <tbody id="tradeHistoryRows">
-            <tr><td colspan="7" class="mono">No trades yet</td></tr>
-        </tbody>
-    </table>
-</div>
-
-<script>
-    const fields = [
-        "regime", "volatilityQualified", "timePhase", "tradeActive", "tradesTaken",
-        "dailyLossR", "feedStable", "heartbeatAlive", "sessionActive", "lastRejectReason"
-    ];
-
-    function render(state) {
-        fields.forEach((f) => {
-            const el = document.getElementById(f);
-            if (!el) return;
-            const value = state[f];
-            el.textContent = value === null || value === undefined ? "-" : value;
-            el.classList.remove("ok", "bad", "warn");
-            if (value === true) el.classList.add("ok");
-            if (value === false) el.classList.add("bad");
-        });
-        if (typeof state.tradesTaken === "number" && typeof state.maxTradesPerDay === "number") {
-            document.getElementById("tradesTaken").textContent = `${state.tradesTaken} / ${state.maxTradesPerDay}`;
-        }
-    }
-
-    function refreshState() {
-        fetch(`/api/v1/monitor/state?ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((data) => render(data))
-            .catch(() => {});
-    }
-
-    function refreshOptionChain() {
-        fetch(`/api/v1/data/option-chain?ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((data) => {
-                const spotEl = document.getElementById("spot");
-                const expiryEl = document.getElementById("expiry");
-                const healthEl = document.getElementById("chainHealth");
-                const sourceEl = document.getElementById("spotSource");
-                const prevCloseEl = document.getElementById("prevClose");
-                spotEl.textContent = typeof data.spot === "number" ? data.spot.toFixed(2) : "-";
-                prevCloseEl.textContent = typeof data.previousClose === "number" ? data.previousClose.toFixed(2) : "-";
-                expiryEl.textContent = data.expiry || "-";
-                const healthy = data.spot && data.spot > 0;
-                const source = data.source || "UNKNOWN";
-                healthEl.textContent = healthy ? (source === "PREV_CLOSE_CACHE" ? "MARKET_CLOSED" : "LIVE") : "STALE";
-                sourceEl.textContent = source;
-                healthEl.classList.remove("ok", "bad");
-                sourceEl.classList.remove("ok", "bad");
-                healthEl.classList.add(healthy ? "ok" : "bad");
-                sourceEl.classList.add(source === "PREV_CLOSE_CACHE" ? "warn" : "ok");
-            })
-            .catch(() => {
-                const healthEl = document.getElementById("chainHealth");
-                const sourceEl = document.getElementById("spotSource");
-                healthEl.textContent = "DOWN";
-                sourceEl.textContent = "UNAVAILABLE";
-                healthEl.classList.remove("ok");
-                sourceEl.classList.remove("ok");
-                healthEl.classList.add("bad");
-                sourceEl.classList.add("bad");
-            });
-    }
-
-    function refreshClock() {
-        const now = new Date();
-        const formatted = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
-        document.getElementById("clock").textContent = `IST: ${formatted}`;
-    }
-
-    function refreshTradeHistory() {
-        fetch(`/api/v1/data/trade-history?limit=20&ts=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((rows) => {
-                const tbody = document.getElementById("tradeHistoryRows");
-                if (!Array.isArray(rows) || rows.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="7" class="mono">No trades yet</td></tr>`;
-                    return;
-                }
-                tbody.innerHTML = rows.map((t) => {
-                    const entry = typeof t.actualEntry === "number" ? t.actualEntry.toFixed(2) : "-";
-                    const exit = typeof t.actualExit === "number" ? t.actualExit.toFixed(2) : "-";
-                    const rr = typeof t.realizedR === "number" ? t.realizedR.toFixed(2) : "-";
-                    const mfe = typeof t.mfe === "number" ? t.mfe.toFixed(2) : "-";
-                    const mae = typeof t.mae === "number" ? t.mae.toFixed(2) : "-";
-                    const reason = t.exitReason || t.rejectReason || "-";
-                    return `<tr>
-                        <td>${t.signalTime || "-"}</td>
-                        <td>${entry}</td>
-                        <td>${exit}</td>
-                        <td>${rr}</td>
-                        <td>${mfe}</td>
-                        <td>${mae}</td>
-                        <td>${reason}</td>
-                    </tr>`;
-                }).join("");
-            })
-            .catch(() => {});
-    }
-
-    let stompClient = null;
-    let reconnectTimer = null;
-
-    function connectSocket() {
-        const socket = new SockJS("/ws");
-        stompClient = Stomp.over(socket);
-        stompClient.debug = () => {};
-        stompClient.connect({}, () => {
-            document.getElementById("wsStatus").textContent = "Socket: Connected";
-            document.getElementById("wsStatus").className = "ok";
-            stompClient.subscribe("/topic/session", (message) => {
-                render(JSON.parse(message.body));
-            });
-        }, () => {
-            document.getElementById("wsStatus").textContent = "Socket: Disconnected (retrying)";
-            document.getElementById("wsStatus").className = "bad";
-            if (reconnectTimer) clearTimeout(reconnectTimer);
-            reconnectTimer = setTimeout(connectSocket, 2000);
-        });
-    }
-
-    refreshState();
-    refreshOptionChain();
-    refreshTradeHistory();
-    refreshClock();
-    connectSocket();
-    setInterval(refreshState, 5000);
-    setInterval(refreshOptionChain, 3000);
-    setInterval(refreshTradeHistory, 5000);
-    setInterval(refreshClock, 1000);
-</script>
-</body>
-</html> -->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RiskPilot - Live Trading Monitor</title>
+  <title>RiskPilot Live Monitor</title>
   <style>
-    :root {
-      --bg: #0a0f1f;
-      --panel: #121a30;
-      --panel-2: #1a2441;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-      --good: #34d399;
-      --warn: #f59e0b;
-      --bad: #f87171;
-      --line: #243153;
-    }
+    :root { --bg:#09111f; --panel:#111a2d; --line:#263653; --text:#e6edf6; --muted:#93a4b8; --good:#26d07c; --bad:#ff6b6b; --warn:#f4b740; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Inter, Segoe UI, system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }
-    .wrap {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-    }
-    h1 { margin: 0; font-size: 22px; font-weight: 700; }
-    .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
-    .status { padding: 8px 12px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; }
-    .status.ok { color: var(--good); }
-    .status.error { color: var(--bad); }
-    
-    .market-data {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 10px;
-      margin-bottom: 14px;
-    }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px;
-    }
-    .label { color: var(--muted); font-size: 12px; }
-    .value { font-size: 18px; margin-top: 3px; font-weight: 600; }
-    .table-wrap {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-    thead { background: var(--panel-2); }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-    th { color: var(--muted); font-weight: 600; }
-    .mono { font-family: ui-monospace, monospace; }
-    .good { color: var(--good); }
-    .bad { color: var(--bad); }
-    .muted { color: var(--muted); }
-    .empty { padding: 28px; text-align: center; color: var(--muted); }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,Segoe UI,Arial,sans-serif; }
+    main { max-width:1320px; margin:0 auto; padding:20px; }
+    header { display:flex; justify-content:space-between; gap:16px; margin-bottom:16px; }
+    h1 { margin:0; font-size:24px; letter-spacing:0; }
+    .sub,.label { color:var(--muted); font-size:13px; }
+    .clock { text-align:right; font-size:18px; font-weight:700; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-height:76px; }
+    .value { margin-top:6px; font-size:20px; font-weight:700; overflow-wrap:anywhere; }
+    .small { font-size:13px; line-height:1.35; }
+    .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; min-width:900px; font-size:13px; }
+    th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+    th { color:var(--muted); background:#17223a; }
+    .table-wrap { overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .empty { text-align:center; color:var(--muted); padding:24px; }
+    @media (max-width:900px) { header { flex-direction:column; } .clock { text-align:left; } .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="topbar">
-      <div>
-        <h1>🎯 RiskPilot Live Monitor</h1>
-        <div class="sub">Real-time NIFTY Options Trading System</div>
-      </div>
-      <div style="text-align: right;">
-        <div id="clock" style="font-size: 18px; font-weight: 600;">--:--:--</div>
-        <div id="status" class="status error">Connecting...</div>
-      </div>
+<main>
+  <header>
+    <div>
+      <h1>RiskPilot Live Monitor</h1>
+      <div class="sub">Angel One live NIFTY feed, expiry, risk gates, and shadow trades</div>
     </div>
-
-    <!-- MARKET DATA PANEL -->
-    <div class="market-data">
-      <div class="card">
-        <div class="label">NIFTY Spot</div>
-        <div id="spot" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">India VIX</div>
-        <div id="vix" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Weekly Expiry</div>
-        <div id="expiry" class="value muted" style="font-size: 14px;">--</div>
-      </div>
-      <div class="card">
-        <div class="label">OR High</div>
-        <div id="orHigh" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">OR Low</div>
-        <div id="orLow" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Regime</div>
-        <div id="regime" class="value muted" style="font-size: 14px;">--</div>
-      </div>
+    <div>
+      <div id="clock" class="clock">--:--:--</div>
+      <div id="socket" class="small warn">Socket connecting</div>
     </div>
+  </header>
 
-    <!-- ENGINE STATUS -->
-    <div class="market-data">
-      <div class="card">
-        <div class="label">Session Active</div>
-        <div id="sessionActive" class="value">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Trades Today</div>
-        <div id="tradesTaken" class="value">0</div>
-      </div>
-      <div class="card">
-        <div class="label">Feed Health</div>
-        <div id="feedHealth" class="value good">--</div>
-      </div>
-      <div class="card">
-        <div class="label">Daily Loss</div>
-        <div id="dailyLoss" class="value">0.0R</div>
-      </div>
-      <div class="card">
-        <div class="label">Candles</div>
-        <div id="candleCount" class="value">0</div>
-      </div>
-      <div class="card">
-        <div class="label">Last Update</div>
-        <div id="lastUpdate" class="value muted" style="font-size: 12px;">--</div>
-      </div>
-    </div>
+  <section class="grid">
+    <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">--</div></div>
+    <div class="card"><div class="label">India VIX</div><div id="vix" class="value">--</div></div>
+    <div class="card"><div class="label">Weekly Expiry</div><div id="expiry" class="value small">--</div></div>
+    <div class="card"><div class="label">Source / Freshness</div><div id="freshness" class="value small">--</div></div>
+    <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
+    <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
+    <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
+    <div class="card"><div class="label">Session / Candles</div><div id="session" class="value small">--</div></div>
+  </section>
 
-    <!-- TRADES TABLE -->
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Direction</th>
-            <th>Expected</th>
-            <th>Actual</th>
-            <th>Latency(s)</th>
-            <th>Slippage</th>
-            <th>MFE</th>
-            <th>MAE</th>
-            <th>TP1</th>
-            <th>Runner</th>
-            <th>P&L</th>
-            <th>Exit Reason</th>
-          </tr>
-        </thead>
-        <tbody id="rows">
-          <tr><td colspan="12" class="empty">Awaiting trades...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  <section class="table-wrap">
+    <table>
+      <thead><tr><th>Signal Time</th><th>Direction</th><th>Expected</th><th>Actual</th><th>Latency</th><th>Slippage</th><th>MFE</th><th>MAE</th><th>R</th><th>Exit Reason</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="10" class="empty">Awaiting trades...</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script>
+  const rows = [];
+  let ws = null;
+  let reconnectTimer = null;
+  const $ = id => document.getElementById(id);
 
-  <script>
-    const MAX_ROWS = 50;
-    const rows = [];
-    let reconnectTimer = null;
-    let ws = null;
-
-    const statusEl = document.getElementById("status");
-    const rowsEl = document.getElementById("rows");
-    const clockEl = document.getElementById("clock");
-
-    // Market data elements
-    const spotEl = document.getElementById("spot");
-    const vixEl = document.getElementById("vix");
-    const expiryEl = document.getElementById("expiry");
-    const orHighEl = document.getElementById("orHigh");
-    const orLowEl = document.getElementById("orLow");
-    const regimeEl = document.getElementById("regime");
-    
-    // Engine status
-    const sessionActiveEl = document.getElementById("sessionActive");
-    const tradesEl = document.getElementById("tradesTaken");
-    const feedEl = document.getElementById("feedHealth");
-    const lossEl = document.getElementById("dailyLoss");
-    const candleEl = document.getElementById("candleCount");
-    const lastUpdateEl = document.getElementById("lastUpdate");
-
-    // Live clock
-    function updateClock() {
-      const now = new Date();
-      clockEl.textContent = now.toLocaleTimeString('en-IN');
+  function istTime() {
+    return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+  }
+  function fmt(v, d = 2) {
+    return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '--';
+  }
+  function cls(el, name) {
+    el.classList.remove('good', 'bad', 'warn', 'muted');
+    if (name) el.classList.add(name);
+  }
+  function tickClock() {
+    $('clock').textContent = `IST ${istTime()}`;
+  }
+  async function refreshLiveData() {
+    try {
+      const [health, state, candles] = await Promise.all([
+        fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json()),
+        fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json()),
+        fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json())
+      ]);
+      const age = typeof health.ageMs === 'number' ? `${Math.round(health.ageMs / 1000)}s` : 'n/a';
+      const live = health.healthy === true && health.optionChainSource === 'ANGELONE_LTP';
+      $('spot').textContent = fmt(health.spot);
+      $('vix').textContent = fmt(health.vix);
+      $('expiry').textContent = health.expiry || '--';
+      $('freshness').textContent = `${health.optionChainSource || 'UNKNOWN'} | age ${age}`;
+      $('range').textContent = `${health.support ?? '--'} / ${health.resistance ?? '--'}`;
+      $('orRange').textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+      $('regime').textContent = state.regime || '--';
+      $('session').textContent = `${state.sessionActive ? 'Active' : 'Inactive'} | ${candles.candleHistorySize ?? 0}`;
+      cls($('freshness'), live && age !== 'n/a' ? 'good' : 'bad');
+    } catch (e) {
+      $('freshness').textContent = 'Market API down';
+      cls($('freshness'), 'bad');
     }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // Fetch market data
-    function fetchMarketData() {
-      fetch('/api/v1/data/health')
-        .then(r => r.json())
-        .then(data => {
-          if (data.spot) spotEl.textContent = data.spot.toFixed(2);
-          if (data.expiry) expiryEl.textContent = data.expiry;
-        })
-        .catch(e => console.error('Market data fetch error', e));
-
-      fetch('/api/v1/data/vix')
-        .then(r => r.text())
-        .then(vix => {
-          vixEl.textContent = parseFloat(vix).toFixed(2);
-        })
-        .catch(e => console.error('VIX fetch error', e));
-
-      fetch('/api/v1/engine/state')
-        .then(r => r.json())
-        .then(state => {
-          sessionActiveEl.textContent = state.sessionActive ? '✅ Yes' : '❌ No';
-          feedEl.textContent = state.feedHealthy ? '✅ Healthy' : '⚠️ Unstable';
-          feedEl.className = 'value ' + (state.feedHealthy ? 'good' : 'bad');
-          if (state.regime) regimeEl.textContent = state.regime;
-          if (state.orHigh) orHighEl.textContent = state.orHigh.toFixed(0);
-          if (state.orLow) orLowEl.textContent = state.orLow.toFixed(0);
-          lastUpdateEl.textContent = new Date().toLocaleTimeString();
-        })
-        .catch(e => console.error('Engine state fetch error', e));
-
-      fetch('/api/v1/engine/candle-history')
-        .then(r => r.json())
-        .then(data => {
-          candleEl.textContent = data.candleHistorySize || 0;
-        })
-        .catch(e => console.error('Candle history fetch error', e));
-    }
-
-    // WebSocket connection
-    function connect() {
-      const protocol = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${protocol}://${location.host}/ws`);
-
-      ws.onopen = () => {
-        setStatus("Connected", true);
-        fetchMarketData();
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          const payload = message.eventType && message.payload ? message.payload : message;
-          if (message.eventType && message.eventType !== "trade") {
-            return;
-          }
-          rows.unshift(payload);
-          if (rows.length > MAX_ROWS) rows.pop();
-          renderTable();
-          updateEngineMetrics();
-        } catch (e) {}
-      };
-
-      ws.onerror = () => setStatus("Socket error", false);
-      ws.onclose = () => {
-        setStatus("Disconnected, retrying...", false);
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connect, 1500);
-      };
-    }
-
-    function setStatus(text, ok) {
-      statusEl.textContent = text;
-      statusEl.className = "status" + (ok ? " ok" : " error");
-    }
-
-    function formatNum(v, d = 2) {
-      return typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "-";
-    }
-
-    function renderTable() {
-      if (rows.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades...</td></tr>';
-        return;
-      }
-      rowsEl.innerHTML = rows.map((r, i) => `
-        <tr>
-          <td>${r.signalTime || "-"}</td>
-          <td>${r.direction || "-"}</td>
-          <td>${formatNum(r.expectedEntry)}</td>
-          <td>${formatNum(r.actualEntry)}</td>
-          <td class="${(r.latencySec || 0) > 2 ? "bad" : "muted"}">${formatNum(r.latencySec)}</td>
-          <td class="${Math.abs(r.slippage || 0) > 1 ? "bad" : "good"}">${formatNum(r.slippage)}</td>
-          <td>${formatNum(r.mfe)}</td>
-          <td>${formatNum(r.mae)}</td>
-          <td>${r.tp1Hit ? "✅" : "❌"}</td>
-          <td>${r.runnerCaptured ? "✅" : "❌"}</td>
-          <td class="${(r.realizedR || 0) > 0 ? "good" : "bad"}">${formatNum(r.realizedR)}R</td>
-          <td class="${(r.exitReason || "").includes("FAIL") ? "bad" : "muted"}">${r.exitReason || "-"}</td>
-        </tr>
-      `).join("");
-    }
-
-    function updateEngineMetrics() {
-      tradesEl.textContent = rows.length;
-      if (rows.length > 0) {
-        const totalR = rows.reduce((acc, r) => acc + (r.realizedR || 0), 0);
-        lossEl.textContent = totalR.toFixed(2) + 'R';
-        lossEl.className = 'value ' + (totalR > 0 ? 'good' : 'bad');
-      }
-    }
-
-    connect();
-    setInterval(fetchMarketData, 5000); // Refresh every 5 seconds
-  </script>
+  }
+  function connectSocket() {
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${protocol}://${location.host}/ws`);
+    ws.onopen = () => { $('socket').textContent = 'Socket connected'; cls($('socket'), 'good'); };
+    ws.onerror = () => { $('socket').textContent = 'Socket error'; cls($('socket'), 'bad'); };
+    ws.onclose = () => {
+      $('socket').textContent = 'Socket reconnecting';
+      cls($('socket'), 'bad');
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectSocket, 1500);
+    };
+    ws.onmessage = event => {
+      try {
+        const message = JSON.parse(event.data);
+        const payload = message.eventType && message.payload ? message.payload : message;
+        if (message.eventType && message.eventType !== 'trade') return;
+        if (!payload || !payload.id) return;
+        rows.unshift(payload);
+        if (rows.length > 50) rows.pop();
+        renderRows();
+      } catch (ignored) {}
+    };
+  }
+  function renderRows() {
+    $('rows').innerHTML = rows.length ? rows.map(r => `<tr><td>${r.signalTime || '--'}</td><td>${r.direction || '--'}</td><td>${fmt(r.expectedEntry)}</td><td>${fmt(r.actualEntry)}</td><td>${fmt(r.latencySec)}</td><td>${fmt(r.slippage)}</td><td>${fmt(r.mfe)}</td><td>${fmt(r.mae)}</td><td>${fmt(r.realizedR)}R</td><td>${r.exitReason || '--'}</td></tr>`).join('') : '<tr><td colspan="10" class="empty">Awaiting trades...</td></tr>';
+  }
+  tickClock();
+  refreshLiveData();
+  connectSocket();
+  setInterval(tickClock, 1000);
+  setInterval(refreshLiveData, 1000);
+</script>
 </body>
 </html>

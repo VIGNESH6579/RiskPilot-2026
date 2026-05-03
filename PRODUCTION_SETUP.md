@@ -22,6 +22,7 @@ ANGEL_CLIENT_ID=your_client_id
 ANGEL_PIN=your_pin
 ANGEL_TOTP_SECRET=your_totp_secret
 ANGEL_CLIENT_PUBLIC_IP=your_broker_registered_public_ip
+ANGEL_INDIA_VIX_TOKEN=your_angel_india_vix_token_optional
 RISKPILOT_NTFY_TOPIC=riskpilot-live-signals
 OBSERVER_PORT=8765
 OBSERVER_HOST=127.0.0.1
@@ -45,6 +46,8 @@ JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
    - **TOTP Secret** → `ANGEL_TOTP_SECRET` 
 
 Also add the public IP registered with Angel One as `ANGEL_CLIENT_PUBLIC_IP`. Do not rely on runtime IP discovery in production.
+
+If you want live India VIX gating from Angel One, set `ANGEL_INDIA_VIX_TOKEN` to the Angel token for India VIX. If it is not set, RiskPilot uses `RISK_VIX_FALLBACK` without calling an external market-data fallback.
 
 ### In Render Dashboard:
 - Paste each credential into corresponding environment variable

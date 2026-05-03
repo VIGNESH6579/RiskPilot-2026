@@ -35,14 +35,21 @@ public class AngelOneMarketDataService {
     }
 
     public Optional<Double> getNiftyLtp() {
+        return getLtp("NSE", NIFTY_INDEX_TOKEN);
+    }
+
+    public Optional<Double> getLtp(String exchange, String token) {
         try {
+            if (exchange == null || exchange.isBlank() || token == null || token.isBlank()) {
+                return Optional.empty();
+            }
             if (!ensureAuth()) {
                 return Optional.empty();
             }
             String jwt = authService.getJwtToken();
             if (jwt == null || jwt.isBlank()) return Optional.empty();
 
-            Optional<Double> firstTry = fetchLtpWithJwt(jwt);
+            Optional<Double> firstTry = fetchLtpWithJwt(jwt, exchange, token);
             if (firstTry.isPresent()) {
                 return firstTry;
             }
@@ -55,7 +62,7 @@ public class AngelOneMarketDataService {
             if (refreshedJwt == null || refreshedJwt.isBlank()) {
                 return Optional.empty();
             }
-            return fetchLtpWithJwt(refreshedJwt);
+            return fetchLtpWithJwt(refreshedJwt, exchange, token);
         } catch (HttpStatusCodeException e) {
             if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {
                 log.warn("Angel quote unauthorized: {}", e.getStatusCode());
@@ -94,11 +101,11 @@ public class AngelOneMarketDataService {
         return true;
     }
 
-    private Optional<Double> fetchLtpWithJwt(String jwt) throws Exception {
+    private Optional<Double> fetchLtpWithJwt(String jwt, String exchange, String token) throws Exception {
         HttpHeaders headers = baseHeaders(jwt);
         Map<String, Object> payload = Map.of(
             "mode", "LTP",
-            "exchangeTokens", Map.of("NSE", List.of(NIFTY_INDEX_TOKEN))
+            "exchangeTokens", Map.of(exchange, List.of(token))
         );
 
         ResponseEntity<String> response =
