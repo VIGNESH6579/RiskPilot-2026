@@ -10,11 +10,14 @@ import org.slf4j.LoggerFactory;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 @RestController
 @RequestMapping("/api/v1/engine")
 public class EngineController {
     private static final Logger logger = LoggerFactory.getLogger(EngineController.class);
+    private final AtomicLong sequenceCounter = new AtomicLong(0);
+    private LocalDateTime lastCandleSlot = null;
 
     @Autowired
     private ShadowExecutionEngine shadowExecutionEngine;
@@ -35,8 +38,21 @@ public class EngineController {
     public Map<String, Object> sendTestTick(@RequestParam double price) {
         try {
             logger.info("📍 TEST TICK: {}", price);
-            candleAggregator.processTick(LocalDateTime.now(), price, 1000);
+            LocalDateTime receivedAt = LocalDateTime.now();
+            candleAggregator.processTick(
+                receivedAt,
+                price,
+                1000,
+                sequenceCounter.incrementAndGet(),
+                receivedAt
+            );
             shadowExecutionEngine.evaluateTick(price);
+            int candleMinute = (receivedAt.getMinute() / 5) * 5;
+            LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
+            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+                shadowExecutionEngine.evaluateCandleClose();
+            }
+            lastCandleSlot = currentSlot;
             
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "SUCCESS");

@@ -10,9 +10,12 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 
 /**
@@ -40,7 +43,13 @@ public class LiveMetricsLogger {
         try {
             File csv = new File(CSV_PATH);
             boolean exists = csv.exists() && csv.length() > 0;
-            bufferedWriter = new BufferedWriter(new FileWriter(CSV_PATH, true));
+            bufferedWriter = Files.newBufferedWriter(
+                Path.of(CSV_PATH),
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND,
+                StandardOpenOption.SYNC
+            );
             csvWriter = new PrintWriter(bufferedWriter);
             if (!exists) {
                 csvWriter.println(CSV_HEADER);
@@ -161,9 +170,15 @@ public class LiveMetricsLogger {
                 csvWriter.flush();
             } else {
                 // Fallback to file-per-write if writer failed to initialize
-                try (FileWriter fw = new FileWriter(CSV_PATH, true);
-                     PrintWriter pw = new PrintWriter(fw)) {
-                    pw.println(row);
+                try {
+                    Files.writeString(
+                        Path.of(CSV_PATH),
+                        row + System.lineSeparator(),
+                        StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.APPEND,
+                        StandardOpenOption.SYNC
+                    );
                 } catch (IOException e) {
                     log.error("CRITICAL: FAILED TO WRITE TO PERSISTENT CSV", e);
                 }

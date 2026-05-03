@@ -15,10 +15,13 @@ import java.util.List;
 @Slf4j
 @Component
 public class KillSwitchEngine {
+    private static final long KILL_SWITCH_CACHE_TTL_MS = 2_000L;
 
     // BUG-025: Configurable kill-switch path
     @Value("${KILL_SWITCH_PATH:KILL_SWITCH.flag}")
     private String killSwitchPath;
+    private volatile long lastKillSwitchCheckMs = 0L;
+    private volatile boolean cachedKillSwitchTriggered = false;
 
     private Path getKillPath() {
         return Paths.get(killSwitchPath);
@@ -65,6 +68,23 @@ public class KillSwitchEngine {
      * BUG-025: Uses configurable path from KILL_SWITCH_PATH env var.
      */
     public boolean isKillSwitchTriggered() {
+        long now = System.currentTimeMillis();
+        if (now - lastKillSwitchCheckMs < KILL_SWITCH_CACHE_TTL_MS) {
+            return cachedKillSwitchTriggered;
+        }
+
+        synchronized (this) {
+            now = System.currentTimeMillis();
+            if (now - lastKillSwitchCheckMs < KILL_SWITCH_CACHE_TTL_MS) {
+                return cachedKillSwitchTriggered;
+            }
+            cachedKillSwitchTriggered = readKillSwitchFile();
+            lastKillSwitchCheckMs = now;
+            return cachedKillSwitchTriggered;
+        }
+    }
+
+    private boolean readKillSwitchFile() {
         Path killPath = getKillPath();
         if (Files.exists(killPath)) {
             try {
@@ -104,6 +124,8 @@ public class KillSwitchEngine {
     public void clearKillSwitch() {
         try {
             Files.deleteIfExists(getKillPath());
+            cachedKillSwitchTriggered = false;
+            lastKillSwitchCheckMs = System.currentTimeMillis();
             log.info("✅ Kill-switch cleared - system can restart");
         } catch (Exception e) {
             log.error("Failed to clear kill-switch: {}", e.getMessage());
@@ -178,6 +200,8 @@ public class KillSwitchEngine {
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING,
                 StandardOpenOption.SYNC);
+            cachedKillSwitchTriggered = true;
+            lastKillSwitchCheckMs = System.currentTimeMillis();
             log.error("🚨 KILL SWITCH WRITTEN - System will halt");
         } catch (Exception e) {
             log.error("Failed to write kill-switch file: {}", e.getMessage());

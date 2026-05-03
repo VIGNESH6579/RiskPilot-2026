@@ -88,7 +88,7 @@ public class OptionChainService {
         this.mapper = new ObjectMapper();
     }
 
-    public OptionChainSnapshot fetchNiftyChain() {
+    public synchronized OptionChainSnapshot fetchNiftyChain() {
         // NSE India permanently blocked from cloud IPs (Akamai WAF — 403/timeout).
         // Primary: Yahoo Finance ^NSEI  |  Fallback: Angel One LTP  |  Last: cache.
         boolean marketOpen = isMarketOpenNow();

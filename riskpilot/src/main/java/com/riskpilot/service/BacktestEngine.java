@@ -146,6 +146,7 @@ public class BacktestEngine {
             if (tradesToday >= 2) continue;
             if (lastTradeTime != null && Duration.between(lastTradeTime, candleTime).toMinutes() < 15) continue;
 
+            if (history.size() < 20) continue;
             Signal signal = generateSignal(c);
             if (signal == null) continue;
 
@@ -181,6 +182,7 @@ public class BacktestEngine {
     private void forceCloseRemaining(Candle c, double slippageExit) {
         if (!activeTrade.active) return;
         
+        // SHORT buy-back exit: positive slippage means a worse fill above the observed close.
         double exitPrice = c.close + slippageExit; 
         double distanceCaptured = (activeTrade.entry - exitPrice);
         
@@ -195,6 +197,7 @@ public class BacktestEngine {
         double mae = activeTrade.maxHighEx - activeTrade.entry;
 
         if (!activeTrade.earlyKillTriggered && activeTrade.candlesElapsed <= 2 && mae > earlyKillMaeLimit) {
+            // SHORT buy-back exit: positive slippage means a worse fill above the observed close.
             double exitPrice = c.close + slippageExit; 
             double distanceCaptured = activeTrade.entry - exitPrice;
             

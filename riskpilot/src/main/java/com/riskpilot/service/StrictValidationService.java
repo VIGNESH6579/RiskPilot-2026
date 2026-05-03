@@ -4,11 +4,13 @@ import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.exception.TradingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -17,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class StrictValidationService {
 
     private final RiskPilotProperties properties;
+    private final Environment environment;
     private final AtomicInteger dailyTradeCount = new AtomicInteger(0);
     private final AtomicInteger consecutiveLosses = new AtomicInteger(0);
     private volatile double dailyLossR = 0.0;
@@ -28,6 +31,11 @@ public class StrictValidationService {
 
     @PostConstruct
     public void validate() {
+        boolean productionProfile = isProductionProfile();
+        if (!productionProfile) {
+            log.warn("STRICT_STARTUP_REALTIME_CHECKS_SKIPPED: active profile is non-production");
+            return;
+        }
         log.info("🔒 STRICT VALIDATION STARTUP");
         
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
@@ -60,6 +68,11 @@ public class StrictValidationService {
         }
         
         log.info("✅ STRICT VALIDATION PASSED - REAL-TIME ONLY MODE");
+    }
+
+    private boolean isProductionProfile() {
+        return Arrays.stream(environment.getActiveProfiles())
+            .anyMatch(profile -> "prod".equalsIgnoreCase(profile) || "production".equalsIgnoreCase(profile));
     }
 
     public void validateTradingParameters() {

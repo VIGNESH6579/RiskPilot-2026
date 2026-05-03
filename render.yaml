@@ -16,6 +16,16 @@ services:
         value: "-Xms256m -Xmx512m"
       - key: SPRING_PROFILES_ACTIVE
         value: prod
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_ID
+        sync: false
+      - key: ANGEL_PIN
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      - key: ANGEL_CLIENT_PUBLIC_IP
+        sync: false
     
     # Health check configuration
     healthCheckPath: /actuator/health

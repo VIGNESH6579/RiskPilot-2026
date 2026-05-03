@@ -94,7 +94,13 @@ public class RegimeConfidenceEngine {
      * Bad OR = fake breakouts = trap failure
      */
     private int scoreORRange(TradingSessionSnapshot state) {
-        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        if (!Double.isFinite(state.orHigh()) || !Double.isFinite(state.orLow())) {
+            return 0;
+        }
+        double orRange = state.orHigh() - state.orLow();
+        if (!Double.isFinite(orRange) || orRange <= 0.0) {
+            return 0;
+        }
         
         if (orRange < 90) return 0;
         if (orRange < 120) return 10;

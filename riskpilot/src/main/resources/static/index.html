@@ -460,7 +460,11 @@
 
       ws.onmessage = (event) => {
         try {
-          const payload = JSON.parse(event.data);
+          const message = JSON.parse(event.data);
+          const payload = message.eventType && message.payload ? message.payload : message;
+          if (message.eventType && message.eventType !== "trade") {
+            return;
+          }
           rows.unshift(payload);
           if (rows.length > MAX_ROWS) rows.pop();
           renderTable();

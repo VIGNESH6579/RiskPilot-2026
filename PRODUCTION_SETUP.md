@@ -21,6 +21,7 @@ ANGEL_API_KEY=your_api_key_from_angel_one
 ANGEL_CLIENT_ID=your_client_id
 ANGEL_PIN=your_pin
 ANGEL_TOTP_SECRET=your_totp_secret
+ANGEL_CLIENT_PUBLIC_IP=your_broker_registered_public_ip
 RISKPILOT_NTFY_TOPIC=riskpilot-live-signals
 OBSERVER_PORT=8765
 OBSERVER_HOST=127.0.0.1
@@ -42,6 +43,8 @@ JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
    - **Client ID** → `ANGEL_CLIENT_ID` 
    - **PIN** → `ANGEL_PIN` 
    - **TOTP Secret** → `ANGEL_TOTP_SECRET` 
+
+Also add the public IP registered with Angel One as `ANGEL_CLIENT_PUBLIC_IP`. Do not rely on runtime IP discovery in production.
 
 ### In Render Dashboard:
 - Paste each credential into corresponding environment variable

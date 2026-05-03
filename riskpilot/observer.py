@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import csv
 import json
 import logging
@@ -207,8 +208,6 @@ async def cleanup_background_tasks(app):
     with contextlib.suppress(asyncio.CancelledError):
         await app["csv_listener"]
 
-
-import contextlib
 
 app = web.Application()
 app.router.add_get("/", frontend_handler)

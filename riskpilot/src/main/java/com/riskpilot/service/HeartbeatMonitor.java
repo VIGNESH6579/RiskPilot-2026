@@ -54,6 +54,7 @@ public class HeartbeatMonitor {
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
         if (!marketSessionService.isMarketOpen()) {
+            TradingSessionSnapshot snapshotBeforeClose = stateManager.getSnapshot();
             stateManager.update(current -> new TradingSessionSnapshot(
                 false,
                 current.regime(),
@@ -70,8 +71,8 @@ public class HeartbeatMonitor {
                 current.activeTradeReference(),
                 "AWAITING_MARKET_OPEN"
             ));
-            previousFeedStable = true;
-            previousHeartbeatAlive = true;
+            previousFeedStable = snapshotBeforeClose.feedStable();
+            previousHeartbeatAlive = snapshotBeforeClose.heartbeatAlive();
             previousLastRejectReason = "AWAITING_MARKET_OPEN";
             return;
         }

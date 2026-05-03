@@ -67,6 +67,21 @@ public class ShadowExecutionEngine {
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
 
+    private record ClosedTradeBroadcast(
+        LocalDateTime signalTime,
+        double expectedEntry,
+        double expectedExit,
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double realizedR,
+        double entrySlippage,
+        double runnerSlippage,
+        Regime stateRegime,
+        TimePhase stateTimePhase,
+        boolean stateFeedStable,
+        AdaptiveRegimeEngine.SessionFeatures sessionFeatures
+    ) {}
+
     public synchronized void evaluateTick(double currentPrice) {
         log.debug("Processing tick: {}", currentPrice);
 
@@ -385,29 +400,87 @@ public class ShadowExecutionEngine {
         MDC.put("correlationId", UUID.randomUUID().toString().substring(0, 8));
         MDC.put("entry", String.valueOf(trade.entryPrice()));
 
+        ClosedTradeBroadcast postCommitBroadcast = null;
         try {
-            transactionTemplate.execute(status -> {
-                executeCloseTradeInternal(trade, exit);
-                return null;
-            });
+            postCommitBroadcast = transactionTemplate.execute(status -> executeCloseTradeInternal(trade, exit));
         } finally {
             MDC.clear();
         }
+
+        if (postCommitBroadcast != null) {
+            try {
+                edgeTracker.addTradeResult(
+                    postCommitBroadcast.realizedR(),
+                    postCommitBroadcast.trade().tp1Hit(),
+                    postCommitBroadcast.trade().runnerActive(),
+                    postCommitBroadcast.entrySlippage(),
+                    postCommitBroadcast.runnerSlippage()
+                );
+                adaptiveRegimeEngine.addTradeResult(
+                    postCommitBroadcast.realizedR(),
+                    postCommitBroadcast.trade().tp1Hit(),
+                    postCommitBroadcast.trade().runnerActive(),
+                    postCommitBroadcast.entrySlippage(),
+                    postCommitBroadcast.runnerSlippage(),
+                    postCommitBroadcast.sessionFeatures()
+                );
+            } catch (Exception e) {
+                log.error("POST_COMMIT_EDGE_UPDATE_FAILED: {}", e.getMessage(), e);
+            }
+            try {
+                liveMetricsLogger.logShadowExecution(
+                    postCommitBroadcast.signalTime(),
+                    LocalDateTime.now(),
+                    postCommitBroadcast.expectedEntry(),
+                    postCommitBroadcast.trade().entryPrice(),
+                    postCommitBroadcast.expectedExit(),
+                    postCommitBroadcast.exit().exitPrice(),
+                    postCommitBroadcast.trade().tp1Hit(),
+                    postCommitBroadcast.trade().runnerActive(),
+                    postCommitBroadcast.trade().mfe(),
+                    postCommitBroadcast.trade().mae(),
+                    postCommitBroadcast.realizedR(),
+                    "ALLOW",
+                    "",
+                    postCommitBroadcast.stateRegime(),
+                    postCommitBroadcast.stateTimePhase(),
+                    postCommitBroadcast.stateFeedStable(),
+                    postCommitBroadcast.exit().reason(),
+                    LocalDateTime.now()
+                );
+            } catch (Exception e) {
+                log.error("POST_COMMIT_METRICS_LOG_FAILED: {}", e.getMessage(), e);
+            }
+            activeSignalTime = null;
+            activeExpectedEntry = 0.0;
+            try {
+                broadcastTradeData(
+                    postCommitBroadcast.signalTime(),
+                    postCommitBroadcast.expectedEntry(),
+                    postCommitBroadcast.trade(),
+                    postCommitBroadcast.exit(),
+                    postCommitBroadcast.realizedR()
+                );
+                broadcastCurrentSessionState();
+            } catch (Exception e) {
+                log.error("POST_COMMIT_BROADCAST_FAILED: {}", e.getMessage(), e);
+            }
+        }
     }
 
-    private void executeCloseTradeInternal(ActiveTradeExecution trade, TradeExit exit) {
+    private ClosedTradeBroadcast executeCloseTradeInternal(ActiveTradeExecution trade, TradeExit exit) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (state.activeTradeReference() == null || activeSignalTime == null) {
-            return;
+            return null;
         }
 
+        LocalDateTime signalTime = activeSignalTime;
+        double expectedEntry = activeExpectedEntry;
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double riskPts = Math.max(0.0001, trade.initialRiskPoints());
         double realizedR = exit.pnlPoints() / riskPts;
-        double entrySlippage = Math.abs(trade.entryPrice() - activeExpectedEntry);
+        double entrySlippage = Math.abs(trade.entryPrice() - expectedEntry);
         double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - expectedExit) : 0.0;
-
-        edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(), entrySlippage, runnerSlippage);
 
         RegimeFilter.RegimeMetrics currentRegime = regimeFilter.getCurrentRegime();
         AdaptiveRegimeEngine.SessionFeatures sessionFeatures = currentRegime != null
@@ -418,38 +491,6 @@ public class ShadowExecutionEngine {
                 currentRegime.getBreakoutHoldRate(),
                 currentRegime.getRegimeScore())
             : new AdaptiveRegimeEngine.SessionFeatures(0.0, 0.0, 0.0, 0.0, 0);
-
-        adaptiveRegimeEngine.addTradeResult(
-            realizedR,
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            entrySlippage,
-            runnerSlippage,
-            sessionFeatures
-        );
-
-        liveMetricsLogger.logShadowExecution(
-            activeSignalTime,
-            LocalDateTime.now(),
-            activeExpectedEntry,
-            trade.entryPrice(),
-            expectedExit,
-            exit.exitPrice(),
-            trade.tp1Hit(),
-            trade.runnerActive(),
-            trade.mfe(),
-            trade.mae(),
-            realizedR,
-            "ALLOW",
-            "",
-            state.regime(),
-            state.timePhase(),
-            state.feedStable(),
-            exit.reason(),
-            LocalDateTime.now()
-        );
-
-        broadcastTradeData(activeSignalTime, trade, exit, realizedR);
 
         boolean firstTradeFailure = state.tradesTaken() == 1 && !trade.tp1Hit() && trade.mae() < -80.0 && realizedR <= -1.0;
         if (firstTradeFailure) {
@@ -474,7 +515,20 @@ public class ShadowExecutionEngine {
             null,
             firstTradeFailure ? "FIRST_TRADE_FAILURE_DAY_BLOCK" : "ALLOW"
         ));
-        broadcastCurrentSessionState();
+        return new ClosedTradeBroadcast(
+            signalTime,
+            expectedEntry,
+            expectedExit,
+            trade,
+            exit,
+            realizedR,
+            entrySlippage,
+            runnerSlippage,
+            state.regime(),
+            state.timePhase(),
+            state.feedStable(),
+            sessionFeatures
+        );
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -578,16 +632,22 @@ public class ShadowExecutionEngine {
         webSocketService.sendSessionState(payload);
     }
 
-    private void broadcastTradeData(LocalDateTime signalTime, ActiveTradeExecution trade, TradeExit exit, double realizedR) {
+    private void broadcastTradeData(
+        LocalDateTime signalTime,
+        double expectedEntry,
+        ActiveTradeExecution trade,
+        TradeExit exit,
+        double realizedR
+    ) {
         try {
             Map<String, Object> tradeData = new LinkedHashMap<>();
             tradeData.put("id", signalTime + "_" + trade.entryPrice());
             tradeData.put("signalTime", signalTime.toString());
             tradeData.put("executeTime", LocalDateTime.now().toString());
             tradeData.put("latencySec", java.time.Duration.between(signalTime, LocalDateTime.now()).toMillis() / 1000.0);
-            tradeData.put("expectedEntry", activeExpectedEntry);
+            tradeData.put("expectedEntry", expectedEntry);
             tradeData.put("actualEntry", trade.entryPrice());
-            tradeData.put("slippage", trade.entryPrice() - activeExpectedEntry);
+            tradeData.put("slippage", trade.entryPrice() - expectedEntry);
             tradeData.put("mfe", trade.mfe());
             tradeData.put("mae", trade.mae());
             tradeData.put("realizedR", realizedR);

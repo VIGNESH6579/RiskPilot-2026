@@ -15,13 +15,12 @@ public class SessionStateManager {
         return currentSnapshot.get();
     }
 
-    public synchronized TradingSessionSnapshot update(UnaryOperator<TradingSessionSnapshot> updater) {
-        TradingSessionSnapshot updated = updater.apply(currentSnapshot.get());
-        currentSnapshot.set(updated);
-        return updated;
+    public TradingSessionSnapshot update(UnaryOperator<TradingSessionSnapshot> updater) {
+        // Snapshots are immutable records; AtomicReference provides visibility and atomic swaps.
+        return currentSnapshot.updateAndGet(updater);
     }
 
-    public synchronized void resetDaily() {
+    public void resetDaily() {
         currentSnapshot.set(TradingSessionSnapshot.initial());
     }
 }

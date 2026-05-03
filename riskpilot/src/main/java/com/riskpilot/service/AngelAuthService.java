@@ -60,6 +60,7 @@ public class AngelAuthService {
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
+    private volatile String cachedPublicIp;
 
     public synchronized boolean authenticate() {
         if (!hasCredentials()) {
@@ -159,15 +160,21 @@ public class AngelAuthService {
         if (configuredPublicIp != null && !configuredPublicIp.isBlank()) {
             return configuredPublicIp.trim();
         }
+        if (cachedPublicIp != null && !cachedPublicIp.isBlank()) {
+            return cachedPublicIp;
+        }
         // Best-effort fallback; keep request valid even if lookup fails.
         try {
             String ip = restTemplate.getForObject("https://api.ipify.org", String.class);
             if (ip != null && !ip.isBlank()) {
-                return ip.trim();
+                cachedPublicIp = ip.trim();
+                return cachedPublicIp;
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.warn("ANGEL_CLIENT_PUBLIC_IP not set and public IP discovery failed: {}", e.getMessage());
         }
-        return resolveLocalIp();
+        cachedPublicIp = resolveLocalIp();
+        return cachedPublicIp;
     }
 
     /**

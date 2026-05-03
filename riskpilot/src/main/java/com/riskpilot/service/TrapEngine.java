@@ -75,6 +75,8 @@ public class TrapEngine {
             return null;
         }
 
+        double effectiveAtr = Double.isFinite(atr) && atr > 0.0 ? atr : 25.0;
+
         Candle t0 = history.get(history.size() - 1); 
         Candle t1 = history.get(history.size() - 2); 
 
@@ -95,7 +97,7 @@ public class TrapEngine {
         
         // BUG-019: Breakout depth using ATR multiplier instead of fixed 6.0 points
         double breakoutDepth = t1.high - localResistance;
-        double minBreakoutDepth = atr * BREAKOUT_DEPTH_ATR_MULTIPLIER;
+        double minBreakoutDepth = effectiveAtr * BREAKOUT_DEPTH_ATR_MULTIPLIER;
         if (breakoutDepth < minBreakoutDepth) {
             return null;
         }
@@ -107,13 +109,13 @@ public class TrapEngine {
                 double entry = t0.close;
                 
                 // BUG-019: SL and target using ATR instead of fixed values
-                double sl = t1.high + (atr * 0.30);  // ~30% of ATR buffer
-                double tp1 = entry - (atr * 0.60);   // 60% of ATR target (2:1 RR)
+                double sl = t1.high + (effectiveAtr * 0.30);  // ~30% of ATR buffer
+                double tp1 = entry - (effectiveAtr * 0.60);   // 60% of ATR target (2:1 RR)
                 
                 double distanceToSL = Math.abs(sl - entry);
 
                 // BUG-019: Risk normalization using ATR multiplier
-                double maxRiskDistance = atr * MAX_RISK_ATR_MULTIPLIER;
+                double maxRiskDistance = effectiveAtr * MAX_RISK_ATR_MULTIPLIER;
                 if (distanceToSL > maxRiskDistance) return null;
 
                 Signal s = new Signal();

@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class LiveTickController {
     private static final Logger logger = LoggerFactory.getLogger(LiveTickController.class);
     private final AtomicLong sequenceCounter = new AtomicLong(0);
+    private LocalDateTime lastCandleSlot = null;
 
     @Autowired
     private ShadowExecutionEngine shadowExecutionEngine;
@@ -42,6 +43,7 @@ public class LiveTickController {
             LocalDateTime tickTime = request.getTimestamp() != null 
                 ? LocalDateTime.parse(request.getTimestamp())
                 : LocalDateTime.now();
+            LocalDateTime receivedAt = tickTime;
 
             // Step 1: Update candles
             candleAggregator.processTick(
@@ -49,11 +51,17 @@ public class LiveTickController {
                 request.getPrice(),
                 request.getVolume(),
                 sequenceCounter.incrementAndGet(),
-                LocalDateTime.now()
+                receivedAt
             );
             
             // Step 2: Evaluate in engine (THIS IS THE FIX!)
             shadowExecutionEngine.evaluateTick(request.getPrice());
+            int candleMinute = (tickTime.getMinute() / 5) * 5;
+            LocalDateTime currentSlot = tickTime.withMinute(candleMinute).withSecond(0).withNano(0);
+            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+                shadowExecutionEngine.evaluateCandleClose();
+            }
+            lastCandleSlot = currentSlot;
             
             // Step 3: Return state
             return getEngineState();
