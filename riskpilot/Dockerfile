@@ -15,10 +15,10 @@ FROM eclipse-temurin:17-jre-jammy
 
 # Install Python and observer libraries.
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
+    apt-get install -y --no-install-recommends python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 COPY requirements-observer.txt /tmp/requirements-observer.txt
-RUN pip3 install -r /tmp/requirements-observer.txt --break-system-packages
+RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir -r /tmp/requirements-observer.txt
 
 ENV LIVE_OBSERVER_VERSION="2026.4.19"
 ENV TZ="Asia/Kolkata"
