@@ -25,6 +25,8 @@ public class OptionChainService {
     private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final String CACHE_FILE = "option_chain_cache.json";
+    private static final long ANGEL_QUOTE_CACHE_MS = 1_000L;
+    private static final long ANGEL_WARNING_INTERVAL_MS = 60_000L;
     private static final DateTimeFormatter NSE_EXPIRY_FORMAT =
         DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);
 
@@ -34,7 +36,8 @@ public class OptionChainService {
     private final String explicitExpiryOverride;
 
     private volatile OptionChainSnapshot lastKnownSnapshot =
-        new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "ANGELONE_UNAVAILABLE", 0L, false);
+        new OptionChainSnapshot(0, 0, 0.0, "", 0.0, "MARKET_CLOSED_NO_CACHE", 0L, false);
+    private long lastAngelWarningEpochMs = 0L;
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
@@ -47,11 +50,18 @@ public class OptionChainService {
     }
 
     public synchronized OptionChainSnapshot fetchNiftyChain() {
-        if (isMarketOpenNow()) {
-            Optional<OptionChainSnapshot> live = fetchFromAngelLive();
-            if (live.isPresent()) {
-                return live.get();
-            }
+        boolean marketOpen = isMarketOpenNow();
+        OptionChainSnapshot recent = recentAngelSnapshot(marketOpen);
+        if (recent != null) {
+            return recent;
+        }
+
+        Optional<OptionChainSnapshot> quote = fetchFromAngelQuote(marketOpen);
+        if (quote.isPresent()) {
+            return quote.get();
+        }
+
+        if (marketOpen) {
             return unavailableLiveSnapshot();
         }
 
@@ -71,7 +81,7 @@ public class OptionChainService {
             return closed;
         }
 
-        return unavailableLiveSnapshot();
+        return closedMarketNoCacheSnapshot();
     }
 
     public OptionChainSnapshot getLastKnownSnapshot() {
@@ -87,11 +97,26 @@ public class OptionChainService {
         return isMarketOpenNow();
     }
 
-    private Optional<OptionChainSnapshot> fetchFromAngelLive() {
+    private OptionChainSnapshot recentAngelSnapshot(boolean marketOpen) {
+        OptionChainSnapshot current = lastKnownSnapshot;
+        if (current.spot() <= 0.0) {
+            return null;
+        }
+        if (current.live() != marketOpen) {
+            return null;
+        }
+        if (!current.source().startsWith("ANGELONE_LTP")) {
+            return null;
+        }
+        long ageMs = System.currentTimeMillis() - current.updatedEpochMs();
+        return ageMs >= 0L && ageMs < ANGEL_QUOTE_CACHE_MS ? current : null;
+    }
+
+    private Optional<OptionChainSnapshot> fetchFromAngelQuote(boolean marketOpen) {
         try {
             Optional<Double> ltpOpt = angelOneMarketDataService.getNiftyLtp();
             if (ltpOpt.isEmpty() || ltpOpt.get() <= 0.0) {
-                log.warn("ANGELONE_LTP_UNAVAILABLE: no live NIFTY price returned");
+                warnAngel("ANGELONE_LTP_UNAVAILABLE: no NIFTY price returned from Angel One");
                 return Optional.empty();
             }
 
@@ -109,22 +134,30 @@ public class OptionChainService {
                 ltp,
                 resolveFallbackExpiry(),
                 prevClose,
-                "ANGELONE_LTP",
+                marketOpen ? "ANGELONE_LTP" : "ANGELONE_LTP_CLOSED",
                 System.currentTimeMillis(),
-                true
+                marketOpen
             );
             lastKnownSnapshot = snapshot;
             writeCache(snapshot);
             return Optional.of(snapshot);
         } catch (Exception e) {
-            log.warn("ANGELONE_LTP_FETCH_FAILED: {}", e.getMessage());
+            warnAngel("ANGELONE_LTP_FETCH_FAILED: " + e.getMessage());
             return Optional.empty();
+        }
+    }
+
+    private void warnAngel(String message) {
+        long now = System.currentTimeMillis();
+        if (now - lastAngelWarningEpochMs >= ANGEL_WARNING_INTERVAL_MS) {
+            log.warn(message);
+            lastAngelWarningEpochMs = now;
         }
     }
 
     private OptionChainSnapshot unavailableLiveSnapshot() {
         double prevClose = resolvePreviousClose(0.0);
-        return new OptionChainSnapshot(
+        OptionChainSnapshot unavailable = new OptionChainSnapshot(
             0,
             0,
             0.0,
@@ -134,6 +167,24 @@ public class OptionChainService {
             0L,
             false
         );
+        lastKnownSnapshot = unavailable;
+        return unavailable;
+    }
+
+    private OptionChainSnapshot closedMarketNoCacheSnapshot() {
+        double prevClose = resolvePreviousClose(0.0);
+        OptionChainSnapshot closed = new OptionChainSnapshot(
+            0,
+            0,
+            0.0,
+            resolveFallbackExpiry(),
+            prevClose,
+            "MARKET_CLOSED_NO_CACHE",
+            0L,
+            false
+        );
+        lastKnownSnapshot = closed;
+        return closed;
     }
 
     private double resolvePreviousClose(double fallback) {

@@ -189,24 +189,34 @@
         ]);
 
         const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
-        const live = health.healthy === true && health.optionChainSource === 'ANGELONE_LTP';
+        const live = health.marketDataStatus === 'LIVE'
+          && health.optionChainSource === 'ANGELONE_LTP'
+          && health.spot > 0;
+        const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
+        const freshnessText = live
+          ? `${ageSeconds}s old`
+          : (marketClosed
+            ? (ageSeconds === null ? 'market closed' : `closed, last quote ${ageSeconds}s old`)
+            : 'no live tick');
 
-        els.spot.textContent = fmt(health.spot);
+        els.spot.textContent = health.spot > 0 ? fmt(health.spot) : '--';
         els.vix.textContent = fmt(health.vix);
         els.expiry.textContent = health.expiry || '--';
         els.source.textContent = health.optionChainSource || 'UNKNOWN';
-        els.freshness.textContent = ageSeconds === null ? 'no live tick' : `${ageSeconds}s old`;
-        els.feedHealth.textContent = live ? 'Live Angel One' : 'Unavailable';
-        els.range.textContent = `${health.support ?? '--'} / ${health.resistance ?? '--'}`;
+        els.freshness.textContent = freshnessText;
+        els.feedHealth.textContent = live ? 'Live Angel One' : (marketClosed ? 'Market closed' : 'No live Angel tick');
+        els.range.textContent = health.spot > 0
+          ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
+          : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         els.regime.textContent = state.regime || '--';
         els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
         els.candles.textContent = candles.candleHistorySize ?? 0;
 
-        setClass(els.source, live ? 'good' : 'bad');
-        setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : 'bad');
-        setClass(els.feedHealth, live ? 'good' : 'bad');
+        setClass(els.source, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
+        setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
+        setClass(els.feedHealth, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
       } catch (error) {
         els.feedHealth.textContent = 'Market API down';
         setClass(els.feedHealth, 'bad');

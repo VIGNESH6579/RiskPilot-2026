@@ -26,6 +26,8 @@ services:
         sync: false
       - key: ANGEL_CLIENT_PUBLIC_IP
         sync: false
+      - key: ANGEL_INDIA_VIX_TOKEN
+        sync: false
     
     # Health check configuration
     healthCheckPath: /actuator/health

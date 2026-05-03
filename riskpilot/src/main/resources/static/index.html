@@ -83,17 +83,25 @@
         fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json()),
         fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json())
       ]);
-      const age = typeof health.ageMs === 'number' ? `${Math.round(health.ageMs / 1000)}s` : 'n/a';
-      const live = health.healthy === true && health.optionChainSource === 'ANGELONE_LTP';
-      $('spot').textContent = fmt(health.spot);
+      const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
+      const live = health.marketDataStatus === 'LIVE'
+        && health.optionChainSource === 'ANGELONE_LTP'
+        && health.spot > 0;
+      const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
+      const freshness = live
+        ? `${health.optionChainSource} | age ${ageSeconds}s`
+        : (marketClosed
+          ? `${health.optionChainSource || 'MARKET_CLOSED'} | market closed`
+          : `${health.optionChainSource || 'UNKNOWN'} | no live tick`);
+      $('spot').textContent = health.spot > 0 ? fmt(health.spot) : '--';
       $('vix').textContent = fmt(health.vix);
       $('expiry').textContent = health.expiry || '--';
-      $('freshness').textContent = `${health.optionChainSource || 'UNKNOWN'} | age ${age}`;
-      $('range').textContent = `${health.support ?? '--'} / ${health.resistance ?? '--'}`;
+      $('freshness').textContent = freshness;
+      $('range').textContent = health.spot > 0 ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
       $('orRange').textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
       $('regime').textContent = state.regime || '--';
       $('session').textContent = `${state.sessionActive ? 'Active' : 'Inactive'} | ${candles.candleHistorySize ?? 0}`;
-      cls($('freshness'), live && age !== 'n/a' ? 'good' : 'bad');
+      cls($('freshness'), live ? 'good' : (marketClosed ? 'warn' : 'bad'));
     } catch (e) {
       $('freshness').textContent = 'Market API down';
       cls($('freshness'), 'bad');

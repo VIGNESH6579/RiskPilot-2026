@@ -2,6 +2,7 @@ package com.riskpilot.controller;
 
 import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +31,9 @@ public class EngineController {
 
     @Autowired
     private SessionStateManager stateManager;
+
+    @Autowired
+    private OptionChainService optionChainService;
 
     @GetMapping("/health")
     public Map<String, Object> getHealth() {
@@ -73,12 +77,22 @@ public class EngineController {
     @GetMapping("/state")
     public Map<String, Object> getEngineState() {
         TradingSessionSnapshot snapshot = stateManager.getSnapshot();
+        OptionChainService.OptionChainSnapshot marketSnapshot = optionChainService.getLastKnownSnapshot();
+        boolean marketOpen = optionChainService.isMarketOpen();
+        boolean marketDataHealthy = !marketOpen || (marketSnapshot.live() && marketSnapshot.spot() > 0.0);
         Map<String, Object> state = new LinkedHashMap<>();
         state.put("sessionActive", snapshot.sessionActive());
-        state.put("feedHealthy", snapshot.feedStable() && !candleAggregator.isFeedUnstable());
+        state.put("feedHealthy", snapshot.feedStable() && !candleAggregator.isFeedUnstable() && marketDataHealthy);
         state.put("heartbeatAlive", snapshot.heartbeatAlive());
         state.put("tradeActive", snapshot.tradeActive());
         state.put("tradesTaken", snapshot.tradesTaken());
+        state.put("regime", snapshot.regime().name());
+        state.put("timePhase", snapshot.timePhase().name());
+        state.put("orHigh", Double.isFinite(snapshot.orHigh()) ? snapshot.orHigh() : null);
+        state.put("orLow", Double.isFinite(snapshot.orLow()) ? snapshot.orLow() : null);
+        state.put("marketOpen", marketOpen);
+        state.put("marketDataSource", marketSnapshot.source());
+        state.put("marketDataLive", marketSnapshot.live());
         state.put("lastRejectReason", snapshot.lastRejectReason());
         state.put("timestamp", LocalDateTime.now().toString());
         return state;

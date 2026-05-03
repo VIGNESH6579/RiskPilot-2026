@@ -11,6 +11,7 @@ import java.util.Optional;
 public class VixService {
     private static final Logger log = LoggerFactory.getLogger(VixService.class);
     private static final long VIX_CACHE_MS = 20_000L;
+    private static final long VIX_WARNING_INTERVAL_MS = 60_000L;
 
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final String indiaVixExchange;
@@ -19,6 +20,8 @@ public class VixService {
 
     private double lastKnownVix;
     private long lastSuccessfulFetchEpochMs = 0L;
+    private long lastUnavailableWarningEpochMs = 0L;
+    private boolean missingTokenWarned = false;
 
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,
@@ -40,7 +43,10 @@ public class VixService {
         }
 
         if (indiaVixToken.isBlank()) {
-            log.warn("ANGEL_INDIA_VIX_TOKEN_MISSING: using configured fallback VIX={}", fallbackVix);
+            if (!missingTokenWarned) {
+                log.warn("ANGEL_INDIA_VIX_TOKEN_MISSING: using configured fallback VIX={}", fallbackVix);
+                missingTokenWarned = true;
+            }
             return fallbackVix;
         }
 
@@ -51,7 +57,15 @@ public class VixService {
             return lastKnownVix;
         }
 
-        log.warn("ANGEL_INDIA_VIX_UNAVAILABLE: returning last known VIX={}", lastKnownVix);
+        warnUnavailable();
         return lastKnownVix;
+    }
+
+    private void warnUnavailable() {
+        long now = System.currentTimeMillis();
+        if (now - lastUnavailableWarningEpochMs >= VIX_WARNING_INTERVAL_MS) {
+            log.warn("ANGEL_INDIA_VIX_UNAVAILABLE: returning last known VIX={}", lastKnownVix);
+            lastUnavailableWarningEpochMs = now;
+        }
     }
 }

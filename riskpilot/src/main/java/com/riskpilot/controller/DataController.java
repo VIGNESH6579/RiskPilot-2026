@@ -42,6 +42,9 @@ public class DataController {
     @GetMapping("/health")
     public Map<String, Object> health() {
         OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
+        boolean marketOpen = optionChainService.isMarketOpen();
+        boolean live = chain.live() && chain.spot() > 0.0;
+        String marketDataStatus = live ? "LIVE" : (marketOpen ? "UNAVAILABLE" : "MARKET_CLOSED");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("optionChainSource", chain.source());
         payload.put("spot", chain.spot());
@@ -50,11 +53,13 @@ public class DataController {
         payload.put("support", chain.support());
         payload.put("resistance", chain.resistance());
         payload.put("live", chain.live());
-        payload.put("marketOpen", optionChainService.isMarketOpen());
+        payload.put("marketOpen", marketOpen);
+        payload.put("marketDataStatus", marketDataStatus);
+        payload.put("marketDataHealthy", live || !marketOpen);
         payload.put("updatedEpochMs", chain.updatedEpochMs());
         payload.put("ageMs", chain.updatedEpochMs() > 0L ? System.currentTimeMillis() - chain.updatedEpochMs() : null);
         payload.put("vix", vixService.getIndiaVix());
-        payload.put("healthy", chain.live() && chain.spot() > 0.0);
+        payload.put("healthy", live || !marketOpen);
         return payload;
     }
 
