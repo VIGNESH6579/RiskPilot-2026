@@ -15,6 +15,7 @@ public record TradingSessionSnapshot(
     double orHigh,
     double orLow,
     double cumulativeDailyLossR,
+    int consecutiveLosses,
     ActiveTradeExecution activeTradeReference,
     String lastRejectReason
 ) {
@@ -31,6 +32,7 @@ public record TradingSessionSnapshot(
             Double.NEGATIVE_INFINITY,
             Double.POSITIVE_INFINITY,
             0.0,
+            0,
             null,
             "INITIALIZED"
         );
@@ -47,7 +49,7 @@ public record TradingSessionSnapshot(
     public double getOrHigh() { return orHigh; }
     public double getOrLow() { return orLow; }
     public double getCumulativeDailyLossR() { return cumulativeDailyLossR; }
-    public int getConsecutiveLosses() { return 0; }
+    public int getConsecutiveLosses() { return consecutiveLosses; }
     public ActiveTradeExecution getActiveTradeReference() { return activeTradeReference; }
     public String getLastRejectReason() { return lastRejectReason; }
 }

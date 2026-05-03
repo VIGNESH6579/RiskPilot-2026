@@ -150,9 +150,11 @@ public class RegimeConfidenceEngine {
     private int scoreVolatilityExpansion(List<CandleData> candles) {
         if (candles.size() < 10) return 0;
 
-        // Calculate ATR for recent vs previous period
-        double recentATR = calculateATR(candles.subList(0, Math.min(5, candles.size())));
-        double previousATR = calculateATR(candles.subList(Math.max(0, candles.size() - 5), candles.size()));
+        int size = candles.size();
+        List<CandleData> previousWindow = candles.subList(Math.max(0, size - 10), size - 5);
+        List<CandleData> recentWindow = candles.subList(size - 5, size);
+        double recentATR = calculateATR(recentWindow);
+        double previousATR = calculateATR(previousWindow);
 
         if (previousATR == 0.0) return 0;
 

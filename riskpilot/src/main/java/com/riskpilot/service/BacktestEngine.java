@@ -211,6 +211,7 @@ public class BacktestEngine {
         }
 
         if (c.high >= activeTrade.sl) {
+            // For SHORT trades, stop-loss slippage worsens the buy-back fill above SL.
             double slippedSl = activeTrade.sl + slippageExit;
             double distanceCaptured = (activeTrade.entry - slippedSl);
             

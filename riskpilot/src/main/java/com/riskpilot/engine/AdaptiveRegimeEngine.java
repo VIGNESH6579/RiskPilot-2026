@@ -22,7 +22,7 @@ public class AdaptiveRegimeEngine {
     private static final int WINDOW_SIZE = 10;
     private static final int MIN_TRADES_FOR_ADAPTATION = 6;
     private static final double ALPHA = 0.3; // Smoothing factor
-    
+
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final AtomicReference<AdaptiveConfig> currentConfig = new AtomicReference<>();
     private final List<TradeResult> tradeWindow = new ArrayList<>();
@@ -125,13 +125,13 @@ public class AdaptiveRegimeEngine {
     public synchronized void addTradeResult(double realizedR, boolean tp1Hit, boolean runnerCaptured,
                                           double entrySlippage, double runnerSlippage, SessionFeatures sessionFeatures) {
         TradeResult result = new TradeResult(realizedR, tp1Hit, runnerCaptured, entrySlippage, runnerSlippage, sessionFeatures);
-        
+
         tradeWindow.add(result);
         if (tradeWindow.size() > WINDOW_SIZE) {
             tradeWindow.remove(0);
         }
 
-        log.debug("📈 Added trade result to adaptive window: R={:.3f}, TP1={}, Runner={}, Window size={}", 
+        log.debug("📈 Added trade result to adaptive window: R={}, TP1={}, Runner={}, Window size={}",
                 realizedR, tp1Hit, runnerCaptured, tradeWindow.size());
 
         // Check if adaptation should run
@@ -153,7 +153,7 @@ public class AdaptiveRegimeEngine {
         }
 
         // Max 1 update per day or every 10 trades
-        if (lastAdaptationTime != null && 
+        if (lastAdaptationTime != null &&
             lastAdaptationTime.toLocalDate().equals(LocalDateTime.now().toLocalDate())) {
             return false;
         }
@@ -173,7 +173,7 @@ public class AdaptiveRegimeEngine {
                 AdaptiveConfig oldConfig = currentConfig.get();
                 AdaptiveConfig newConfig = adaptParameters(oldConfig, signal);
                 AdaptiveConfig smoothedConfig = smoothParameters(oldConfig, newConfig);
-                
+
                 currentConfig.set(smoothedConfig);
                 persistConfig(smoothedConfig);
                 lastAdaptationTime = LocalDateTime.now();
@@ -194,20 +194,20 @@ public class AdaptiveRegimeEngine {
         }
 
         RobustMetrics metrics = computeRobustMetrics();
-        
+
         // BAD: tighten filters (be more selective)
-        if (metrics.expectancy < 0.04 || 
-            metrics.tp1Rate < 0.60 || 
-            metrics.runnerRate < 0.15 || 
-            metrics.avgEntrySlippage > 2.0 || 
+        if (metrics.expectancy < 0.04 ||
+            metrics.tp1Rate < 0.60 ||
+            metrics.runnerRate < 0.15 ||
+            metrics.avgEntrySlippage > 2.0 ||
             metrics.avgRunnerSlippage > 6.0) {
             return "TIGHTEN";
         }
 
         // GOOD: cautiously loosen (allow a bit more flow)
-        if (metrics.expectancy > 0.08 && 
-            metrics.tp1Rate >= 0.65 && 
-            metrics.runnerRate >= 0.20 && 
+        if (metrics.expectancy > 0.08 &&
+            metrics.tp1Rate >= 0.65 &&
+            metrics.runnerRate >= 0.20 &&
             metrics.avgEntrySlippage <= 2.0) {
             return "LOOSEN";
         }
@@ -244,9 +244,9 @@ public class AdaptiveRegimeEngine {
         // Tail-aware expectancy: remove top 1-2 trades
         List<Double> sortedRs = new ArrayList<>(realizedRs);
         Collections.sort(sortedRs);
-        List<Double> coreRs = sortedRs.size() >= 8 ? 
+        List<Double> coreRs = sortedRs.size() >= 8 ?
                 sortedRs.subList(0, sortedRs.size() - 2) : sortedRs;
-        
+
         double expectancy = coreRs.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
         double tp1Rate = (double) tp1Hits / tradeWindow.size();
         double runnerRate = (double) runnerCaptured / tradeWindow.size();
@@ -281,15 +281,15 @@ public class AdaptiveRegimeEngine {
         int direction = "TIGHTEN".equals(signal) ? 1 : -1;
 
         // Apply bounded steps
-        newConfig.setMinRegimeScore((int) clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"), 
+        newConfig.setMinRegimeScore((int) clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"),
                                        (Integer) BOUNDS.get("minRegimeScore")[0], (Integer) BOUNDS.get("minRegimeScore")[1]));
-        newConfig.setMinORRange(clamp(config.getMinORRange() + direction * (Double) STEPS.get("minORRange"), 
+        newConfig.setMinORRange(clamp(config.getMinORRange() + direction * (Double) STEPS.get("minORRange"),
                                     (Double) BOUNDS.get("minORRange")[0], (Double) BOUNDS.get("minORRange")[1]));
-        newConfig.setMinATRRatio(clamp(config.getMinATRRatio() + direction * (Double) STEPS.get("minATRRatio"), 
+        newConfig.setMinATRRatio(clamp(config.getMinATRRatio() + direction * (Double) STEPS.get("minATRRatio"),
                                       (Double) BOUNDS.get("minATRRatio")[0], (Double) BOUNDS.get("minATRRatio")[1]));
-        newConfig.setMinEfficiency(clamp(config.getMinEfficiency() + direction * (Double) STEPS.get("minEfficiency"), 
+        newConfig.setMinEfficiency(clamp(config.getMinEfficiency() + direction * (Double) STEPS.get("minEfficiency"),
                                       (Double) BOUNDS.get("minEfficiency")[0], (Double) BOUNDS.get("minEfficiency")[1]));
-        newConfig.setMinBreakoutHoldRate(clamp(config.getMinBreakoutHoldRate() + direction * (Double) STEPS.get("minBreakoutHoldRate"), 
+        newConfig.setMinBreakoutHoldRate(clamp(config.getMinBreakoutHoldRate() + direction * (Double) STEPS.get("minBreakoutHoldRate"),
                                             (Double) BOUNDS.get("minBreakoutHoldRate")[0], (Double) BOUNDS.get("minBreakoutHoldRate")[1]));
 
         return newConfig;
@@ -300,7 +300,7 @@ public class AdaptiveRegimeEngine {
      */
     private AdaptiveConfig smoothParameters(AdaptiveConfig oldConfig, AdaptiveConfig newConfig) {
         AdaptiveConfig smoothed = new AdaptiveConfig();
-        
+
         smoothed.setMinRegimeScore((int) Math.round((1 - ALPHA) * oldConfig.getMinRegimeScore() + ALPHA * newConfig.getMinRegimeScore()));
         smoothed.setMinORRange((1 - ALPHA) * oldConfig.getMinORRange() + ALPHA * newConfig.getMinORRange());
         smoothed.setMinATRRatio((1 - ALPHA) * oldConfig.getMinATRRatio() + ALPHA * newConfig.getMinATRRatio());

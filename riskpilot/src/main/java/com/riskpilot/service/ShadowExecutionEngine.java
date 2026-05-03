@@ -62,6 +62,7 @@ public class ShadowExecutionEngine {
     private static final int MAX_REJECT_REASONS = 256;
 
     private String lastTriggeredCandleTime = "";
+    private String lastStoredCandleTime = "";
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
@@ -94,9 +95,7 @@ public class ShadowExecutionEngine {
 
     public synchronized void evaluateCandle(Candle candle) {
         candleAggregator.addCandle(candle);
-        storeCandleData(candle);
-        updateRegimeFilter(candle);
-        volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
+        ingestClosedCandleForIndicators(candle);
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
         updateSessionStateFromTime(candle.timestamp().toLocalTime());
@@ -123,12 +122,16 @@ public class ShadowExecutionEngine {
 
     public synchronized void evaluateCandleClose() {
         List<Candle> history = candleAggregator.getValidHistory();
-        if (history.size() < 10) {
+        if (history.isEmpty()) {
             return;
         }
 
         Candle newestCandle = history.get(history.size() - 1);
+        ingestClosedCandleForIndicators(newestCandle);
         updateSessionStateFromTime(newestCandle.timestamp().toLocalTime());
+        if (history.size() < 10) {
+            return;
+        }
 
         if (dayBlockedByFirstTradeFailure) {
             logReject(stateManager.getSnapshot(), "FIRST_TRADE_FAILURE_DAY_BLOCK");
@@ -178,6 +181,7 @@ public class ShadowExecutionEngine {
         stateManager.resetDaily();
         candleHistory.clear();
         lastTriggeredCandleTime = "";
+        lastStoredCandleTime = "";
         activeSignalTime = null;
         activeExpectedEntry = 0.0;
         dayBlockedByFirstTradeFailure = false;
@@ -192,6 +196,17 @@ public class ShadowExecutionEngine {
         if (candleHistory.size() > 50) {
             candleHistory.remove(0);
         }
+    }
+
+    private void ingestClosedCandleForIndicators(Candle candle) {
+        if (candle == null || candle.time.equals(lastStoredCandleTime)) {
+            return;
+        }
+
+        storeCandleData(candle);
+        updateRegimeFilter(candle);
+        volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
+        lastStoredCandleTime = candle.time;
     }
 
     private void updateRegimeFilter(Candle candle) {
@@ -234,6 +249,7 @@ public class ShadowExecutionEngine {
                 orHigh,
                 orLow,
                 current.cumulativeDailyLossR(),
+                current.consecutiveLosses(),
                 current.activeTradeReference(),
                 current.lastRejectReason()
             );
@@ -271,7 +287,8 @@ public class ShadowExecutionEngine {
 
         double orRange = Math.max(0.0, state.orHigh() - state.orLow());
         double entrySlippageEstimate = Math.abs(candle.close - signal.getEntry());
-        GateDecision decision = riskGateEngine.evaluateEntry(state, orRange, entrySlippageEstimate, 0L);
+        GateDecision decision = riskGateEngine.evaluateEntry(
+            state, orRange, entrySlippageEstimate, 0L, new ArrayList<>(candleHistory));
         riskGateEngine.logDecision(state, orRange, 0L, entrySlippageEstimate, decision);
 
         if (!decision.allowed()) {
@@ -325,6 +342,7 @@ public class ShadowExecutionEngine {
             current.orHigh(),
             current.orLow(),
             current.cumulativeDailyLossR(),
+            current.consecutiveLosses(),
             trade,
             "ALLOW"
         ));
@@ -357,6 +375,7 @@ public class ShadowExecutionEngine {
             current.orHigh(),
             current.orLow(),
             current.cumulativeDailyLossR(),
+            current.consecutiveLosses(),
             trade,
             lastRejectReason
         ));
@@ -437,6 +456,8 @@ public class ShadowExecutionEngine {
             dayBlockedByFirstTradeFailure = true;
         }
 
+        int newConsecutiveLosses = realizedR < 0.0 ? state.consecutiveLosses() + 1 : 0;
+
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
             firstTradeFailure ? Regime.BLOCKED : current.regime(),
@@ -449,6 +470,7 @@ public class ShadowExecutionEngine {
             current.orHigh(),
             current.orLow(),
             current.cumulativeDailyLossR() + realizedR,
+            newConsecutiveLosses,
             null,
             firstTradeFailure ? "FIRST_TRADE_FAILURE_DAY_BLOCK" : "ALLOW"
         ));
@@ -477,6 +499,7 @@ public class ShadowExecutionEngine {
             current.orHigh(),
             current.orLow(),
             current.cumulativeDailyLossR(),
+            current.consecutiveLosses(),
             current.activeTradeReference(),
             reason
         ));
@@ -548,6 +571,7 @@ public class ShadowExecutionEngine {
         payload.put("feedStable", state.feedStable());
         payload.put("heartbeatAlive", state.heartbeatAlive());
         payload.put("dailyLossR", state.cumulativeDailyLossR());
+        payload.put("consecutiveLosses", state.consecutiveLosses());
         payload.put("lastRejectReason", state.lastRejectReason());
         payload.put("orHigh", state.orHigh());
         payload.put("orLow", state.orLow());

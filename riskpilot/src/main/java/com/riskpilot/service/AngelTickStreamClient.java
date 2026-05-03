@@ -27,6 +27,8 @@ public class AngelTickStreamClient {
     private final CandleAggregator candleAggregator;
     private final HeartbeatMonitor heartbeatMonitor;
     private final OptionChainService optionChainService;
+    private final ShadowExecutionEngine shadowExecutionEngine;
+    private final MarketSessionService marketSessionService;
     
     // BUG-035: Named thread factory for executor
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(
@@ -46,15 +48,20 @@ public class AngelTickStreamClient {
     private final AtomicLong lastSpotValue = new AtomicLong(0);
     private final AtomicLong sequenceCounter = new AtomicLong(0);
     private ScheduledFuture<?> pollerFuture;
+    private LocalDateTime lastCandleSlot = null;
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
         HeartbeatMonitor heartbeatMonitor,
-        OptionChainService optionChainService
+        OptionChainService optionChainService,
+        ShadowExecutionEngine shadowExecutionEngine,
+        MarketSessionService marketSessionService
     ) {
         this.candleAggregator = candleAggregator;
         this.heartbeatMonitor = heartbeatMonitor;
         this.optionChainService = optionChainService;
+        this.shadowExecutionEngine = shadowExecutionEngine;
+        this.marketSessionService = marketSessionService;
     }
 
     @PostConstruct
@@ -88,14 +95,29 @@ public class AngelTickStreamClient {
             heartbeatMonitor.registerTick();
             
             // BUG-001: Pass receivedAt time to preserve original timing
-            LocalDateTime receivedAt = LocalDateTime.now();
+            LocalDateTime receivedAt = marketSessionService.nowIst().toLocalDateTime();
+            int candleMinute = (receivedAt.getMinute() / 5) * 5;
+            LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
+
+            if (!marketSessionService.isMarketOpen()) {
+                candleAggregator.trackAfterHoursTick(new CandleAggregator.MarketTick(
+                    receivedAt, snap.spot(), 1L, sequenceCounter.incrementAndGet(), receivedAt));
+                return;
+            }
+
             candleAggregator.processTick(
-                LocalDateTime.now(),
+                receivedAt,
                 snap.spot(),
                 1L,
                 sequenceCounter.incrementAndGet(),
                 receivedAt
             );
+
+            shadowExecutionEngine.evaluateTick(snap.spot());
+            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+                shadowExecutionEngine.evaluateCandleClose();
+            }
+            lastCandleSlot = currentSlot;
             
         } catch (Exception e) {
             candleAggregator.markUnstable();

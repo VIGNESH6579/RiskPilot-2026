@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
-import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
@@ -26,9 +25,9 @@ public class RiskGateEngine {
     @PostConstruct
     public void validate() {
         log.info("🔴 RISKGATE STARTUP VALIDATION");
-        
+
         if (config.getRisk().getMaxTradesPerDay() > 10) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day exceeds safety limit of 10. Current: " + 
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day exceeds safety limit of 10. Current: " +
                 config.getRisk().getMaxTradesPerDay());
         }
         if (config.getRisk().getMaxTradesPerDay() > 2) {
@@ -37,7 +36,7 @@ public class RiskGateEngine {
         }
 
         if (config.getExecution().getSlippage().getEntryMax() > 3.0) {
-            throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high for viable edge. Current: " + 
+            throw new IllegalStateException("SLIPPAGE_VIOLATION: Entry slippage too high for viable edge. Current: " +
                 config.getExecution().getSlippage().getEntryMax());
         }
 
@@ -45,8 +44,8 @@ public class RiskGateEngine {
             throw new IllegalStateException("STRICT_MODE_VIOLATION: Strict mode must be enabled in production");
         }
 
-        if (!"SHADOW".equalsIgnoreCase(config.getMode()) && 
-            !"LIVE".equalsIgnoreCase(config.getMode()) && 
+        if (!"SHADOW".equalsIgnoreCase(config.getMode()) &&
+            !"LIVE".equalsIgnoreCase(config.getMode()) &&
             !"REPLAY".equalsIgnoreCase(config.getMode())) {
             throw new IllegalStateException("MODE_VIOLATION: Invalid mode: " + config.getMode());
         }
@@ -57,9 +56,10 @@ public class RiskGateEngine {
     public GateDecision evaluateEntry(TradingSessionSnapshot s,
                                       double orRange,
                                       double entrySlippage,
-                                      long latencyMs) {
+                                      long latencyMs,
+                                      List<RegimeConfidenceEngine.CandleData> candleData) {
 
-        log.debug("🔍 GATE EVALUATION: OR={}, Slippage={}, Latency={}ms", 
+        log.debug("🔍 GATE EVALUATION: OR={}, Slippage={}, Latency={}ms",
                 orRange, entrySlippage, latencyMs);
 
         // -------------------------
@@ -74,11 +74,12 @@ public class RiskGateEngine {
         // 🔴 REGIME CONFIDENCE SCORE (PRE-TRADE HARD BLOCK)
         // -------------------------
         // This sits ABOVE all other logic - if score < 55, NO TRADING AT ALL
-        List<RegimeConfidenceEngine.CandleData> candleData = convertToCandleData(s);
-        RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(s, candleData);
-        
+        List<RegimeConfidenceEngine.CandleData> confidenceCandles =
+            candleData == null ? List.of() : candleData;
+        RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(s, confidenceCandles);
+
         if (!regimeScore.isTradingAllowed()) {
-            log.error("🚫 REGIME_CONFIDENCE_BLOCKED: Score={}, Reason={}", 
+            log.error("🚫 REGIME_CONFIDENCE_BLOCKED: Score={}, Reason={}",
                     regimeScore.getTotalScore(), regimeScore.getReason());
             return reject("LOW_CONFIDENCE_DAY");
         }
@@ -87,7 +88,7 @@ public class RiskGateEngine {
         // 🔴 REDUCED MODE LIMIT (1 trade max)
         // -------------------------
         if (regimeScore.isReducedMode() && s.tradesTaken() >= 1) {
-            log.error("🚫 REDUCED_MODE_LIMIT: Score={}, TradesTaken={}", 
+            log.error("🚫 REDUCED_MODE_LIMIT: Score={}, TradesTaken={}",
                     regimeScore.getTotalScore(), s.tradesTaken());
             return reject("REDUCED_MODE_LIMIT");
         }
@@ -100,35 +101,35 @@ public class RiskGateEngine {
         if (regime == null) {
             return reject("REGIME_NOT_INITIALIZED");
         }
-        
+
         // Check adaptive thresholds
         if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
-            log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}", 
-                    regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(), 
+            log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}",
+                    regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(),
                     String.join(", ", regime.getBlockingReasons()));
             return reject("ADAPTIVE_REGIME_WEAK");
         }
-        
+
         if (regime.getOrRange() < adaptiveConfig.getMinORRange()) {
-            log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={:.1f} < {:.1f}", 
+            log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={} < {}",
                     regime.getOrRange(), adaptiveConfig.getMinORRange());
             return reject("ADAPTIVE_OR_TOO_SMALL");
         }
-        
+
         if (regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
-            log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={:.2f} < {:.2f}", 
+            log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={} < {}",
                     regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
             return reject("ADAPTIVE_ATR_WEAK");
         }
-        
+
         if (regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
-            log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={:.2f} < {:.2f}", 
+            log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={} < {}",
                     regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
             return reject("ADAPTIVE_CHOPPY");
         }
-        
+
         if (regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
-            log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={:.2f} < {:.2f}", 
+            log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={} < {}",
                     regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
             return reject("ADAPTIVE_BREAKOUT_WEAK");
         }
@@ -138,7 +139,7 @@ public class RiskGateEngine {
         // -------------------------
         if (!edgeTracker.isEdgeHealthy()) {
             RealTimeEdgeTracker.EdgeMetrics metrics = edgeTracker.getCurrentMetrics();
-            log.error("🚫 EDGE_UNHEALTHY: DecayScore={}, Expectancy={:.3f}", 
+            log.error("🚫 EDGE_UNHEALTHY: DecayScore={}, Expectancy={}",
                     metrics.getDecayScore(), metrics.getExpectancy());
             return reject("EDGE_DECAY");
         }
@@ -189,8 +190,12 @@ public class RiskGateEngine {
         // -------------------------
         // 🔴 VOLATILITY GATE
         // -------------------------
-        if (orRange < config.getFilters().getMinOrRange()) {
-            log.warn("🚫 LOW VOLATILITY: OR range {} < {}", orRange, config.getFilters().getMinOrRange());
+        double evaluatedOrRange = Double.isFinite(orRange)
+            ? orRange
+            : (Double.isFinite(s.orHigh()) && Double.isFinite(s.orLow()) ? s.orHigh() - s.orLow() : 0.0);
+        if (!Double.isFinite(evaluatedOrRange) || evaluatedOrRange < config.getFilters().getMinOrRange()) {
+            log.warn("🚫 LOW VOLATILITY: OR range {} < {}",
+                evaluatedOrRange, config.getFilters().getMinOrRange());
             return reject("LOW_VOLATILITY");
         }
 
@@ -248,32 +253,9 @@ public class RiskGateEngine {
                s.isTradeActive();
     }
 
-    /**
-     * Convert session state to candle data for regime confidence evaluation
-     * Note: In practice, this should be passed from ShadowExecutionEngine
-     * For now, we'll use a simplified approach with conservative defaults
-     */
-    private List<RegimeConfidenceEngine.CandleData> convertToCandleData(TradingSessionSnapshot state) {
-        // Create minimal candle data based on session state
-        List<RegimeConfidenceEngine.CandleData> candles = new ArrayList<>();
-        
-        // Add opening range candle
-        if (state.orHigh() > 0 && state.orLow() < Double.MAX_VALUE) {
-            double orMid = (state.orHigh() + state.orLow()) / 2.0;
-            double orRange = state.orHigh() - state.orLow();
-            
-            candles.add(new RegimeConfidenceEngine.CandleData(
-                orMid, state.orHigh(), state.orLow(), orMid, 
-                java.time.LocalDateTime.now().with(java.time.LocalTime.of(9, 30))
-            ));
-        }
-        
-        return candles;
-    }
-
-    public void logDecision(TradingSessionSnapshot state, double orRange, long latencyMs, 
+    public void logDecision(TradingSessionSnapshot state, double orRange, long latencyMs,
                            double entrySlippage, GateDecision decision) {
-        log.info("� GATE_DECISION: OR={:.1f}, Latency={}ms, Slippage={:.2f} → {}", 
+        log.info("� GATE_DECISION: OR={}, Latency={}ms, Slippage={} → {}",
                 orRange, latencyMs, entrySlippage, decision.reason());
     }
 

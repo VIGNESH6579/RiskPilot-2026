@@ -1,6 +1,7 @@
 package com.riskpilot.engine;
 
 import lombok.Data;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -12,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class RealTimeEdgeTracker {
 
     private static final int WINDOW_SIZE = 8;
@@ -28,6 +30,7 @@ public class RealTimeEdgeTracker {
     private final AtomicInteger totalTrades = new AtomicInteger(0);
     private final AtomicReference<EdgeMetrics> currentMetrics = new AtomicReference<>();
     private final AtomicReference<Instant> lastUpdate = new AtomicReference<>(Instant.now());
+    private final KillSwitchEngine killSwitchEngine;
 
     @Data
     public static class TradeResult {
@@ -82,7 +85,7 @@ public class RealTimeEdgeTracker {
     public synchronized void addTradeResult(double realizedR, boolean tp1Hit, boolean runnerCaptured,
                                           double entrySlippage, double runnerSlippage) {
         TradeResult result = new TradeResult(realizedR, tp1Hit, runnerCaptured, entrySlippage, runnerSlippage);
-        
+
         // Update rolling window
         rollingWindow.offer(result);
         if (rollingWindow.size() > WINDOW_SIZE) {
@@ -102,7 +105,7 @@ public class RealTimeEdgeTracker {
         EdgeMetrics metrics = computeMetrics();
         currentMetrics.set(metrics);
 
-        log.debug("📊 Edge metrics updated: Expectancy={:.3f}, TP1={:.2f}, Runner={:.2f}, DecayScore={}", 
+        log.debug("📊 Edge metrics updated: Expectancy={}, TP1={}, Runner={}, DecayScore={}",
                 metrics.getExpectancy(), metrics.getTp1Rate(), metrics.getRunnerRate(), metrics.getDecayScore());
 
         // Check for immediate kill conditions
@@ -216,16 +219,7 @@ public class RealTimeEdgeTracker {
      */
     private void triggerKillSwitch(List<String> reasons) {
         log.error("🚨 REAL-TIME EDGE KILL SWITCH: {}", String.join(", ", reasons));
-        
-        // Write kill flag file
-        try {
-            java.nio.file.Files.write(
-                java.nio.file.Paths.get("KILL_SWITCH.flag"),
-                String.join("\n", reasons).getBytes()
-            );
-        } catch (Exception e) {
-            log.error("Failed to write kill switch file: {}", e.getMessage());
-        }
+        killSwitchEngine.writeKillSwitch(reasons);
     }
 
     /**
@@ -240,7 +234,7 @@ public class RealTimeEdgeTracker {
      */
     public boolean isEdgeHealthy() {
         EdgeMetrics metrics = currentMetrics.get();
-        return metrics != null && metrics.getDecayScore() < DECAY_THRESHOLD;
+        return metrics == null || metrics.getDecayScore() < DECAY_THRESHOLD;
     }
 
     /**

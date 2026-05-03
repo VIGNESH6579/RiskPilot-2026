@@ -124,12 +124,12 @@ public class ActiveTradeExecution {
         if (tp1Reached) {
             double tp1ExitPrice = currentPrice;
             
-            // BUG-011: Ensure minimum TP1 exit even for small positions
-            // For position < 5 lots: exit 100% (tp1Size = positionSize)
-            // For position >= 5 lots: exit 20% (tp1Size = positionSize * 0.20)
-            double minTp1Ratio = trade.positionSize() >= 5.0 ? 0.20 : 1.0;
-            double tp1Size = trade.positionSize() * minTp1Ratio;
+            double tp1Size = Math.min(
+                trade.positionSize(),
+                Math.max(1.0, Math.floor(trade.positionSize() * 0.20))
+            );
             double remaining = trade.positionSize() - tp1Size;
+            boolean runnerActive = remaining > 0.0;
             double pnl = trade.isShort()
                 ? (trade.entryPrice() - tp1ExitPrice) * tp1Size
                 : (tp1ExitPrice - trade.entryPrice()) * tp1Size;
@@ -141,7 +141,7 @@ public class ActiveTradeExecution {
                 trade.tp1Level(),
                 trade.initialRiskPoints,  // BUG-009: Preserve initial risk
                 true,                 // TP1 HIT
-                true,                 // runner now active
+                runnerActive,         // runner active only when size remains
                 trade.positionSize(),
                 remaining,
                 trade.realizedPnL() + pnl,

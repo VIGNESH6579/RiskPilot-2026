@@ -112,7 +112,7 @@ public class RegimeFilter {
             double dayRange = high - low;
             openingRange.set(dayRange);
             openingATR.set(atr);
-            log.info("🌅 Opening Range set: {:.1f}, ATR: {:.1f}", dayRange, atr);
+            log.info("🌅 Opening Range set: {}, ATR: {}", dayRange, atr);
         }
 
         // Detect breakouts
@@ -122,7 +122,7 @@ public class RegimeFilter {
         RegimeMetrics metrics = computeRegimeMetrics();
         currentRegime.set(metrics);
 
-        log.debug("📊 Regime updated: Score={}, Trading={}, OR={:.1f}, ATR={:.2f}, Eff={:.2f}, Hold={:.2f}",
+        log.debug("📊 Regime updated: Score={}, Trading={}, OR={}, ATR={}, Eff={}, Hold={}",
                 metrics.getRegimeScore(), metrics.isTradingAllowed(), metrics.getOrRange(),
                 metrics.getAtrRatio(), metrics.getTrendEfficiency(), metrics.getBreakoutHoldRate());
     }
@@ -134,15 +134,17 @@ public class RegimeFilter {
         double orRange = openingRange.get();
         if (orRange == 0) return; // No opening range yet
 
-        // Simple breakout detection
-        double highBreakout = candleHistory.stream()
-                .limit(3) // Last 3 candles
+        // Simple breakout detection from the latest candles.
+        List<CandleData> allCandles = new ArrayList<>(candleHistory);
+        int size = allCandles.size();
+        List<CandleData> last3 = allCandles.subList(Math.max(0, size - 3), size);
+
+        double highBreakout = last3.stream()
                 .mapToDouble(CandleData::getHigh)
                 .max()
                 .orElse(candle.getHigh());
 
-        double lowBreakout = candleHistory.stream()
-                .limit(3)
+        double lowBreakout = last3.stream()
                 .mapToDouble(CandleData::getLow)
                 .min()
                 .orElse(candle.getLow());
@@ -214,12 +216,14 @@ public class RegimeFilter {
         double openingAtr = openingATR.get();
         if (openingAtr == 0) return 0.0;
 
-        List<CandleData> recent = new ArrayList<>(candleHistory).stream()
+        List<CandleData> postOpeningRange = new ArrayList<>(candleHistory).stream()
                 .filter(c -> c.getTimestamp().toLocalTime().isAfter(OPENING_RANGE_END))
-                .limit(5)
                 .toList();
 
-        if (recent.isEmpty()) return 0.0;
+        if (postOpeningRange.isEmpty()) return 0.0;
+
+        int size = postOpeningRange.size();
+        List<CandleData> recent = postOpeningRange.subList(Math.max(0, size - 5), size);
 
         double currentATR = recent.stream()
                 .mapToDouble(CandleData::getAtr)
@@ -233,9 +237,9 @@ public class RegimeFilter {
      * Compute trend efficiency
      */
     private double computeTrendEfficiency() {
-        List<CandleData> recent = new ArrayList<>(candleHistory).stream()
-                .limit(TREND_WINDOW)
-                .toList();
+        List<CandleData> allCandles = new ArrayList<>(candleHistory);
+        int size = allCandles.size();
+        List<CandleData> recent = allCandles.subList(Math.max(0, size - TREND_WINDOW), size);
 
         if (recent.size() < TREND_WINDOW) return 0.0;
 

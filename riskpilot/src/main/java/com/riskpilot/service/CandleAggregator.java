@@ -7,14 +7,16 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 @Slf4j
 @Service
 public class CandleAggregator {
 
-    private final List<Candle> historicalBuffer = new ArrayList<>();
+    private final Deque<Candle> historicalBuffer = new ArrayDeque<>(52);
     private Candle currentBuildingCandle = null;
     private LocalDateTime currentCandleStart = null;  // BUG-003: Using LocalDateTime (date+time)
     private LocalDateTime lastTickTime = LocalDateTime.now();
@@ -137,10 +139,10 @@ public class CandleAggregator {
     }
 
     private void finalizeCandle(Candle completedCandle) {
-        historicalBuffer.add(completedCandle.copy());
+        historicalBuffer.addLast(completedCandle.copy());
         // Truncate buffer to maintain memory efficiency (keep last 50 candles).
         if (historicalBuffer.size() > 50) {
-            historicalBuffer.remove(0);
+            historicalBuffer.pollFirst();
         }
     }
     
@@ -156,9 +158,9 @@ public class CandleAggregator {
      * Add a candle directly (for restoring from persistence).
      */
     public synchronized void addCandle(Candle candle) {
-        historicalBuffer.add(candle.copy());
+        historicalBuffer.addLast(candle.copy());
         if (historicalBuffer.size() > 50) {
-            historicalBuffer.remove(0);
+            historicalBuffer.pollFirst();
         }
     }
 

@@ -97,11 +97,7 @@ public class AngelAuthService {
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(AUTH_URL, request, Map.class);
             if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
-                Map<String, String> data = (Map<String, String>) response.getBody().get("data");
-                currentJwtToken = data.get("jwtToken");
-                currentFeedToken = data.get("feedToken");
-                log.info("Angel auth success");
-                return true;
+                return applyAuthTokens(response.getBody(), "Angel auth");
             } else {
                 // BUG-038: Sanitized log - never log full response body
                 Map<?, ?> respBody = response.getBody();
@@ -242,11 +238,7 @@ public class AngelAuthService {
             ResponseEntity<Map> response = restTemplate.postForEntity(AUTH_URL, retryRequest, Map.class);
             
             if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
-                Map<String, String> data = (Map<String, String>) response.getBody().get("data");
-                currentJwtToken = data.get("jwtToken");
-                currentFeedToken = data.get("feedToken");
-                log.info("Angel auth success with forward bucket TOTP");
-                return true;
+                return applyAuthTokens(response.getBody(), "Forward bucket Angel auth");
             } else {
                 // BUG-038: Sanitized log
                 Map<?, ?> respBody = response.getBody();
@@ -257,5 +249,29 @@ public class AngelAuthService {
             log.warn("Forward bucket auth failed: {}", e.getMessage());
         }
         return false;
+    }
+
+    private boolean applyAuthTokens(Map<?, ?> responseBody, String context) {
+        Object rawData = responseBody.get("data");
+        if (!(rawData instanceof Map<?, ?> data)) {
+            log.warn("{}: unexpected response shape data={}", context, rawData);
+            currentJwtToken = null;
+            currentFeedToken = null;
+            return false;
+        }
+
+        Object jwt = data.get("jwtToken");
+        Object feed = data.get("feedToken");
+        if (jwt == null || jwt.toString().isBlank()) {
+            log.warn("{}: missing jwtToken in response", context);
+            currentJwtToken = null;
+            currentFeedToken = null;
+            return false;
+        }
+
+        currentJwtToken = jwt.toString();
+        currentFeedToken = feed != null ? feed.toString() : null;
+        log.info("{} success", context);
+        return true;
     }
 }

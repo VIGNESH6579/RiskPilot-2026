@@ -30,7 +30,7 @@ public class VolatilityNormalizer {
         private final boolean usedVolatilityNormalization;
         private final LocalDateTime timestamp;
 
-        public TP1Calculation(double openingRange, double volatilityRatio, 
+        public TP1Calculation(double openingRange, double volatilityRatio,
                             double calculatedTP1, double finalTP1, boolean usedVolatilityNormalization) {
             this.openingRange = openingRange;
             this.volatilityRatio = volatilityRatio;
@@ -49,7 +49,7 @@ public class VolatilityNormalizer {
             double dayRange = high - low;
             openingRange.set(dayRange);
             recalculateTP1();
-            log.info("🌅 Opening Range updated: {:.1f} → TP1: {:.1f}", dayRange, currentTP1.get());
+            log.info("🌅 Opening Range updated: {} → TP1: {}", dayRange, currentTP1.get());
         }
     }
 
@@ -76,7 +76,7 @@ public class VolatilityNormalizer {
         currentTP1.set(usedNormalization ? finalTP1 : FIXED_TP1_FALLBACK);
         lastUpdate.set(LocalDateTime.now());
 
-        log.debug("📊 TP1 Calculation: OR={:.1f}, Ratio={:.3f}, TP1={:.1f}, Normalized={}", 
+        log.debug("📊 TP1 Calculation: OR={}, Ratio={}, TP1={}, Normalized={}",
                 or, volatilityRatio, finalTP1, usedNormalization);
     }
 
@@ -105,7 +105,7 @@ public class VolatilityNormalizer {
      */
     public synchronized void forceRecalculation() {
         recalculateTP1();
-        log.info("🔄 TP1 force recalculated: {:.1f}", currentTP1.get());
+        log.info("🔄 TP1 force recalculated: {}", currentTP1.get());
     }
 
     /**

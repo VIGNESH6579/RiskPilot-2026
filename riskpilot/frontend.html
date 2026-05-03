@@ -103,9 +103,28 @@
     <div class="topbar">
       <div>
         <h1>RiskPilot Shadow Observer</h1>
-        <div class="sub">Air-gapped observer feed from <span class="mono">shadow_live_forward_logs.csv</span></div>
+        <div class="sub">Live NIFTY monitor and shadow execution feed <span id="market-updated" class="mono"></span></div>
       </div>
       <div id="status" class="status">Connecting...</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">NIFTY Live Price</div>
+        <div id="market-spot" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Nearest Expiry</div>
+        <div id="market-expiry" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Support / Resistance</div>
+        <div id="market-range" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">VIX / Source</div>
+        <div id="market-source" class="value">-</div>
+      </div>
     </div>
 
     <div class="grid">
@@ -161,6 +180,11 @@
     const latencyEl = document.getElementById("metric-latency");
     const slipEl = document.getElementById("metric-slip");
     const exitEl = document.getElementById("metric-exit");
+    const spotEl = document.getElementById("market-spot");
+    const expiryEl = document.getElementById("market-expiry");
+    const rangeEl = document.getElementById("market-range");
+    const sourceEl = document.getElementById("market-source");
+    const marketUpdatedEl = document.getElementById("market-updated");
 
     function formatNum(value, digits = 2) {
       return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
@@ -211,6 +235,9 @@
     }
 
     function onPayload(payload) {
+      if (!payload || !payload.id) {
+        return;
+      }
       rows.unshift(payload);
       if (rows.length > MAX_ROWS) {
         rows.pop();
@@ -222,6 +249,33 @@
     function setStatus(text, ok) {
       statusEl.textContent = text;
       statusEl.className = "status" + (ok ? " ok" : "");
+    }
+
+    function updateMarketData(chain, vix) {
+      spotEl.textContent = formatNum(chain.spot);
+      expiryEl.textContent = chain.expiry || "-";
+      rangeEl.textContent = `${chain.support ?? "-"} / ${chain.resistance ?? "-"}`;
+      const source = chain.source || "UNKNOWN";
+      sourceEl.textContent = `${formatNum(vix)} / ${source}`;
+      marketUpdatedEl.textContent = `updated ${new Date().toLocaleTimeString()}`;
+    }
+
+    async function loadMarketData() {
+      try {
+        const [chainResponse, vixResponse] = await Promise.all([
+          fetch('/api/v1/data/option-chain', { cache: 'no-store' }),
+          fetch('/api/v1/data/vix', { cache: 'no-store' })
+        ]);
+        if (!chainResponse.ok || !vixResponse.ok) {
+          throw new Error('Market API returned non-OK status');
+        }
+        const chain = await chainResponse.json();
+        const vix = await vixResponse.json();
+        updateMarketData(chain, vix);
+      } catch (error) {
+        console.error('Failed to refresh market data:', error);
+        sourceEl.textContent = "Market API unavailable";
+      }
     }
 
     async function fetchInitialData() {
@@ -247,9 +301,12 @@
       
       ws.onmessage = (event) => {
         try {
-          const payload = JSON.parse(event.data);
-          console.log('Received payload:', payload);
-          onPayload(payload);
+          const msg = JSON.parse(event.data);
+          console.log('Received payload:', msg);
+          const payload = (msg.eventType && msg.payload) ? msg.payload : msg;
+          if (!msg.eventType || msg.eventType === "trade") {
+            onPayload(payload);
+          }
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error, 'Data:', event.data);
         }
@@ -270,6 +327,8 @@
 
     // Initialize connections
     fetchInitialData().then(() => {
+      loadMarketData();
+      setInterval(loadMarketData, 30000);
       connect();
     });
   </script>

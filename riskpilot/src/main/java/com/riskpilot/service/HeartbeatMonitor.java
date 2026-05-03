@@ -66,6 +66,7 @@ public class HeartbeatMonitor {
                 current.orHigh(),
                 current.orLow(),
                 current.cumulativeDailyLossR(),
+                current.consecutiveLosses(),
                 current.activeTradeReference(),
                 "AWAITING_MARKET_OPEN"
             ));
@@ -103,6 +104,7 @@ public class HeartbeatMonitor {
                     current.orHigh(),
                     current.orLow(),
                     current.cumulativeDailyLossR(),
+                    current.consecutiveLosses(),
                     current.activeTradeReference(),
                     newRejectReason
                 ));
@@ -137,6 +139,7 @@ public class HeartbeatMonitor {
                     current.orHigh(),
                     current.orLow(),
                     current.cumulativeDailyLossR(),
+                    current.consecutiveLosses(),
                     null,   // active trade reference cleared
                     newRejectReason
                 ));
@@ -170,6 +173,7 @@ public class HeartbeatMonitor {
                     current.orHigh(),
                     current.orLow(),
                     current.cumulativeDailyLossR(),
+                    current.consecutiveLosses(),
                     current.activeTradeReference(),
                     newRejectReason
                 ));

@@ -38,7 +38,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/health/**", "/api/v1/monitor/**", "/api/v1/data/**").permitAll()
                 .requestMatchers("/api/v1/engine/health", "/api/v1/engine/state", "/api/v1/engine/candle-history").permitAll()
                 .requestMatchers("/actuator/health", "/actuator/info", "/api/actuator/health", "/api/actuator/info").permitAll()
-                .requestMatchers("/ws", "/ws/**", "/ws/signals/**").permitAll()
+                .requestMatchers("/ws", "/ws/**", "/ws/signals/**", "/stomp", "/stomp/**").permitAll()
                 .requestMatchers("/api/v1/engine/reset", "/api/v1/trading/engine/restart").hasRole("ADMIN")
                 .requestMatchers("/api/v1/trading/status").permitAll()
                 .requestMatchers("/api/v1/**").permitAll()

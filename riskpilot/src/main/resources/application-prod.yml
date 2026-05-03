@@ -189,12 +189,12 @@ riskpilot:
 # 🔐 ANGEL ONE CONFIG (NO DEFAULTS)
 # =========================================================
 
-angelone:
-  api-key: ${ANGELONE_API_KEY}
-  client-code: ${ANGELONE_CLIENT_CODE}
-  password: ${ANGELONE_PASSWORD}
-  totp-secret: ${ANGELONE_TOTP_SECRET}
-  base-url: https://apiconnect.angelbroking.com
+angelapi:
+  key: ${ANGEL_API_KEY:}
+  clientcode: ${ANGEL_CLIENT_ID:}
+  pin: ${ANGEL_PIN:}
+  totp:
+    secret: ${ANGEL_TOTP_SECRET:}
 
 # =========================================================
 # 📄 LOGGING (STRUCTURED, NOT VERBOSE)

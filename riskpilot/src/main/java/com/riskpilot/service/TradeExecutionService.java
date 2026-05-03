@@ -32,9 +32,9 @@ public class TradeExecutionService {
 
         // 🔒 STEP 3: Check Stop Loss (tick-level, immediate)
         TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
-        
+
         if (exit.triggered()) {
-            log.info("🛑 STOP LOSS: Price={}, PnL={}, Reason={}", 
+            log.info("🛑 STOP LOSS: Price={}, PnL={}, Reason={}",
                     currentPrice, exit.pnl(), exit.exitReason());
             return finalizeTrade(trade, exit);
         }
@@ -81,7 +81,7 @@ public class TradeExecutionService {
     }
 
     private ActiveTradeExecution finalizeTrade(ActiveTradeExecution trade, TradeExit exit) {
-        log.info("🔚 TRADE FINALIZED: Entry={}, Exit={}, PnL={}, Reason={}", 
+        log.info("🔚 TRADE FINALIZED: Entry={}, Exit={}, PnL={}, Reason={}",
                 trade.getEntryPrice(), exit.exitPrice(), exit.pnl(), exit.exitReason());
 
         // Record the execution for strict validation
@@ -95,26 +95,26 @@ public class TradeExecutionService {
 
     private void logMetrics(ActiveTradeExecution trade, TradeExit exit) {
         var metrics = strictValidationService.getDailyMetrics();
-        
-        log.info("📊 DAILY METRICS: Trades={}, Losses={}, DailyPnL={}/{}R", 
-                metrics.dailyTradeCount(), metrics.consecutiveLosses(), 
+
+        log.info("📊 DAILY METRICS: Trades={}, Losses={}, DailyPnL={}/{}R",
+                metrics.dailyTradeCount(), metrics.consecutiveLosses(),
                 metrics.dailyLossR(), metrics.maxAllowedLossR());
-        
-        log.info("🎯 TRADE METRICS: MFE={}, MAE={}, RR={:.2f}", 
-                trade.getMfe(), trade.getMae(), 
+
+        log.info("🎯 TRADE METRICS: MFE={}, MAE={}, RR={}",
+                trade.getMfe(), trade.getMae(),
                 trade.getMfe() > 0 ? trade.getMfe() / Math.abs(trade.getMae()) : 0.0);
     }
 
     public void validateExecutionPreconditions() {
         log.info("🔒 EXECUTION PRECONDITIONS CHECK");
-        
+
         // Validate all trading parameters before allowing any execution
         strictValidationService.validateTradingParameters();
-        
+
         // Log current state for audit
         var metrics = strictValidationService.getDailyMetrics();
-        log.info("📊 CURRENT STATE: {}/{} trades, {} consecutive losses, {}R daily PnL", 
-                metrics.dailyTradeCount(), metrics.maxAllowedTrades(), 
+        log.info("📊 CURRENT STATE: {}/{} trades, {} consecutive losses, {}R daily PnL",
+                metrics.dailyTradeCount(), metrics.maxAllowedTrades(),
                 metrics.consecutiveLosses(), metrics.dailyLossR());
     }
 }
