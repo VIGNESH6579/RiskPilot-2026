@@ -114,10 +114,13 @@ public class TradingSession {
     }
     
     public boolean isActive() {
-        return sessionActive && "ACTIVE".equals(status);
+        return Boolean.TRUE.equals(sessionActive) && "ACTIVE".equals(status);
     }
     
     public BigDecimal getOrRange() {
+        if (orHigh == null || orLow == null) {
+            return BigDecimal.ZERO;
+        }
         return orHigh.subtract(orLow);
     }
     

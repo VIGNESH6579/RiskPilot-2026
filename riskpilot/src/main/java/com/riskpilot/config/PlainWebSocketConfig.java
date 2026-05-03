@@ -1,5 +1,7 @@
 package com.riskpilot.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -10,6 +12,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,6 +29,7 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
     public static class TradeDataWebSocketHandler extends TextWebSocketHandler {
         
         private static final ConcurrentHashMap<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+        private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().registerModule(new JavaTimeModule());
 
         @Override
         public void afterConnectionEstablished(WebSocketSession session) {
@@ -44,26 +48,32 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
             // Handle incoming messages if needed
         }
 
+        public static void broadcastSessionState(Object payload) {
+            broadcastEvent("session", payload);
+        }
+
         public static void broadcastTradeData(Object tradeData) {
-            if (tradeData == null) return;
-            
+            broadcastEvent("trade", tradeData);
+        }
+
+        public static void broadcastEvent(String eventType, Object payload) {
+            if (payload == null) return;
+
             String message;
             try {
-                // Convert to JSON string properly
-                if (tradeData instanceof Map) {
-                    // Simple JSON conversion for Map objects
-                    message = mapToJson((Map<String, Object>) tradeData);
-                } else {
-                    message = tradeData.toString();
-                }
+                Map<String, Object> envelope = new LinkedHashMap<>();
+                envelope.put("eventType", eventType);
+                envelope.put("payload", payload);
+                message = OBJECT_MAPPER.writeValueAsString(envelope);
             } catch (Exception e) {
                 message = "{\"error\":\"Failed to serialize trade data\"}";
             }
+            final String serializedMessage = message;
 
             sessions.values().removeIf(session -> {
                 try {
                     if (session.isOpen()) {
-                        session.sendMessage(new TextMessage(message));
+                        session.sendMessage(new TextMessage(serializedMessage));
                         return false;
                     }
                 } catch (IOException e) {
@@ -71,26 +81,6 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
                 }
                 return true;
             });
-        }
-
-        private static String mapToJson(Map<String, Object> map) {
-            StringBuilder json = new StringBuilder("{");
-            boolean first = true;
-            for (Map.Entry<String, Object> entry : map.entrySet()) {
-                if (!first) json.append(",");
-                json.append("\"").append(entry.getKey()).append("\":");
-                Object value = entry.getValue();
-                if (value instanceof String) {
-                    json.append("\"").append(value).append("\"");
-                } else if (value instanceof Boolean) {
-                    json.append(value);
-                } else {
-                    json.append(value);
-                }
-                first = false;
-            }
-            json.append("}");
-            return json.toString();
         }
     }
 }

@@ -33,10 +33,10 @@ public interface CandleRepository extends JpaRepository<CandleEntity, Long> {
     @Query("SELECT COUNT(c) FROM CandleEntity c WHERE c.symbol = :symbol AND c.date = :date")
     Long countCandlesByDate(@Param("symbol") String symbol, @Param("date") LocalDate date);
     
-    @Query("SELECT MAX(c.high) FROM CandleEntity c WHERE c.symbol = :symbol AND c.timestamp >= :startTime AND c.timestamp <= :endTime")
+    @Query("SELECT MAX(c.highPrice) FROM CandleEntity c WHERE c.symbol = :symbol AND c.timestamp >= :startTime AND c.timestamp <= :endTime")
     BigDecimal getHighInTimeRange(@Param("symbol") String symbol, @Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
     
-    @Query("SELECT MIN(c.low) FROM CandleEntity c WHERE c.symbol = :symbol AND c.timestamp >= :startTime AND c.timestamp <= :endTime")
+    @Query("SELECT MIN(c.lowPrice) FROM CandleEntity c WHERE c.symbol = :symbol AND c.timestamp >= :startTime AND c.timestamp <= :endTime")
     BigDecimal getLowInTimeRange(@Param("symbol") String symbol, @Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
     
     @Query("SELECT AVG(c.range) FROM CandleEntity c WHERE c.symbol = :symbol AND c.date = :date")

@@ -23,6 +23,12 @@ NOTIFY_COOLDOWN_SEC = float(os.environ.get("RISKPILOT_NOTIFY_COOLDOWN_SEC", "10"
 PORT = int(os.environ.get("OBSERVER_PORT", os.environ.get("PORT", "8765")))
 HOST = os.environ.get("OBSERVER_HOST", "127.0.0.1")
 MAX_CACHE_SIZE = int(os.environ.get("RISKPILOT_MAX_CACHE_SIZE", "500"))
+EXPECTED_COLUMNS = [
+    "signalTime", "executionTime", "latencySec", "expectedEntry", "actualEntry",
+    "entrySlippage", "expectedExit", "actualExit", "exitSlippage", "tp1Hit",
+    "runnerCaptured", "mfe", "mae", "realizedR", "gateDecision", "rejectReason",
+    "regime", "timePhase", "feedStable", "exitReason", "exitTime",
+]
 
 processed_signals = OrderedDict()
 active_websockets = set()
@@ -49,14 +55,14 @@ def parse_line(line: str):
         parts = next(csv.reader([line]))
     except Exception:
         return None
-    # Expected CSV columns (LiveMetricsLogger):
-    # 0 signalTime, 1 executionTime, 2 latencySec, 3 expectedEntry, 4 actualEntry,
-    # 5 entrySlippage, 6 expectedExit, 7 actualExit, 8 exitSlippage, 9 tp1Hit,
-    # 10 runnerCaptured, 11 mfe, 12 mae, 13 realizedR, ... 19 exitReason, 20 exitTime
-    if len(parts) < 21:
+    first = parts[0].strip().lower()
+    if first in ("signaltime", "version=2"):
+        if [p.strip() for p in parts[-len(EXPECTED_COLUMNS):]] != EXPECTED_COLUMNS:
+            logger.warning("CSV header does not match LiveMetricsLogger format")
         return None
 
-    if parts[0].strip().lower() == "signaltime":
+    if len(parts) < len(EXPECTED_COLUMNS):
+        logger.warning("Skipping CSV row with %s columns; expected %s", len(parts), len(EXPECTED_COLUMNS))
         return None
 
     signal_id = f"{parts[0]}_{parts[3]}"

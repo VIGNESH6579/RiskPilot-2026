@@ -129,7 +129,8 @@ public class TrapEngine {
                 if (qty < 2) qty = 2; 
                 if (qty % 2 != 0) qty++; 
                 
-                s.setConfidence(qty);
+                s.setConfidence(100);
+                s.setQuantity(qty);
                 return s;
             }
         }

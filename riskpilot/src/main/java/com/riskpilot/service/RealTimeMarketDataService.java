@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -20,7 +21,7 @@ public class RealTimeMarketDataService {
 
     private final AngelAuthService authService;
     private final AngelTickStreamClient tickStreamClient;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
     
     // Real-time data cache with TTL
@@ -91,9 +92,9 @@ public class RealTimeMarketDataService {
             headers.set("Authorization", "Bearer " + jwt);
             headers.set("X-UserType", "USER");
             headers.set("X-SourceID", "WEB");
-            headers.set("X-ClientLocalIP", "CLIENT_LOCAL_IP");
-            headers.set("X-ClientPublicIP", "CLIENT_PUBLIC_IP");
-            headers.set("X-MACAddress", "MAC_ADDRESS");
+            headers.set("X-ClientLocalIP", authService.getLocalIp());
+            headers.set("X-ClientPublicIP", authService.getPublicIp());
+            headers.set("X-MACAddress", authService.getMacAddress());
             headers.set("X-PrivateKey", authService.getApiKey());
 
             HttpEntity<String> entity = new HttpEntity<>("{\"mode\":\"FULL\",\"exchangeTokens\":{\"NSE\":\"" + token + "\"}}", headers);
@@ -150,6 +151,13 @@ public class RealTimeMarketDataService {
             return authService.authenticate();
         }
         return true;
+    }
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
     }
 
     private boolean isCacheExpired() {

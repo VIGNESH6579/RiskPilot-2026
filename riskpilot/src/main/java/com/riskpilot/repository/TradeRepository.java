@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -26,8 +27,15 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
     @Query("SELECT COUNT(t) FROM Trade t WHERE t.symbol = :symbol AND t.entryTime >= :startDate")
     Long countTradesSince(@Param("symbol") String symbol, @Param("startDate") LocalDateTime startDate);
     
-    @Query("SELECT SUM(t.realizedPnL + t.unrealizedPnL) FROM Trade t WHERE t.symbol = :symbol AND DATE(t.entryTime) = CURRENT_DATE")
-    BigDecimal getTodayPnL(@Param("symbol") String symbol);
+    @Query("SELECT SUM(t.realizedPnL + t.unrealizedPnL) FROM Trade t WHERE t.symbol = :symbol AND t.entryTime >= :startTime AND t.entryTime < :endTime")
+    BigDecimal getPnLBetween(@Param("symbol") String symbol,
+                             @Param("startTime") LocalDateTime startTime,
+                             @Param("endTime") LocalDateTime endTime);
+
+    default BigDecimal getTodayPnL(String symbol) {
+        LocalDate today = LocalDate.now();
+        return getPnLBetween(symbol, today.atStartOfDay(), today.plusDays(1).atStartOfDay());
+    }
     
     @Query("SELECT MAX(t.maxAdverseExcursion) FROM Trade t WHERE t.symbol = :symbol AND t.entryTime >= :startDate")
     BigDecimal getMaxAdverseExcursionSince(@Param("symbol") String symbol, @Param("startDate") LocalDateTime startDate);
@@ -35,11 +43,25 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
     @Query("SELECT t FROM Trade t WHERE t.exitReason = :reason AND t.symbol = :symbol ORDER BY t.entryTime DESC")
     List<Trade> findTradesByExitReason(@Param("reason") String reason, @Param("symbol") String symbol);
     
-    @Query("SELECT COUNT(t) FROM Trade t WHERE t.symbol = :symbol AND t.tp1Hit = true AND DATE(t.entryTime) = CURRENT_DATE")
-    Long countTp1HitsToday(@Param("symbol") String symbol);
+    @Query("SELECT COUNT(t) FROM Trade t WHERE t.symbol = :symbol AND t.tp1Hit = true AND t.entryTime >= :startTime AND t.entryTime < :endTime")
+    Long countTp1HitsBetween(@Param("symbol") String symbol,
+                             @Param("startTime") LocalDateTime startTime,
+                             @Param("endTime") LocalDateTime endTime);
+
+    default Long countTp1HitsToday(String symbol) {
+        LocalDate today = LocalDate.now();
+        return countTp1HitsBetween(symbol, today.atStartOfDay(), today.plusDays(1).atStartOfDay());
+    }
     
-    @Query("SELECT COUNT(t) FROM Trade t WHERE t.symbol = :symbol AND t.runnerActive = true AND DATE(t.entryTime) = CURRENT_DATE")
-    Long countRunnersToday(@Param("symbol") String symbol);
+    @Query("SELECT COUNT(t) FROM Trade t WHERE t.symbol = :symbol AND t.runnerActive = true AND t.entryTime >= :startTime AND t.entryTime < :endTime")
+    Long countRunnersBetween(@Param("symbol") String symbol,
+                             @Param("startTime") LocalDateTime startTime,
+                             @Param("endTime") LocalDateTime endTime);
+
+    default Long countRunnersToday(String symbol) {
+        LocalDate today = LocalDate.now();
+        return countRunnersBetween(symbol, today.atStartOfDay(), today.plusDays(1).atStartOfDay());
+    }
     
     @Query("SELECT t FROM Trade t WHERE t.status = 'CLOSED' AND t.symbol = :symbol ORDER BY t.entryTime DESC")
     List<Trade> getClosedTradesBySymbol(@Param("symbol") String symbol);

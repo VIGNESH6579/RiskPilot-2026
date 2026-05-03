@@ -27,8 +27,12 @@ public class RiskGateEngine {
     public void validate() {
         log.info("🔴 RISKGATE STARTUP VALIDATION");
         
+        if (config.getRisk().getMaxTradesPerDay() > 10) {
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day exceeds safety limit of 10. Current: " + 
+                config.getRisk().getMaxTradesPerDay());
+        }
         if (config.getRisk().getMaxTradesPerDay() > 2) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2. Current: " + 
+            log.warn("HIGH_TRADE_COUNT: maxTradesPerDay={} - ensure this is intentional",
                 config.getRisk().getMaxTradesPerDay());
         }
 
@@ -70,10 +74,10 @@ public class RiskGateEngine {
         // 🔴 REGIME CONFIDENCE SCORE (PRE-TRADE HARD BLOCK)
         // -------------------------
         // This sits ABOVE all other logic - if score < 55, NO TRADING AT ALL
-        List<RegimeConfidenceEngine.CandleData> candleData = convertToCandleData(state);
-        RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(state, candleData);
+        List<RegimeConfidenceEngine.CandleData> candleData = convertToCandleData(s);
+        RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(s, candleData);
         
-        if (!regimeScore.tradingAllowed()) {
+        if (!regimeScore.isTradingAllowed()) {
             log.error("🚫 REGIME_CONFIDENCE_BLOCKED: Score={}, Reason={}", 
                     regimeScore.getTotalScore(), regimeScore.getReason());
             return reject("LOW_CONFIDENCE_DAY");
@@ -82,9 +86,9 @@ public class RiskGateEngine {
         // -------------------------
         // 🔴 REDUCED MODE LIMIT (1 trade max)
         // -------------------------
-        if (regimeScore.reducedMode() && state.tradesTaken() >= 1) {
+        if (regimeScore.isReducedMode() && s.tradesTaken() >= 1) {
             log.error("🚫 REDUCED_MODE_LIMIT: Score={}, TradesTaken={}", 
-                    regimeScore.getTotalScore(), state.tradesTaken());
+                    regimeScore.getTotalScore(), s.tradesTaken());
             return reject("REDUCED_MODE_LIMIT");
         }
 
@@ -93,6 +97,9 @@ public class RiskGateEngine {
         // -------------------------
         AdaptiveRegimeEngine.AdaptiveConfig adaptiveConfig = adaptiveRegimeEngine.getCurrentConfig();
         RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
+        if (regime == null) {
+            return reject("REGIME_NOT_INITIALIZED");
+        }
         
         // Check adaptive thresholds
         if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {

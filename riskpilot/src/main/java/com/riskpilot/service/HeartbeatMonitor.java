@@ -16,6 +16,7 @@ public class HeartbeatMonitor {
 
     private final SessionStateManager stateManager;
     private final CandleAggregator candleAggregator;
+    private final MarketSessionService marketSessionService;
     
     private LocalDateTime lastTickReceivedTime = LocalDateTime.now();
     
@@ -24,13 +25,26 @@ public class HeartbeatMonitor {
     private volatile boolean previousHeartbeatAlive = true;
     private volatile String previousLastRejectReason = "INITIALIZED";
 
-    public HeartbeatMonitor(SessionStateManager stateManager, CandleAggregator candleAggregator) {
+    public HeartbeatMonitor(
+        SessionStateManager stateManager,
+        CandleAggregator candleAggregator,
+        MarketSessionService marketSessionService
+    ) {
         this.stateManager = stateManager;
         this.candleAggregator = candleAggregator;
+        this.marketSessionService = marketSessionService;
     }
 
     public synchronized void registerTick() {
         lastTickReceivedTime = LocalDateTime.now();
+    }
+
+    public synchronized String getLastHeartbeatTime() {
+        return lastTickReceivedTime != null ? lastTickReceivedTime.toString() : null;
+    }
+
+    public synchronized boolean isHealthy() {
+        return java.time.Duration.between(lastTickReceivedTime, LocalDateTime.now()).getSeconds() < 45;
     }
 
     /**
@@ -39,12 +53,32 @@ public class HeartbeatMonitor {
      */
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
+        if (!marketSessionService.isMarketOpen()) {
+            stateManager.update(current -> new TradingSessionSnapshot(
+                false,
+                current.regime(),
+                current.volatilityQualified(),
+                current.timePhase(),
+                current.tradesTaken(),
+                current.tradeActive(),
+                true,
+                true,
+                current.orHigh(),
+                current.orLow(),
+                current.cumulativeDailyLossR(),
+                current.activeTradeReference(),
+                "AWAITING_MARKET_OPEN"
+            ));
+            previousFeedStable = true;
+            previousHeartbeatAlive = true;
+            previousLastRejectReason = "AWAITING_MARKET_OPEN";
+            return;
+        }
+
         LocalDateTime now = LocalDateTime.now();
         long secondsSinceLastTick = java.time.Duration.between(lastTickReceivedTime, now).getSeconds();
 
         TradingSessionSnapshot currentState = stateManager.getSnapshot();
-        boolean stateChanged = false;
-
         if (secondsSinceLastTick >= 15 && secondsSinceLastTick < 45) {
             // Feed unstable state
             boolean newFeedStable = false;
@@ -72,7 +106,6 @@ public class HeartbeatMonitor {
                     current.activeTradeReference(),
                     newRejectReason
                 ));
-                stateChanged = true;
             }
             
             // Update previous state tracking
@@ -107,7 +140,6 @@ public class HeartbeatMonitor {
                     null,   // active trade reference cleared
                     newRejectReason
                 ));
-                stateChanged = true;
             }
             
             // Update previous state tracking
@@ -141,7 +173,6 @@ public class HeartbeatMonitor {
                     current.activeTradeReference(),
                     newRejectReason
                 ));
-                stateChanged = true;
             }
             
             // Update previous state tracking

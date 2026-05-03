@@ -1,13 +1,18 @@
 package com.riskpilot.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -25,21 +30,23 @@ public class SecurityConfig {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .httpBasic(Customizer.withDefaults())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/actuator/health").permitAll()
-                .requestMatchers("/api/actuator/info").permitAll()
-                // BUG-040: Admin endpoints now protected (removed permitAll)
-                .requestMatchers("/api/actuator/metrics").hasRole("ADMIN")
-                .requestMatchers("/api/actuator/**").hasRole("ADMIN")
+                .requestMatchers("/", "/index.html", "/frontend.html").permitAll()
+                .requestMatchers("/api/initial-data").permitAll()
+                .requestMatchers("/api/v1/health/**", "/api/v1/monitor/**", "/api/v1/data/**").permitAll()
+                .requestMatchers("/api/v1/engine/health", "/api/v1/engine/state", "/api/v1/engine/candle-history").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info", "/api/actuator/health", "/api/actuator/info").permitAll()
+                .requestMatchers("/ws", "/ws/**", "/ws/signals/**").permitAll()
+                .requestMatchers("/api/v1/engine/reset", "/api/v1/trading/engine/restart").hasRole("ADMIN")
                 .requestMatchers("/api/v1/trading/status").permitAll()
-                .requestMatchers("/api/v1/trading/**").hasRole("TRADER")
-                // BUG-040: H2 console and observer require admin (not permitAll)
-                .requestMatchers("/h2-console/**").hasRole("ADMIN")
-                .requestMatchers("/observer/**").hasRole("ADMIN")
-                .requestMatchers("/frontend.html").permitAll()
-                .anyRequest().authenticated()
+                .requestMatchers("/api/v1/**").permitAll()
+                .requestMatchers("/h2-console/**").permitAll()
+                .anyRequest().permitAll()
             );
+
+        http.headers(headers -> headers.frameOptions(frame -> frame.disable()));
         
         return http.build();
     }
@@ -61,5 +68,19 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(12);
+    }
+
+    @Bean
+    public UserDetailsService userDetailsService(
+        @Value("${ADMIN_USERNAME:admin}") String adminUsername,
+        @Value("${ADMIN_PASSWORD:changeme}") String adminPassword,
+        PasswordEncoder passwordEncoder
+    ) {
+        return new InMemoryUserDetailsManager(
+            User.withUsername(adminUsername)
+                .password(passwordEncoder.encode(adminPassword))
+                .roles("ADMIN", "TRADER")
+                .build()
+        );
     }
 }

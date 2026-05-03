@@ -4,8 +4,8 @@ import com.riskpilot.service.AngelOneMarketDataService;
 import com.riskpilot.service.HeartbeatMonitor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
@@ -75,7 +75,7 @@ public class HealthIndicatorConfig {
         public Health health() {
             try {
                 boolean isHealthy = heartbeatMonitor.isHealthy();
-                long lastHeartbeat = heartbeatMonitor.getLastHeartbeatTime();
+                String lastHeartbeat = heartbeatMonitor.getLastHeartbeatTime();
                 
                 if (isHealthy) {
                     return Health.up()

@@ -22,6 +22,10 @@ public class StrictValidationService {
     private volatile double dailyLossR = 0.0;
     private volatile LocalDateTime lastTradeDate;
 
+    public void validateSystem() {
+        validate();
+    }
+
     @PostConstruct
     public void validate() {
         log.info("🔒 STRICT VALIDATION STARTUP");
@@ -62,13 +66,13 @@ public class StrictValidationService {
         log.info("🔒 STRICT MODE: Validating trading parameters against doctrine");
         
         // Trade count validation
-        if (config.getRisk().getMaxTradesPerDay() > 2) {
+        if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 2. Current: " + 
-                config.getRisk().getMaxTradesPerDay());
+                properties.getRisk().getMaxTradesPerDay());
         }
         
         // Slippage validation
-        var slippage = config.getExecution().getSlippage();
+        var slippage = properties.getExecution().getSlippage();
         if (slippage.getEntryMax() > 2.0) {
             throw new TradingException("STRICT_MODE_VIOLATION: entry-max slippage cannot exceed 2.0. Current: " + 
                 slippage.getEntryMax());
@@ -90,7 +94,7 @@ public class StrictValidationService {
     }
 
     public boolean canExecuteNewTrade() {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return true; // Allow if not in strict mode
         }
 
@@ -139,7 +143,7 @@ public class StrictValidationService {
     }
 
     public void recordTradeExecution(double pnl) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
@@ -158,7 +162,7 @@ public class StrictValidationService {
     }
 
     public void validateSlippage(String tradeType, double actualSlippage) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
@@ -172,7 +176,7 @@ public class StrictValidationService {
         };
 
         if (actualSlippage > maxAllowed) {
-            if (properties.getExecution().getRejectOnHighSlippage()) {
+            if (properties.getExecution().isRejectOnHighSlippage()) {
                 throw new TradingException(String.format(
                     "STRICT_MODE_VIOLATION: %s slippage %.2f exceeds maximum %.2f", 
                     tradeType, actualSlippage, maxAllowed));
@@ -184,7 +188,7 @@ public class StrictValidationService {
     }
 
     public void validateLatency(long actualLatencyMs) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
@@ -197,7 +201,7 @@ public class StrictValidationService {
         }
 
         if (actualLatencyMs > latencyConfig.getHardBlockMs()) {
-            if (properties.getExecution().getRejectOnLatencyBreach()) {
+            if (properties.getExecution().isRejectOnLatencyBreach()) {
                 throw new TradingException(String.format(
                     "STRICT_MODE_VIOLATION: Latency %dms exceeds hard block threshold %dms", 
                     actualLatencyMs, latencyConfig.getHardBlockMs()));
@@ -214,7 +218,7 @@ public class StrictValidationService {
     }
 
     public void validateRegime(String currentRegime) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
@@ -228,7 +232,7 @@ public class StrictValidationService {
     }
 
     public void validateTimePhase(LocalTime currentTime) {
-        if (!properties.getStrictMode()) {
+        if (!properties.isStrictMode()) {
             return;
         }
 
@@ -259,15 +263,15 @@ public class StrictValidationService {
     }
 
     public TradingMetrics getDailyMetrics() {
-        return TradingMetrics.builder()
-                .dailyTradeCount(dailyTradeCount.get())
-                .consecutiveLosses(consecutiveLosses.get())
-                .dailyLossR(dailyLossR)
-                .maxAllowedTrades(properties.getRisk().getMaxTradesPerDay())
-                .maxAllowedLossR(properties.getRisk().getMaxDailyLossR())
-                .maxAllowedConsecutiveLosses(properties.getRisk().getMaxConsecutiveLosses())
-                .strictMode(properties.getStrictMode())
-                .build();
+        return new TradingMetrics(
+            dailyTradeCount.get(),
+            consecutiveLosses.get(),
+            dailyLossR,
+            properties.getRisk().getMaxTradesPerDay(),
+            properties.getRisk().getMaxDailyLossR(),
+            properties.getRisk().getMaxConsecutiveLosses(),
+            properties.isStrictMode()
+        );
     }
 
     public record TradingMetrics(

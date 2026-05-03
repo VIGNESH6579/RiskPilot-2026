@@ -12,7 +12,8 @@ import lombok.Data;
  */
 @Data
 public class ActiveTradeExecution {
-    
+
+    private String direction = "SHORT";
     private double entryPrice;
     private double stopLoss;
     private double tp1Level;
@@ -29,8 +30,80 @@ public class ActiveTradeExecution {
     private double realizedPnL;
     private double mfe;
     private double mae;
-    
+    private double peakFavorableR;
     private double trailingSL;
+
+    public ActiveTradeExecution() {
+    }
+
+    public ActiveTradeExecution(
+        double entryPrice,
+        double stopLoss,
+        double tp1Level,
+        double initialRiskPoints,
+        boolean tp1Hit,
+        boolean runnerActive,
+        double positionSize,
+        double remainingSize,
+        double realizedPnL,
+        double mfe,
+        double mae,
+        double trailingSL
+    ) {
+        this("SHORT", entryPrice, stopLoss, tp1Level, initialRiskPoints, tp1Hit, runnerActive,
+            positionSize, remainingSize, realizedPnL, mfe, mae, 0.0, trailingSL);
+    }
+
+    public ActiveTradeExecution(
+        double entryPrice,
+        double stopLoss,
+        double tp1Level,
+        double initialRiskPoints,
+        boolean tp1Hit,
+        boolean runnerActive,
+        double positionSize,
+        double remainingSize,
+        double realizedPnL,
+        double mfe,
+        double mae,
+        double peakFavorableR,
+        double trailingSL
+    ) {
+        this("SHORT", entryPrice, stopLoss, tp1Level, initialRiskPoints, tp1Hit, runnerActive,
+            positionSize, remainingSize, realizedPnL, mfe, mae, peakFavorableR, trailingSL);
+    }
+
+    public ActiveTradeExecution(
+        String direction,
+        double entryPrice,
+        double stopLoss,
+        double tp1Level,
+        double initialRiskPoints,
+        boolean tp1Hit,
+        boolean runnerActive,
+        double positionSize,
+        double remainingSize,
+        double realizedPnL,
+        double mfe,
+        double mae,
+        double peakFavorableR,
+        double trailingSL
+    ) {
+        this.direction = direction == null || direction.isBlank() ? "SHORT" : direction;
+        this.entryPrice = entryPrice;
+        this.stopLoss = stopLoss;
+        this.tp1Level = tp1Level;
+        this.initialRiskPoints = initialRiskPoints;
+        this.tp1Hit = tp1Hit;
+        this.runnerActive = runnerActive;
+        this.positionSize = positionSize;
+        this.remainingSize = remainingSize;
+        this.realizedPnL = realizedPnL;
+        this.mfe = mfe;
+        this.mae = mae;
+        this.peakFavorableR = peakFavorableR;
+        this.trailingSL = trailingSL;
+    }
     
     /**
      * BUG-011: TP1 lot scaling with minimum threshold.
@@ -44,7 +117,11 @@ public class ActiveTradeExecution {
     public static ActiveTradeExecution fromTickTP1(ActiveTradeExecution trade, double currentPrice) {
         if (trade.tp1Hit()) return trade;
         
-        if (currentPrice >= trade.tp1Level()) {
+        boolean tp1Reached = trade.isShort()
+            ? currentPrice <= trade.tp1Level()
+            : currentPrice >= trade.tp1Level();
+
+        if (tp1Reached) {
             double tp1ExitPrice = currentPrice;
             
             // BUG-011: Ensure minimum TP1 exit even for small positions
@@ -53,9 +130,12 @@ public class ActiveTradeExecution {
             double minTp1Ratio = trade.positionSize() >= 5.0 ? 0.20 : 1.0;
             double tp1Size = trade.positionSize() * minTp1Ratio;
             double remaining = trade.positionSize() - tp1Size;
-            double pnl = (tp1ExitPrice - trade.entryPrice()) * tp1Size;
+            double pnl = trade.isShort()
+                ? (trade.entryPrice() - tp1ExitPrice) * tp1Size
+                : (tp1ExitPrice - trade.entryPrice()) * tp1Size;
             
             return new ActiveTradeExecution(
+                trade.direction(),
                 trade.entryPrice(),
                 trade.entryPrice(),   // MOVE SL TO BREAKEVEN
                 trade.tp1Level(),
@@ -67,6 +147,7 @@ public class ActiveTradeExecution {
                 trade.realizedPnL() + pnl,
                 trade.mfe(),
                 trade.mae(),
+                trade.peakFavorableR(),
                 trade.entryPrice()    // trailing starts at BE
             );
         }
@@ -84,6 +165,10 @@ public class ActiveTradeExecution {
      * @return Updated trade execution with trailing stop adjusted
      */
     public static ActiveTradeExecution fromCandleClose(ActiveTradeExecution trade, CandleEntity candle, double atr) {
+        return fromCandleClose(trade, candle.toCandle(), atr);
+    }
+
+    public static ActiveTradeExecution fromCandleClose(ActiveTradeExecution trade, Candle candle, double atr) {
         if (!trade.runnerActive()) return trade;
         
         // BUG-013: ATR-normalized trailing stop buffer
@@ -93,13 +178,16 @@ public class ActiveTradeExecution {
         // For SHORT trades → trail using candle HIGH + buffer
         // For LONG trades → trail using candle LOW - buffer
         double newTrailingSL = trade.isShort() 
-            ? candle.getHighPrice().doubleValue() + buffer 
-            : candle.getLowPrice().doubleValue() - buffer;
+            ? candle.high + buffer
+            : candle.low - buffer;
         
         // Only tighten (never loosen)
-        double updatedSL = Math.max(trade.trailingSL(), newTrailingSL);
+        double updatedSL = trade.isShort()
+            ? Math.min(trade.trailingSL(), newTrailingSL)
+            : Math.max(trade.trailingSL(), newTrailingSL);
         
         return new ActiveTradeExecution(
+            trade.direction(),
             trade.entryPrice(),
             updatedSL,
             trade.tp1Level(),
@@ -111,6 +199,7 @@ public class ActiveTradeExecution {
             trade.realizedPnL(),
             trade.mfe(),
             trade.mae(),
+            trade.peakFavorableR(),
             updatedSL
         );
     }
@@ -122,6 +211,11 @@ public class ActiveTradeExecution {
     @Deprecated
     public static ActiveTradeExecution fromCandleClose(ActiveTradeExecution trade, CandleEntity candle) {
         return fromCandleClose(trade, candle, 25.0); // Default ATR ~25 for NIFTY
+    }
+
+    @Deprecated
+    public static ActiveTradeExecution fromCandleClose(ActiveTradeExecution trade, Candle candle) {
+        return fromCandleClose(trade, candle, 25.0);
     }
     
     /**
@@ -159,7 +253,8 @@ public class ActiveTradeExecution {
             return new TradeExit(
                 true,
                 pnl,
-                "STOP_LOSS"
+                "STOP_LOSS",
+                currentPrice
             );
         }
         
@@ -182,6 +277,7 @@ public class ActiveTradeExecution {
         double mae = Math.min(trade.mae(), priceDelta);
         
         return new ActiveTradeExecution(
+            trade.direction(),
             trade.entryPrice(),
             trade.stopLoss(),
             trade.tp1Level(),
@@ -193,13 +289,29 @@ public class ActiveTradeExecution {
             trade.realizedPnL(),
             mfe,
             mae,
+            Math.max(trade.peakFavorableR(), trade.initialRiskPoints() > 0.0 ? mfe / trade.initialRiskPoints() : 0.0),
             trade.trailingSL()
         );
     }
     
     private boolean isShort() {
-        // This would be determined by trade direction in a real implementation
-        // For now, assume LONG (trailing on lows)
-        return false;
+        return "SHORT".equalsIgnoreCase(direction);
     }
+
+    public String direction() { return direction; }
+    public double entryPrice() { return entryPrice; }
+    public double stopLoss() { return stopLoss; }
+    public double tp1Level() { return tp1Level; }
+    public double initialRiskPoints() { return initialRiskPoints; }
+    public boolean tp1Hit() { return tp1Hit; }
+    public boolean runnerActive() { return runnerActive; }
+    public boolean getTp1Hit() { return tp1Hit; }
+    public boolean getRunnerActive() { return runnerActive; }
+    public double positionSize() { return positionSize; }
+    public double remainingSize() { return remainingSize; }
+    public double realizedPnL() { return realizedPnL; }
+    public double mfe() { return mfe; }
+    public double mae() { return mae; }
+    public double peakFavorableR() { return peakFavorableR; }
+    public double trailingSL() { return trailingSL; }
 }

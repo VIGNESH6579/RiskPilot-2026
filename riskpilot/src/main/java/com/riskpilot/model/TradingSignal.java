@@ -102,6 +102,9 @@ public class TradingSignal {
     }
     
     public boolean isExpired() {
+        if (signalTime == null) {
+            return false;
+        }
         return signalTime.plusMinutes(15).isBefore(LocalDateTime.now());
     }
 }

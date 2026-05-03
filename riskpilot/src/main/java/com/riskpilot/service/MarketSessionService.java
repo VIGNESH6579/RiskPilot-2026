@@ -26,30 +26,21 @@ public class MarketSessionService {
      * Source: https://www.nseindia.com/resources/exchange-communication-holidays
      */
     private static final Set<LocalDate> NSE_HOLIDAYS_2026 = Set.of(
-        // Fixed holidays
         LocalDate.of(2026, 1, 26),   // Republic Day
-        LocalDate.of(2026, 10, 2),   // Gandhi Jayanti
-        LocalDate.of(2026, 12, 25),  // Christmas Day
-        
-        // Festival holidays (2026 dates - verify with official NSE notice)
-        LocalDate.of(2026, 2, 26),   // Mahashivratri (approximate)
-        LocalDate.of(2026, 3, 20),   // Holi (approximate)
+        LocalDate.of(2026, 3, 3),    // Holi
+        LocalDate.of(2026, 3, 26),   // Shri Ram Navami
+        LocalDate.of(2026, 3, 31),   // Shri Mahavir Jayanti
         LocalDate.of(2026, 4, 3),    // Good Friday
-        LocalDate.of(2026, 4, 14),   // Dr. Ambedkar Jayanti
+        LocalDate.of(2026, 4, 14),   // Dr. Baba Saheb Ambedkar Jayanti
         LocalDate.of(2026, 5, 1),    // Maharashtra Day
-        LocalDate.of(2026, 8, 17),   // Parsi New Year (approximate)
-        LocalDate.of(2026, 9, 16),   // Ganesh Chaturthi (approximate)
-        LocalDate.of(2026, 10, 21),  // Diwali (Laxmi Pujan - approximate)
-        LocalDate.of(2026, 11, 4),   // Gurunanak Jayanti (approximate)
-        
-        // Additional configurable holidays can be added via properties
-        LocalDate.of(2026, 1, 1),    // New Year's Day
-        LocalDate.of(2026, 4, 15),   // Ram Navami (approximate)
-        LocalDate.of(2026, 6, 26),   // Eid-ul-Fitr (approximate)
-        LocalDate.of(2026, 7, 5),    // Rath Yatra (approximate)
-        LocalDate.of(2026, 9, 24),   // Dussehra (approximate)
-        LocalDate.of(2026, 11, 9),   // Diwali Balipratipada (approximate)
-        LocalDate.of(2026, 12, 31)   // New Year's Eve (optional)
+        LocalDate.of(2026, 5, 28),   // Bakri Id
+        LocalDate.of(2026, 6, 26),   // Muharram
+        LocalDate.of(2026, 9, 14),   // Ganesh Chaturthi
+        LocalDate.of(2026, 10, 2),   // Mahatma Gandhi Jayanti
+        LocalDate.of(2026, 10, 20),  // Dussehra
+        LocalDate.of(2026, 11, 10),  // Diwali-Balipratipada
+        LocalDate.of(2026, 11, 24),  // Prakash Gurpurb Sri Guru Nanak Dev
+        LocalDate.of(2026, 12, 25)   // Christmas
     );
 
     /**

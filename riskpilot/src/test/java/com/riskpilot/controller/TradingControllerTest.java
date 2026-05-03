@@ -8,9 +8,9 @@ import com.riskpilot.service.ShadowExecutionEngine;
 import com.riskpilot.service.TradingSessionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
@@ -31,14 +31,13 @@ class TradingControllerTest {
     @Autowired
     private MockMvc mockMvc;
     
-    @MockBean
+    @MockitoBean
     private ShadowExecutionEngine shadowExecutionEngine;
     
-    @MockBean
+    @MockitoBean
     private TradingSessionService tradingSessionService;
     
-    @Autowired
-    private ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     
     @Test
     void getTradingStatus_ReturnsOkStatus() throws Exception {

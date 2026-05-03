@@ -8,6 +8,7 @@ import jakarta.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -43,6 +44,8 @@ public class AngelTickStreamClient {
     // BUG-032: Deduplication guard - prevent duplicate subscriptions
     private final AtomicBoolean subscriptionActive = new AtomicBoolean(false);
     private final AtomicLong lastSpotValue = new AtomicLong(0);
+    private final AtomicLong sequenceCounter = new AtomicLong(0);
+    private ScheduledFuture<?> pollerFuture;
 
     public AngelTickStreamClient(
         CandleAggregator candleAggregator,
@@ -62,9 +65,12 @@ public class AngelTickStreamClient {
             return;
         }
         
-        // Production-safe fallback feed:
-        // until SmartAPI WS integration is completed, keep engine alive with polled live spot.
-        poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
+        if (pollerFuture != null && !pollerFuture.isCancelled()) {
+            pollerFuture.cancel(false);
+        }
+
+        // Production-safe fallback feed until SmartAPI WS integration is completed.
+        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
         log.info("AngelTickStreamClient started with deduplication guard");
     }
 
@@ -76,20 +82,20 @@ public class AngelTickStreamClient {
                 return;
             }
             
-            // BUG-032: Basic deduplication - skip if same value as last tick
             long currentSpot = (long) (snap.spot() * 100); // Store as long to avoid float precision issues
-            if (currentSpot == lastSpotValue.get()) {
-                // Same value - still register tick but don't process as new candle data
-                heartbeatMonitor.registerTick();
-                return;
-            }
             lastSpotValue.set(currentSpot);
             
             heartbeatMonitor.registerTick();
             
             // BUG-001: Pass receivedAt time to preserve original timing
             LocalDateTime receivedAt = LocalDateTime.now();
-            candleAggregator.processTick(LocalDateTime.now(), snap.spot(), 1L, currentSpot, receivedAt);
+            candleAggregator.processTick(
+                LocalDateTime.now(),
+                snap.spot(),
+                1L,
+                sequenceCounter.incrementAndGet(),
+                receivedAt
+            );
             
         } catch (Exception e) {
             candleAggregator.markUnstable();
@@ -106,5 +112,9 @@ public class AngelTickStreamClient {
         subscriptionActive.set(false);
         lastSpotValue.set(0);
         init(); // Re-initialize
+    }
+
+    public boolean isStreamActive() {
+        return subscriptionActive.get() && pollerFuture != null && !pollerFuture.isCancelled();
     }
 }

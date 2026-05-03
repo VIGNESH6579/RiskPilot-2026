@@ -10,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
@@ -26,7 +27,7 @@ public class AngelOneMarketDataService {
     private static final String NIFTY_INDEX_TOKEN = "99926000";
 
     private final AngelAuthService authService;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
 
     public AngelOneMarketDataService(AngelAuthService authService) {
@@ -66,6 +67,18 @@ public class AngelOneMarketDataService {
             log.warn("AngelOne LTP fetch failed: {}", e.getMessage());
             return Optional.empty();
         }
+    }
+
+    public boolean isConnected() {
+        String jwt = authService.getJwtToken();
+        return jwt != null && !jwt.isBlank();
+    }
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
     }
 
     private boolean ensureAuth() {

@@ -2,11 +2,12 @@ spring:
   config:
     activate:
       on-profile: prod
-  autoconfigure:
-    exclude:
-      # BUG-036: Database auto-config excluded - we use Flyway for migrations
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:${DATABASE_URL:jdbc:h2:file:./data/riskpilot;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE}}
+    username: ${SPRING_DATASOURCE_USERNAME:${DATABASE_USERNAME:sa}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${DATABASE_PASSWORD:password}}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
   
   # BUG-036: Flyway migration configuration
   flyway:
@@ -21,13 +22,14 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: false
+    properties:
+      hibernate:
+        dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
 
   # 🔴 STRICT JSON TIME CONTROL
   jackson:
     time-zone: Asia/Kolkata
     date-format: yyyy-MM-dd HH:mm:ss
-    serialization:
-      write-dates-as-timestamps: false
 
 # =========================================================
 # 🔒 RISKPILOT DOCTRINE-ENFORCED CONFIG

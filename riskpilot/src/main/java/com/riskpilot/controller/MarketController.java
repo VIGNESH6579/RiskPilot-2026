@@ -2,6 +2,7 @@ package com.riskpilot.controller;
 
 import com.riskpilot.service.MarketService;
 import com.riskpilot.service.OptionChainService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -20,17 +21,25 @@ public class MarketController {
     }
 
     @GetMapping("/market")
-    public Map<String, Object> getMarketData() {
+    public ResponseEntity<Map<String, Object>> getMarketData() {
+        try {
+            OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
+            if (chain == null || chain.spot() <= 0.0) {
+                marketService.getPrice("NIFTY");
+            }
 
-        OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
-        double price = chain.spot() > 0.0 ? chain.spot() : marketService.getPrice("NIFTY");
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("symbol", "NIFTY");
-        response.put("price", price);
-        response.put("source", chain.source());
-        response.put("expiry", chain.expiry());
-
-        return response;
+            Map<String, Object> response = new HashMap<>();
+            response.put("symbol", "NIFTY");
+            response.put("price", chain.spot());
+            response.put("source", chain.source());
+            response.put("expiry", chain.expiry());
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of(
+                "error", "MARKET_DATA_UNAVAILABLE",
+                "symbol", "NIFTY",
+                "message", e.getMessage()
+            ));
+        }
     }
 }

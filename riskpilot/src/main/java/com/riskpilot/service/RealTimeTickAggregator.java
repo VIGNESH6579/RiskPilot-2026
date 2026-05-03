@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -56,12 +57,22 @@ public class RealTimeTickAggregator {
         }
         
         CandleEntity build() {
-            return new CandleEntity(
-                symbol,
-                open, high, low, close, volume,
-                LocalDateTime.ofInstant(startTime, ZoneId.of("Asia/Kolkata")),
-                LocalDateTime.ofInstant(Instant.now(), ZoneId.of("Asia/Kolkata"))
-            );
+            ZoneId zone = ZoneId.of("Asia/Kolkata");
+            LocalDateTime timestamp = LocalDateTime.ofInstant(startTime, zone);
+            return CandleEntity.builder()
+                .symbol(symbol)
+                .date(startTime.atZone(zone).toLocalDate())
+                .timestamp(timestamp)
+                .openPrice(BigDecimal.valueOf(open))
+                .highPrice(BigDecimal.valueOf(high))
+                .lowPrice(BigDecimal.valueOf(low))
+                .closePrice(BigDecimal.valueOf(close))
+                .volume(volume)
+                .range(BigDecimal.valueOf(high - low))
+                .timeframe(5)
+                .isBullish(close > open)
+                .createdAt(LocalDateTime.ofInstant(Instant.now(), zone))
+                .build();
         }
     }
 

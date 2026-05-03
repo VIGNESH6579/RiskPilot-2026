@@ -2,6 +2,8 @@ package com.riskpilot.service;
 
 import com.riskpilot.model.Candle;
 import com.riskpilot.model.Signal;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -14,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 
 public class BacktestEngine {
+    private static final Logger log = LoggerFactory.getLogger(BacktestEngine.class);
 
     private final TrapEngine trapEngine;
 
@@ -78,7 +81,10 @@ public class BacktestEngine {
                         Double.parseDouble(values[1].trim()), Double.parseDouble(values[2].trim()),
                         Double.parseDouble(values[3].trim()), Double.parseDouble(values[4].trim())));
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            log.error("Critical error parsing CSV file: {} - {}", filePath, e.getMessage(), e);
+            throw new RuntimeException("CSV parse failure: " + filePath, e);
+        }
         candles.sort(Comparator.comparing(c -> LocalDateTime.parse(c.date + "T" + c.time)));
         return candles;
     }
@@ -216,7 +222,7 @@ public class BacktestEngine {
         } 
         else if (!activeTrade.tp1Hit && c.low <= activeTrade.tp1Target) {
             activeTrade.tp1Hit = true;
-            double distanceCaptured = (activeTrade.entry - activeTrade.tp1Target) - 2.0; 
+            double distanceCaptured = activeTrade.entry - activeTrade.tp1Target; 
             
             double exitExposure = Math.min(activeTrade.currentExposure, tp1Fraction * activeTrade.initialExposure);
             activeTrade.realizedPL += distanceCaptured * exitExposure;

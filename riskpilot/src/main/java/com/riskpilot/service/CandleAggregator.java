@@ -138,7 +138,7 @@ public class CandleAggregator {
 
     private void finalizeCandle(Candle completedCandle) {
         historicalBuffer.add(completedCandle.copy());
-        // Truncate buffer securely mapping purely smoothly optimally efficiently comfortably cleverly cleanly naturally explicitly fluently explicit stably neatly tracking
+        // Truncate buffer to maintain memory efficiency (keep last 50 candles).
         if (historicalBuffer.size() > 50) {
             historicalBuffer.remove(0);
         }

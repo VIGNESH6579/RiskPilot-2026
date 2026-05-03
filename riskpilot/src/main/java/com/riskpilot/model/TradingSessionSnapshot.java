@@ -15,7 +15,7 @@ public record TradingSessionSnapshot(
     double orHigh,
     double orLow,
     double cumulativeDailyLossR,
-    ActiveTrade activeTradeReference,
+    ActiveTradeExecution activeTradeReference,
     String lastRejectReason
 ) {
     public static TradingSessionSnapshot initial() {
@@ -35,4 +35,19 @@ public record TradingSessionSnapshot(
             "INITIALIZED"
         );
     }
+
+    public boolean isSessionActive() { return sessionActive; }
+    public String getRegime() { return regime != null ? regime.name() : Regime.UNKNOWN.name(); }
+    public boolean isVolatilityQualified() { return volatilityQualified; }
+    public String getTimePhase() { return timePhase != null ? timePhase.name() : TimePhase.EARLY.name(); }
+    public int getTradesTaken() { return tradesTaken; }
+    public boolean isTradeActive() { return tradeActive; }
+    public boolean isFeedStable() { return feedStable; }
+    public boolean isHeartbeatAlive() { return heartbeatAlive; }
+    public double getOrHigh() { return orHigh; }
+    public double getOrLow() { return orLow; }
+    public double getCumulativeDailyLossR() { return cumulativeDailyLossR; }
+    public int getConsecutiveLosses() { return 0; }
+    public ActiveTradeExecution getActiveTradeReference() { return activeTradeReference; }
+    public String getLastRejectReason() { return lastRejectReason; }
 }

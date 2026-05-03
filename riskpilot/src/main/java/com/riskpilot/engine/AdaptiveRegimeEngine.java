@@ -23,7 +23,7 @@ public class AdaptiveRegimeEngine {
     private static final int MIN_TRADES_FOR_ADAPTATION = 6;
     private static final double ALPHA = 0.3; // Smoothing factor
     
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final AtomicReference<AdaptiveConfig> currentConfig = new AtomicReference<>();
     private final List<TradeResult> tradeWindow = new ArrayList<>();
     private volatile boolean freezeAdaptation = false;
@@ -281,7 +281,7 @@ public class AdaptiveRegimeEngine {
         int direction = "TIGHTEN".equals(signal) ? 1 : -1;
 
         // Apply bounded steps
-        newConfig.setMinRegimeScore(clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"), 
+        newConfig.setMinRegimeScore((int) clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"), 
                                        (Integer) BOUNDS.get("minRegimeScore")[0], (Integer) BOUNDS.get("minRegimeScore")[1]));
         newConfig.setMinORRange(clamp(config.getMinORRange() + direction * (Double) STEPS.get("minORRange"), 
                                     (Double) BOUNDS.get("minORRange")[0], (Double) BOUNDS.get("minORRange")[1]));
@@ -358,13 +358,13 @@ public class AdaptiveRegimeEngine {
      */
     public Map<String, Object> getStats() {
         AdaptiveConfig config = currentConfig.get();
-        return Map.of(
-            "currentConfig", config,
-            "windowSize", tradeWindow.size(),
-            "freezeAdaptation", freezeAdaptation,
-            "lastAdaptationTime", lastAdaptationTime,
-            "readyToAdapt", shouldAdapt()
-        );
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("currentConfig", config);
+        stats.put("windowSize", tradeWindow.size());
+        stats.put("freezeAdaptation", freezeAdaptation);
+        stats.put("lastAdaptationTime", lastAdaptationTime);
+        stats.put("readyToAdapt", shouldAdapt());
+        return stats;
     }
 
     /**

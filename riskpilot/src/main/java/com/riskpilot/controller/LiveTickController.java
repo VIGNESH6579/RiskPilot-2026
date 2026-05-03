@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 🎯 CRITICAL: WebSocket Bridge from Frontend to Trading Engine
@@ -21,6 +22,7 @@ import java.util.Map;
 @Controller
 public class LiveTickController {
     private static final Logger logger = LoggerFactory.getLogger(LiveTickController.class);
+    private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     @Autowired
     private ShadowExecutionEngine shadowExecutionEngine;
@@ -42,7 +44,13 @@ public class LiveTickController {
                 : LocalDateTime.now();
 
             // Step 1: Update candles
-            candleAggregator.processTick(tickTime, request.getPrice(), request.getVolume());
+            candleAggregator.processTick(
+                tickTime,
+                request.getPrice(),
+                request.getVolume(),
+                sequenceCounter.incrementAndGet(),
+                LocalDateTime.now()
+            );
             
             // Step 2: Evaluate in engine (THIS IS THE FIX!)
             shadowExecutionEngine.evaluateTick(request.getPrice());

@@ -224,12 +224,18 @@ public class OptionChainService {
             if (angel.spot() > 0.0) {
                 return angel;
             }
-            // All NSE endpoints blocked from cloud — return last known snapshot
-            log.warn("All data sources exhausted. Using last known snapshot: spot={}", lastKnownSnapshot.spot());
+            log.warn("All data sources exhausted. Checking file cache...");
+            OptionChainSnapshot cached = fromCacheAsPreviousClose();
+            if (cached != null && cached.spot() > 0.0) {
+                lastKnownSnapshot = cached;
+                return cached;
+            }
+            log.warn("No valid file cache. Using last known snapshot: spot={}", lastKnownSnapshot.spot());
             return lastKnownSnapshot;
         } catch (Exception ex) {
             log.warn("Angel fallback failed: {}", ex.getMessage());
-            return lastKnownSnapshot;
+            OptionChainSnapshot cached = fromCacheAsPreviousClose();
+            return cached != null && cached.spot() > 0.0 ? cached : lastKnownSnapshot;
         }
     }
 

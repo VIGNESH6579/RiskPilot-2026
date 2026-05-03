@@ -171,6 +171,14 @@ public class LiveMetricsLogger {
         }
     }
 
+    private void ensureHeader() {
+        synchronized (writerLock) {
+            if (csvWriter == null) {
+                init();
+            }
+        }
+    }
+
     private String escapeCsv(String value) {
         if (value == null) {
             return "";

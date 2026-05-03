@@ -133,6 +133,10 @@ public class AngelAuthService {
     public String getFeedToken() { return currentFeedToken; }
     public String getApiKey() { return apiKey; }
     public String getClientCode() { return clientCode; }
+    public boolean isAuthenticated() { return currentJwtToken != null && !currentJwtToken.isBlank(); }
+    public String getLocalIp() { return resolveLocalIp(); }
+    public String getPublicIp() { return resolvePublicIp(); }
+    public String getMacAddress() { return resolveMacAddress(); }
     public boolean hasCredentials() {
         return apiKey != null && !apiKey.isBlank()
             && clientCode != null && !clientCode.isBlank()

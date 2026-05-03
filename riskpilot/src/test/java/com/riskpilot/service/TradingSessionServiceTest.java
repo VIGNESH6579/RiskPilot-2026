@@ -171,9 +171,6 @@ class TradingSessionServiceTest {
                 .thenReturn(Optional.of(testTrade));
         when(tradeRepository.save(any(Trade.class)))
                 .thenReturn(testTrade);
-        when(tradeRepository.getTodayPnL("BANKNIFTY"))
-                .thenReturn(new BigDecimal("100.50"));
-        
         // When
         tradingSessionService.closeTrade(1L, "MANUAL_CLOSE");
         

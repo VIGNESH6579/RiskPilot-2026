@@ -8,6 +8,8 @@ import org.springframework.util.FileCopyUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -20,7 +22,10 @@ public class FrontendController {
         try {
             Resource resource = new ClassPathResource("frontend.html");
             if (resource.exists()) {
-                String content = FileCopyUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
+                String content;
+                try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
+                    content = FileCopyUtils.copyToString(reader);
+                }
                 return ResponseEntity.ok(content);
             } else {
                 // Fallback to simple HTML if frontend.html not found

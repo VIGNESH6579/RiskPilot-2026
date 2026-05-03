@@ -11,7 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/v1/monitor")
+@RequestMapping("/api/v1/health")
 public class HealthController {
 
     @Autowired

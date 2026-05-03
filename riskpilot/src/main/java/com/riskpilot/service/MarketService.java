@@ -1,5 +1,6 @@
 package com.riskpilot.service;
 
+import com.riskpilot.exception.MarketDataException;
 import com.riskpilot.model.OptionData;
 import org.springframework.stereotype.Service;
 import com.riskpilot.util.RsiCalculator;
@@ -10,7 +11,7 @@ public class MarketService {
 
     // 🔹 Spot price
     public double getPrice(String symbol) {
-        return 22050; // mock value
+        throw new MarketDataException("LIVE_PRICE_UNAVAILABLE: " + symbol + " - all data sources exhausted");
     }
 
     // 🔹 Option premium

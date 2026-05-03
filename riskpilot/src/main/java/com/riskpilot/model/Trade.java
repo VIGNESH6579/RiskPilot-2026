@@ -105,6 +105,8 @@ public class Trade {
     }
     
     public BigDecimal getTotalPnL() {
-        return realizedPnL.add(unrealizedPnL);
+        BigDecimal realized = realizedPnL != null ? realizedPnL : BigDecimal.ZERO;
+        BigDecimal unrealized = unrealizedPnL != null ? unrealizedPnL : BigDecimal.ZERO;
+        return realized.add(unrealized);
     }
 }
