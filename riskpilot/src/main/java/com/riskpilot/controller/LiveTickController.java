@@ -1,6 +1,8 @@
 package com.riskpilot.controller;
 
+import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -13,6 +15,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 🎯 CRITICAL: WebSocket Bridge from Frontend to Trading Engine
@@ -23,13 +26,16 @@ import java.util.concurrent.atomic.AtomicLong;
 public class LiveTickController {
     private static final Logger logger = LoggerFactory.getLogger(LiveTickController.class);
     private final AtomicLong sequenceCounter = new AtomicLong(0);
-    private LocalDateTime lastCandleSlot = null;
+    private final AtomicReference<LocalDateTime> lastCandleSlot = new AtomicReference<>();
 
     @Autowired
     private ShadowExecutionEngine shadowExecutionEngine;
 
     @Autowired
     private CandleAggregator candleAggregator;
+
+    @Autowired
+    private SessionStateManager stateManager;
 
     /**
      * ⭐ MAIN ENTRY: Receives live ticks from frontend WebSocket
@@ -58,10 +64,9 @@ public class LiveTickController {
             shadowExecutionEngine.evaluateTick(request.getPrice());
             int candleMinute = (tickTime.getMinute() / 5) * 5;
             LocalDateTime currentSlot = tickTime.withMinute(candleMinute).withSecond(0).withNano(0);
-            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+            if (advanceCandleSlot(currentSlot)) {
                 shadowExecutionEngine.evaluateCandleClose();
             }
-            lastCandleSlot = currentSlot;
             
             // Step 3: Return state
             return getEngineState();
@@ -73,11 +78,29 @@ public class LiveTickController {
     }
 
     private Map<String, Object> getEngineState() {
+        TradingSessionSnapshot snapshot = stateManager.getSnapshot();
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("sessionActive", true);
-        state.put("feedHealthy", true);
+        state.put("sessionActive", snapshot.sessionActive());
+        state.put("feedHealthy", snapshot.feedStable() && !candleAggregator.isFeedUnstable());
+        state.put("heartbeatAlive", snapshot.heartbeatAlive());
+        state.put("tradeActive", snapshot.tradeActive());
+        state.put("tradesTaken", snapshot.tradesTaken());
+        state.put("lastRejectReason", snapshot.lastRejectReason());
+        state.put("candleHistorySize", candleAggregator.getValidHistory().size());
         state.put("timestamp", LocalDateTime.now().toString());
         return state;
+    }
+
+    private boolean advanceCandleSlot(LocalDateTime currentSlot) {
+        while (true) {
+            LocalDateTime previousSlot = lastCandleSlot.get();
+            if (previousSlot != null && !currentSlot.isAfter(previousSlot)) {
+                return false;
+            }
+            if (lastCandleSlot.compareAndSet(previousSlot, currentSlot)) {
+                return previousSlot != null;
+            }
+        }
     }
 
     private Map<String, Object> errorResponse(String error) {

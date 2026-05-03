@@ -1,6 +1,8 @@
 package com.riskpilot.controller;
 
+import com.riskpilot.model.TradingSessionSnapshot;
 import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.service.SessionStateManager;
 import com.riskpilot.service.ShadowExecutionEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -11,19 +13,23 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/api/v1/engine")
 public class EngineController {
     private static final Logger logger = LoggerFactory.getLogger(EngineController.class);
     private final AtomicLong sequenceCounter = new AtomicLong(0);
-    private LocalDateTime lastCandleSlot = null;
+    private final AtomicReference<LocalDateTime> lastCandleSlot = new AtomicReference<>();
 
     @Autowired
     private ShadowExecutionEngine shadowExecutionEngine;
 
     @Autowired
     private CandleAggregator candleAggregator;
+
+    @Autowired
+    private SessionStateManager stateManager;
 
     @GetMapping("/health")
     public Map<String, Object> getHealth() {
@@ -49,10 +55,9 @@ public class EngineController {
             shadowExecutionEngine.evaluateTick(price);
             int candleMinute = (receivedAt.getMinute() / 5) * 5;
             LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
-            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+            if (advanceCandleSlot(currentSlot)) {
                 shadowExecutionEngine.evaluateCandleClose();
             }
-            lastCandleSlot = currentSlot;
             
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "SUCCESS");
@@ -67,11 +72,28 @@ public class EngineController {
 
     @GetMapping("/state")
     public Map<String, Object> getEngineState() {
+        TradingSessionSnapshot snapshot = stateManager.getSnapshot();
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("sessionActive", true);
-        state.put("feedHealthy", !candleAggregator.isFeedUnstable());
+        state.put("sessionActive", snapshot.sessionActive());
+        state.put("feedHealthy", snapshot.feedStable() && !candleAggregator.isFeedUnstable());
+        state.put("heartbeatAlive", snapshot.heartbeatAlive());
+        state.put("tradeActive", snapshot.tradeActive());
+        state.put("tradesTaken", snapshot.tradesTaken());
+        state.put("lastRejectReason", snapshot.lastRejectReason());
         state.put("timestamp", LocalDateTime.now().toString());
         return state;
+    }
+
+    private boolean advanceCandleSlot(LocalDateTime currentSlot) {
+        while (true) {
+            LocalDateTime previousSlot = lastCandleSlot.get();
+            if (previousSlot != null && !currentSlot.isAfter(previousSlot)) {
+                return false;
+            }
+            if (lastCandleSlot.compareAndSet(previousSlot, currentSlot)) {
+                return previousSlot != null;
+            }
+        }
     }
 
     @GetMapping("/candle-history")

@@ -62,12 +62,13 @@ public class ShadowExecutionEngine {
     private static final int MAX_REJECT_REASONS = 256;
 
     private String lastTriggeredCandleTime = "";
+    private String lastEvaluatedCandleTime = "";
     private String lastStoredCandleTime = "";
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
 
-    private record ClosedTradeBroadcast(
+    private static record ClosedTradeBroadcast(
         LocalDateTime signalTime,
         double expectedEntry,
         double expectedExit,
@@ -92,6 +93,7 @@ public class ShadowExecutionEngine {
 
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (!state.tradeActive() || state.activeTradeReference() == null) {
+            evaluateLatestClosedCandleSignal();
             return;
         }
 
@@ -106,6 +108,17 @@ public class ShadowExecutionEngine {
 
         updateActiveTradeState(trade, state.lastRejectReason());
         broadcastCurrentSessionState();
+    }
+
+    private void evaluateLatestClosedCandleSignal() {
+        List<Candle> history = candleAggregator.getValidHistory();
+        if (history.isEmpty()) {
+            return;
+        }
+        Candle newestCandle = history.get(history.size() - 1);
+        ingestClosedCandleForIndicators(newestCandle);
+        updateSessionStateFromTime(newestCandle.timestamp().toLocalTime());
+        evaluateSignalIfEligible(newestCandle, stateManager.getSnapshot());
     }
 
     public synchronized void evaluateCandle(Candle candle) {
@@ -130,9 +143,7 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        if (shouldEvaluateSignal(candle)) {
-            evaluateSignal(candle, stateManager.getSnapshot());
-        }
+        evaluateSignalIfEligible(candle, stateManager.getSnapshot());
     }
 
     public synchronized void evaluateCandleClose() {
@@ -181,9 +192,7 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        if (shouldEvaluateSignal(newestCandle)) {
-            evaluateSignal(newestCandle, state);
-        }
+        evaluateSignalIfEligible(newestCandle, state);
     }
 
     @Scheduled(cron = "0 15 9 * * *", zone = "Asia/Kolkata")
@@ -196,6 +205,7 @@ public class ShadowExecutionEngine {
         stateManager.resetDaily();
         candleHistory.clear();
         lastTriggeredCandleTime = "";
+        lastEvaluatedCandleTime = "";
         lastStoredCandleTime = "";
         activeSignalTime = null;
         activeExpectedEntry = 0.0;
@@ -273,8 +283,17 @@ public class ShadowExecutionEngine {
 
     private boolean shouldEvaluateSignal(Candle candle) {
         return !candle.time.equals(lastTriggeredCandleTime)
+            && !candle.time.equals(lastEvaluatedCandleTime)
             && candleAggregator.getValidHistory().size() >= 7
             && !dayBlockedByFirstTradeFailure;
+    }
+
+    private void evaluateSignalIfEligible(Candle candle, TradingSessionSnapshot state) {
+        if (!shouldEvaluateSignal(candle)) {
+            return;
+        }
+        lastEvaluatedCandleTime = candle.time;
+        evaluateSignal(candle, state);
     }
 
     private void evaluateSignal(Candle candle, TradingSessionSnapshot state) {

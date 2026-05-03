@@ -49,17 +49,6 @@ riskpilot:
     session-end: ${SESSION_END:15:30}
     opening-range-end: ${OPENING_RANGE_END:09:45}
     
-    # Risk Parameters
-    max-trades-per-day: ${MAX_TRADES_PER_DAY:3}
-    max-position-size: ${MAX_POSITION_SIZE:75}
-    default-stop-loss: ${DEFAULT_STOP_LOSS:85}
-    default-take-profit: ${DEFAULT_TAKE_PROFIT:120}
-    
-    # Execution Parameters
-    slippage-entry: ${SLIPPAGE_ENTRY:5.0}
-    slippage-exit: ${SLIPPAGE_EXIT:5.0}
-    latency-threshold: ${LATENCY_THRESHOLD:2.0}
-    
   # Angel One API Configuration
   angelone:
     api-key: ${ANGELONE_API_KEY:}
