@@ -1,201 +1,215 @@
 spring:
-  config:
-    activate:
-      on-profile: prod
+    config:
+      activate:
+        on-profile: prod
 
-  datasource:
-    url: ${DATABASE_URL}
-    username: ${DATABASE_USERNAME:}
-    password: ${DATABASE_PASSWORD:}
-    driver-class-name: org.postgresql.Driver
+    datasource:
+      url: ${DATABASE_URL}
+      username: ${DATABASE_USERNAME:}
+      password: ${DATABASE_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
 
-  flyway:
-    enabled: true
-    baseline-on-migrate: true
-    locations: classpath:db/migration
-    out-of-order: false
-    validate-on-migrate: true
+    flyway:
+      enabled: true
+      baseline-on-migrate: true
+      locations: classpath:db/migration
+      out-of-order: false
+      validate-on-migrate: true
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    properties:
+    jpa:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
+        ddl-auto: validate
+      show-sql: false
+      properties:
+        hibernate:
+          dialect: org.hibernate.dialect.PostgreSQLDialect
 
-  jackson:
-    time-zone: Asia/Kolkata
-    date-format: yyyy-MM-dd HH:mm:ss
+    jackson:
+      time-zone: Asia/Kolkata
+      date-format: yyyy-MM-dd HH:mm:ss
 
-# =========================================================
-# ADMIN CREDENTIALS — must be set as Render env vars.
-# No defaults: app refuses to start if either is missing.
-# =========================================================
-ADMIN_USERNAME: ${ADMIN_USERNAME}
-ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  # =========================================================
+  # ADMIN CREDENTIALS
+  # =========================================================
+  ADMIN_USERNAME: ${ADMIN_USERNAME}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD}
 
-# =========================================================
-# RISKPILOT DOCTRINE-ENFORCED CONFIG
-# =========================================================
+  # =========================================================
+  # RISKPILOT DOCTRINE-ENFORCED CONFIG
+  # =========================================================
 
-riskpilot:
+  riskpilot:
 
-  mode: SHADOW
-  strict-mode: true
+    mode: SHADOW
+    strict-mode: true
 
-  session:
-    timezone: Asia/Kolkata
-    start: "09:15"
-    end: "15:30"
-    opening-range-end: "09:45"
-
-  filters:
-    regime-required: TREND_ONLY
-    min-or-range: 120
-    max-spread: 2.0
-
-  time-phase:
-    early:
+    session:
+      timezone: Asia/Kolkata
       start: "09:15"
-      end: "12:00"
-      position-scale: 1.0
-
-    mid:
-      start: "12:00"
-      end: "13:30"
-      position-scale: 0.35
-
-    late:
-      start: "13:30"
       end: "15:30"
-      allow-new-trades: false
-      force-exit: true
+      opening-range-end: "09:45"
 
-  risk:
-    max-trades-per-day: 2
-    one-trade-at-a-time: true
-    max-daily-loss-r: 1.5
-    max-consecutive-losses: 3
+    filters:
+      regime-required: TREND_ONLY
+      min-or-range: 120
+      max-spread: 2.0
 
-  execution:
-    slippage:
-      entry-max: 2.0
-      tp1-max: 3.0
-      runner-max: 6.0
-      panic-exit-max: 8.0
+    time-phase:
+      early:
+        start: "09:15"
+        end: "12:00"
+        position-scale: 1.0
 
-    latency:
-      soft-block-ms: 500
-      hard-block-ms: 1500
-      panic-ms: 5000
+      mid:
+        start: "12:00"
+        end: "13:30"
+        position-scale: 0.35
 
-    reject-on-high-slippage: true
-    reject-on-latency-breach: true
+      late:
+        start: "13:30"
+        end: "15:30"
+        allow-new-trades: false
+        force-exit: true
 
-  extraction:
-    tp1:
-      enabled: true
-      position-size: 0.15
-      min-points: 15
-      volatility-factor: 0.12
+    risk:
+      max-trades-per-day: 2
+      one-trade-at-a-time: true
+      max-daily-loss-r: 1.5
+      max-consecutive-losses: 3
 
-    runner:
-      position-size: 0.85
-      stage2-activation-r: 0.8
-      tail-protection:
-        activate-r: 2.0
-        pullback-r: 0.5
-      momentum-decay:
+    execution:
+      slippage:
+        entry-max: 2.0
+        tp1-max: 3.0
+        runner-max: 6.0
+        panic-exit-max: 8.0
+
+      latency:
+        soft-block-ms: 500
+        hard-block-ms: 1500
+        panic-ms: 5000
+
+      reject-on-high-slippage: true
+      reject-on-latency-breach: true
+
+    extraction:
+      tp1:
         enabled: true
-        threshold: 0.6
-      soft-stop:
+        position-size: 0.15
+        min-points: 15
+        volatility-factor: 0.12
+
+      runner:
+        position-size: 0.85
+        stage2-activation-r: 0.8
+        tail-protection:
+          activate-r: 2.0
+          pullback-r: 0.5
+        momentum-decay:
+          enabled: true
+          threshold: 0.6
+        soft-stop:
+          enabled: true
+          shift-r: 0.25
+
+    infra:
+      feed:
+        require-stable: true
+        max-missing-ticks: 3
+        instability-timeout-sec: 15
+        real-time-only: true
+        data-source: "angelone-live"
+
+      heartbeat:
         enabled: true
-        shift-r: 0.25
+        panic-exit-on-failure: true
+        timeout-sec: 30
 
-  infra:
-    feed:
-      require-stable: true
-      max-missing-ticks: 3
-      instability-timeout-sec: 15
-      real-time-only: true
-      data-source: "angelone-live"
+      market-data:
+        cache-ttl-seconds: 5
+        refresh-interval-seconds: 2
+        fallback-disabled: true
+        mock-disabled: true
 
-    heartbeat:
-      enabled: true
-      panic-exit-on-failure: true
-      timeout-sec: 30
+    logging:
+      csv:
+        enabled: true
+        path: shadow_live_forward_logs.csv
 
-    market-data:
-      cache-ttl-seconds: 5
-      refresh-interval-seconds: 2
-      fallback-disabled: true
-      mock-disabled: true
+      decision-log:
+        enabled: true
+        path: decision_log.csv
+
+      reject-log:
+        enabled: true
+        path: reject_log.csv
+
+      include:
+        - regime
+        - volatility
+        - gateDecision
+        - rejectReason
+        - slippage
+        - latency
+        - mfe
+        - mae
+        - realizedR
+        - timePhase
+        - feedStable
+
+  # =========================================================
+  # ANGEL ONE CONFIG (NO DEFAULTS)
+  # =========================================================
+
+  angelapi:
+    key: ${ANGEL_API_KEY:}
+    clientcode: ${ANGEL_CLIENT_ID:}
+    pin: ${ANGEL_PIN:}
+    totp:
+      secret: ${ANGEL_TOTP_SECRET:}
+
+  # =========================================================
+  # INDIA VIX REAL-TIME CONFIG
+  # =========================================================
+  ANGEL_INDIA_VIX_TOKEN: ${ANGEL_INDIA_VIX_TOKEN:999920005}
+  ANGEL_INDIA_VIX_EXCHANGE: ${ANGEL_INDIA_VIX_EXCHANGE:NSE}
+  RISK_VIX_FALLBACK: ${RISK_VIX_FALLBACK:15.0}
+
+  # =========================================================
+  # LOGGING (STRUCTURED, NOT VERBOSE)
+  # =========================================================
 
   logging:
-    csv:
-      enabled: true
-      path: shadow_live_forward_logs.csv
+    level:
+      com.riskpilot: WARN
+      org.springframework: ERROR
+      root: ERROR
+    pattern:
+      console: "%d{HH:mm:ss} %-5level %logger{36} - %msg%n"
+    file:
+      name: logs/riskpilot.log
+      max-size: 5MB
+      max-history: 7
 
-    decision-log:
-      enabled: true
-      path: decision_log.csv
+  # =========================================================
+  # HEALTH — liveness always UP; custom indicators advisory only
+  # =========================================================
 
-    reject-log:
-      enabled: true
-      path: reject_log.csv
+  management:
+    endpoints:
+      web:
+        exposure:
+          include: health
+        base-path: /actuator
 
-    include:
-      - regime
-      - volatility
-      - gateDecision
-      - rejectReason
-      - slippage
-      - latency
-      - mfe
-      - mae
-      - realizedR
-      - timePhase
-      - feedStable
-
-# =========================================================
-# ANGEL ONE CONFIG (NO DEFAULTS)
-# =========================================================
-
-angelapi:
-  key: ${ANGEL_API_KEY:}
-  clientcode: ${ANGEL_CLIENT_ID:}
-  pin: ${ANGEL_PIN:}
-  totp:
-    secret: ${ANGEL_TOTP_SECRET:}
-
-# =========================================================
-# LOGGING (STRUCTURED, NOT VERBOSE)
-# =========================================================
-
-logging:
-  level:
-    com.riskpilot: WARN
-    org.springframework: ERROR
-    root: ERROR
-  pattern:
-    console: "%d{HH:mm:ss} %-5level %logger{36} - %msg%n"
-  file:
-    name: logs/riskpilot.log
-    max-size: 5MB
-    max-history: 7
-
-# =========================================================
-# HEALTH ONLY (NO NOISE)
-# =========================================================
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
-      base-path: /actuator
-
-  endpoint:
-    health:
-      show-details: never
+    endpoint:
+      health:
+        show-details: always
+        show-components: always
+        # liveness group ONLY checks JVM liveness — always 200 for Render health check
+        group:
+          liveness:
+            include: livenessState
+          readiness:
+            include: readinessState,marketDataHealth,tradingEngineHealth
+  
