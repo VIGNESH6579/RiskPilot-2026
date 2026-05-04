@@ -8,15 +8,13 @@ services:
       dockerContext: ./riskpilot
       autoDeploy: true
 
-      # Health check configuration
-      healthCheckPath: /actuator/health
+      # Use /liveness — always HTTP 200 once JVM is up (no market-data dependency)
+      healthCheckPath: /actuator/health/liveness
       healthCheckTimeout: 300
       healthCheckInterval: 60
 
-      # Start command
       startCommand: "./start.sh"
 
-      # Environment variables
       envVars:
         - key: JAVA_OPTS
           value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
@@ -26,6 +24,12 @@ services:
           value: prod
         - key: OBSERVER_PORT
           value: "8765"
+        - key: ANGEL_INDIA_VIX_TOKEN
+          value: "999920005"
+        - key: ANGEL_INDIA_VIX_EXCHANGE
+          value: "NSE"
+        - key: NIFTY_WEEKLY_EXPIRY_DAY
+          value: "THURSDAY"
         - key: DATABASE_URL
           sync: false
         - key: DATABASE_USERNAME
@@ -49,7 +53,6 @@ services:
         - key: ANGEL_INDIA_VIX_TOKEN
           sync: false
 
-      # Resource limits for free tier
       resourceLimits:
         memory: 512Mi
         cpu: 0.5
