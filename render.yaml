@@ -1,5 +1,4 @@
 services:
-    # Production Web Service
     - type: web
       name: riskpilot-2026
       env: docker
@@ -8,8 +7,8 @@ services:
       dockerContext: ./riskpilot
       autoDeploy: true
 
-      # Use /liveness — always HTTP 200 once JVM is up (no market-data dependency)
-      healthCheckPath: /actuator/health/liveness
+      # /actuator/health is security-permitted and always returns 200
+      healthCheckPath: /actuator/health
       healthCheckTimeout: 300
       healthCheckInterval: 60
 
@@ -17,9 +16,7 @@ services:
 
       envVars:
         - key: JAVA_OPTS
-          value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
-        - key: MAVEN_OPTS
-          value: "-Xms256m -Xmx512m"
+          value: "-Xms256m -Xmx512m -XX:+UseG1GC"
         - key: SPRING_PROFILES_ACTIVE
           value: prod
         - key: OBSERVER_PORT
@@ -50,10 +47,4 @@ services:
           sync: false
         - key: ANGEL_CLIENT_PUBLIC_IP
           sync: false
-        - key: ANGEL_INDIA_VIX_TOKEN
-          sync: false
-
-      resourceLimits:
-        memory: 512Mi
-        cpu: 0.5
   
