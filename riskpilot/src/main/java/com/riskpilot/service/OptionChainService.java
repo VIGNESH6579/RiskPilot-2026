@@ -25,7 +25,7 @@ public class OptionChainService {
     private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final String CACHE_FILE = "option_chain_cache.json";
-    private static final long ANGEL_QUOTE_CACHE_MS = 1_000L;
+    private static final long ANGEL_QUOTE_CACHE_MS = 3_000L;
     private static final long ANGEL_WARNING_INTERVAL_MS = 60_000L;
     private static final DateTimeFormatter NSE_EXPIRY_FORMAT =
         DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);

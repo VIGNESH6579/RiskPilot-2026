@@ -79,23 +79,21 @@ public class AdaptiveRegimeEngine {
         }
     }
 
-    // BOUNDS for safety
-    private static final Map<String, Object[]> BOUNDS = Map.of(
-        "minRegimeScore", new Object[]{3, 6},
-        "minORRange", new Object[]{90.0, 180.0},
-        "minATRRatio", new Object[]{1.0, 1.5},
-        "minEfficiency", new Object[]{0.45, 0.70},
-        "minBreakoutHoldRate", new Object[]{0.40, 0.70}
-    );
-
-    // STEP sizes for adaptation
-    private static final Map<String, Object> STEPS = Map.of(
-        "minRegimeScore", 1,        // integer
-        "minORRange", 10.0,         // points
-        "minATRRatio", 0.05,
-        "minEfficiency", 0.03,
-        "minBreakoutHoldRate", 0.05
-    );
+    private static final int    STEP_REGIME_SCORE      = 1;
+    private static final int    BOUND_REGIME_SCORE_MIN = 3;
+    private static final int    BOUND_REGIME_SCORE_MAX = 6;
+    private static final double STEP_OR_RANGE          = 10.0;
+    private static final double BOUND_OR_RANGE_MIN     = 90.0;
+    private static final double BOUND_OR_RANGE_MAX     = 180.0;
+    private static final double STEP_ATR_RATIO         = 0.05;
+    private static final double BOUND_ATR_RATIO_MIN    = 1.0;
+    private static final double BOUND_ATR_RATIO_MAX    = 1.5;
+    private static final double STEP_EFFICIENCY        = 0.03;
+    private static final double BOUND_EFFICIENCY_MIN   = 0.45;
+    private static final double BOUND_EFFICIENCY_MAX   = 0.70;
+    private static final double STEP_BREAKOUT_HOLD     = 0.05;
+    private static final double BOUND_BREAKOUT_HOLD_MIN = 0.40;
+    private static final double BOUND_BREAKOUT_HOLD_MAX = 0.70;
 
     /**
      * Initialize configuration from file or defaults
@@ -280,17 +278,21 @@ public class AdaptiveRegimeEngine {
 
         int direction = "TIGHTEN".equals(signal) ? 1 : -1;
 
-        // Apply bounded steps
-        newConfig.setMinRegimeScore((int) clamp(config.getMinRegimeScore() + direction * (Integer) STEPS.get("minRegimeScore"),
-                                       (Integer) BOUNDS.get("minRegimeScore")[0], (Integer) BOUNDS.get("minRegimeScore")[1]));
-        newConfig.setMinORRange(clamp(config.getMinORRange() + direction * (Double) STEPS.get("minORRange"),
-                                    (Double) BOUNDS.get("minORRange")[0], (Double) BOUNDS.get("minORRange")[1]));
-        newConfig.setMinATRRatio(clamp(config.getMinATRRatio() + direction * (Double) STEPS.get("minATRRatio"),
-                                      (Double) BOUNDS.get("minATRRatio")[0], (Double) BOUNDS.get("minATRRatio")[1]));
-        newConfig.setMinEfficiency(clamp(config.getMinEfficiency() + direction * (Double) STEPS.get("minEfficiency"),
-                                      (Double) BOUNDS.get("minEfficiency")[0], (Double) BOUNDS.get("minEfficiency")[1]));
-        newConfig.setMinBreakoutHoldRate(clamp(config.getMinBreakoutHoldRate() + direction * (Double) STEPS.get("minBreakoutHoldRate"),
-                                            (Double) BOUNDS.get("minBreakoutHoldRate")[0], (Double) BOUNDS.get("minBreakoutHoldRate")[1]));
+        newConfig.setMinRegimeScore((int) clamp(
+            config.getMinRegimeScore() + direction * STEP_REGIME_SCORE,
+            BOUND_REGIME_SCORE_MIN, BOUND_REGIME_SCORE_MAX));
+        newConfig.setMinORRange(clamp(
+            config.getMinORRange() + direction * STEP_OR_RANGE,
+            BOUND_OR_RANGE_MIN, BOUND_OR_RANGE_MAX));
+        newConfig.setMinATRRatio(clamp(
+            config.getMinATRRatio() + direction * STEP_ATR_RATIO,
+            BOUND_ATR_RATIO_MIN, BOUND_ATR_RATIO_MAX));
+        newConfig.setMinEfficiency(clamp(
+            config.getMinEfficiency() + direction * STEP_EFFICIENCY,
+            BOUND_EFFICIENCY_MIN, BOUND_EFFICIENCY_MAX));
+        newConfig.setMinBreakoutHoldRate(clamp(
+            config.getMinBreakoutHoldRate() + direction * STEP_BREAKOUT_HOLD,
+            BOUND_BREAKOUT_HOLD_MIN, BOUND_BREAKOUT_HOLD_MAX));
 
         return newConfig;
     }

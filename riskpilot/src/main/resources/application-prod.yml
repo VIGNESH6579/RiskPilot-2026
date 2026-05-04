@@ -4,10 +4,10 @@ spring:
       on-profile: prod
 
   datasource:
-    url: ${SPRING_DATASOURCE_URL:${DATABASE_URL:jdbc:h2:file:./data/riskpilot;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE}}
-    username: ${SPRING_DATASOURCE_USERNAME:${DATABASE_USERNAME:sa}}
-    password: ${SPRING_DATASOURCE_PASSWORD:${DATABASE_PASSWORD:password}}
-    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
   
   # BUG-036: Flyway migration configuration
   flyway:
@@ -24,7 +24,7 @@ spring:
     show-sql: false
     properties:
       hibernate:
-        dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: org.hibernate.dialect.PostgreSQLDialect
 
   # 🔴 STRICT JSON TIME CONTROL
   jackson:

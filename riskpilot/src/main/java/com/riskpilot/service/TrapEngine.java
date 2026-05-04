@@ -24,8 +24,8 @@ public class TrapEngine {
     private static final double MIN_EXPANSION_ATR_RATIO = 1.10;      // 10% above average
 
     public TrapEngine(
-        @Value("${TRAP_MIN_VIX:15}") double minVix,
-        @Value("${TRAP_MAX_VIX:18}") double maxVix
+        @Value("${TRAP_MIN_VIX:12}") double minVix,
+        @Value("${TRAP_MAX_VIX:25}") double maxVix
     ) {
         this.minVix = minVix;
         this.maxVix = maxVix;

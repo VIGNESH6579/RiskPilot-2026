@@ -140,6 +140,15 @@ public class AngelAuthService {
             && pin != null && !pin.isBlank()
             && totpSecret != null && !totpSecret.isBlank();
     }
+
+    @jakarta.annotation.PostConstruct
+    public void assertCredentialsPresent() {
+        if (!hasCredentials()) {
+            throw new IllegalStateException(
+                "Angel One credentials are not configured. " +
+                "Set ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PIN, ANGEL_TOTP_SECRET.");
+        }
+    }
     public synchronized void invalidateSession() {
         currentJwtToken = null;
         currentFeedToken = null;

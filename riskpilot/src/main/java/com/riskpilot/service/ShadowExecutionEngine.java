@@ -195,7 +195,7 @@ public class ShadowExecutionEngine {
         evaluateSignalIfEligible(newestCandle, state);
     }
 
-    @Scheduled(cron = "0 15 9 * * *", zone = "Asia/Kolkata")
+    @Scheduled(cron = "0 14 9 * * *", zone = "Asia/Kolkata")
     public void executeDailyHardReset() {
         restart();
     }
@@ -253,7 +253,7 @@ public class ShadowExecutionEngine {
             double orLow = current.orLow();
 
             List<Candle> history = candleAggregator.getValidHistory();
-            if (!history.isEmpty() && now.isBefore(LocalTime.of(10, 15))) {
+            if (!history.isEmpty() && now.isBefore(LocalTime.of(9, 45))) {
                 Candle last = history.get(history.size() - 1);
                 orHigh = Double.isFinite(orHigh) ? Math.max(orHigh, last.high) : last.high;
                 orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
@@ -282,8 +282,9 @@ public class ShadowExecutionEngine {
     }
 
     private boolean shouldEvaluateSignal(Candle candle) {
-        return !candle.time.equals(lastTriggeredCandleTime)
-            && !candle.time.equals(lastEvaluatedCandleTime)
+        String candleKey = candle.date + "T" + candle.time;
+        return !candleKey.equals(lastTriggeredCandleTime)
+            && !candleKey.equals(lastEvaluatedCandleTime)
             && candleAggregator.getValidHistory().size() >= 7
             && !dayBlockedByFirstTradeFailure;
     }
@@ -292,7 +293,7 @@ public class ShadowExecutionEngine {
         if (!shouldEvaluateSignal(candle)) {
             return;
         }
-        lastEvaluatedCandleTime = candle.time;
+        lastEvaluatedCandleTime = candle.date + "T" + candle.time;
         evaluateSignal(candle, state);
     }
 
@@ -331,7 +332,7 @@ public class ShadowExecutionEngine {
         }
 
         openTrade(signal, state);
-        lastTriggeredCandleTime = candle.time;
+        lastTriggeredCandleTime = candle.date + "T" + candle.time;
         broadcastCurrentSessionState();
     }
 
@@ -422,6 +423,18 @@ public class ShadowExecutionEngine {
         ClosedTradeBroadcast postCommitBroadcast = null;
         try {
             postCommitBroadcast = transactionTemplate.execute(status -> executeCloseTradeInternal(trade, exit));
+        } catch (Exception e) {
+            log.error("TRADE_CLOSE_TRANSACTION_FAILED — forcing trade deactivation to prevent loop", e);
+            stateManager.update(current -> new TradingSessionSnapshot(
+                current.sessionActive(), current.regime(), current.volatilityQualified(),
+                current.timePhase(), current.tradesTaken(),
+                false,
+                current.feedStable(), current.heartbeatAlive(),
+                current.orHigh(), current.orLow(),
+                current.cumulativeDailyLossR(), current.consecutiveLosses(),
+                null,
+                "CLOSE_TX_FAILED"
+            ));
         } finally {
             MDC.clear();
         }
@@ -670,7 +683,9 @@ public class ShadowExecutionEngine {
             tradeData.put("mfe", trade.mfe());
             tradeData.put("mae", trade.mae());
             tradeData.put("realizedR", realizedR);
-            tradeData.put("isRunner", trade.runnerActive());
+            tradeData.put("direction", trade.direction());
+            tradeData.put("tp1Hit", trade.tp1Hit());
+            tradeData.put("runnerCaptured", trade.runnerActive());
             tradeData.put("exitReason", exit.reason());
             tradeData.put("exitTime", LocalDateTime.now().toString());
 

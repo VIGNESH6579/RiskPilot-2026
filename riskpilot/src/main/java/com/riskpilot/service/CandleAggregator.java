@@ -65,7 +65,8 @@ public class CandleAggregator {
         lastAcceptedSequenceId = sequenceId;
         
         // BUG-001: Use provided receivedAt instead of calculating now
-        long tickDelayMs = java.time.Duration.between(receivedAt, now).toMillis();
+        // BUG-04: Use Math.abs to handle clock skew (negative values from NTP drift)
+        long tickDelayMs = Math.abs(java.time.Duration.between(receivedAt, now).toMillis());
         
         // BUG-004: OR logic for feedUnstable - only SET true, never clear inline
         if (tickDelayMs > FEED_INSTABILITY_GAP_MS) {
@@ -152,6 +153,12 @@ public class CandleAggregator {
     
     public synchronized boolean isFeedUnstable() {
         return this.feedUnstable;
+    }
+
+    public synchronized void clearFeedInstability() {
+        this.feedUnstable = false;
+        this.stableSinceTime = null;
+        log.info("Feed instability flag cleared (market closed)");
     }
 
     /**

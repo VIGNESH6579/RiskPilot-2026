@@ -86,19 +86,20 @@ public class KillSwitchEngine {
 
     private boolean readKillSwitchFile() {
         Path killPath = getKillPath();
-        if (Files.exists(killPath)) {
-            try {
-                List<String> lines = Files.readAllLines(killPath);
-                if (!lines.isEmpty()) {
-                    log.error("🚨 KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
-                    return true;
-                }
-            } catch (Exception e) {
-                log.error("Error reading kill-switch file: {}", e.getMessage());
-                return true; // Fail safe - if we can't read, assume killed
-            }
+        if (!Files.exists(killPath)) {
+            return false;
         }
-        return false;
+        try {
+            List<String> lines = Files.readAllLines(killPath);
+            if (!lines.isEmpty()) {
+                log.error("🚨 KILL SWITCH ACTIVATED - Reasons: {}", String.join(", ", lines));
+                return true;
+            }
+            return false;
+        } catch (java.io.IOException e) {
+            log.warn("Kill-switch file exists but is unreadable ({}); treating as NOT triggered", e.getMessage());
+            return false;
+        }
     }
 
     /**

@@ -42,7 +42,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/engine/reset", "/api/v1/trading/engine/restart").hasRole("ADMIN")
                 .requestMatchers("/api/v1/trading/status").permitAll()
                 .requestMatchers("/api/v1/**").permitAll()
-                .requestMatchers("/h2-console/**").permitAll()
+                .requestMatchers("/h2-console/**").hasRole("ADMIN")
                 .anyRequest().permitAll()
             );
 
@@ -72,8 +72,8 @@ public class SecurityConfig {
 
     @Bean
     public UserDetailsService userDetailsService(
-        @Value("${ADMIN_USERNAME:admin}") String adminUsername,
-        @Value("${ADMIN_PASSWORD:changeme}") String adminPassword,
+        @Value("${ADMIN_USERNAME}") String adminUsername,
+        @Value("${ADMIN_PASSWORD}") String adminPassword,
         PasswordEncoder passwordEncoder
     ) {
         return new InMemoryUserDetailsManager(

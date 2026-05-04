@@ -22,10 +22,10 @@ NTFY_TOPIC = os.environ.get("RISKPILOT_NTFY_TOPIC", "riskpilot_shadow_alerts")
 ENABLE_NTFY = os.environ.get("RISKPILOT_ENABLE_NTFY", "true").lower() == "true"
 NOTIFY_COOLDOWN_SEC = float(os.environ.get("RISKPILOT_NOTIFY_COOLDOWN_SEC", "10"))
 PORT = int(os.environ.get("OBSERVER_PORT", os.environ.get("PORT", "8765")))
-HOST = os.environ.get("OBSERVER_HOST", "127.0.0.1")
+HOST = os.environ.get("OBSERVER_HOST", "0.0.0.0")
 MAX_CACHE_SIZE = int(os.environ.get("RISKPILOT_MAX_CACHE_SIZE", "500"))
 EXPECTED_COLUMNS = [
-    "signalTime", "executionTime", "latencySec", "expectedEntry", "actualEntry",
+    "signalTime", "executionTime", "direction", "latencySec", "expectedEntry", "actualEntry",
     "entrySlippage", "expectedExit", "actualExit", "exitSlippage", "tp1Hit",
     "runnerCaptured", "mfe", "mae", "realizedR", "gateDecision", "rejectReason",
     "regime", "timePhase", "feedStable", "exitReason", "exitTime",
@@ -66,21 +66,23 @@ def parse_line(line: str):
         logger.warning("Skipping CSV row with %s columns; expected %s", len(parts), len(EXPECTED_COLUMNS))
         return None
 
-    signal_id = f"{parts[0]}_{parts[3]}"
+    signal_id = f"{parts[0]}_{parts[4]}"
     return {
         "id": signal_id,
         "signalTime": parts[0],
         "executeTime": parts[1],
-        "latencySec": _to_float(parts[2]),
-        "expectedEntry": _to_float(parts[3]),
-        "actualEntry": _to_float(parts[4]),
-        "slippage": _to_float(parts[5]),
-        "mfe": _to_float(parts[11]),
-        "mae": _to_float(parts[12]),
-        "realizedR": _to_float(parts[13]),
-        "isRunner": str(parts[10]).strip().lower() == "true",
-        "exitReason": parts[19],
-        "exitTime": parts[20],
+        "direction": parts[2] if len(parts) > 2 else "SHORT",
+        "latencySec": _to_float(parts[3]),
+        "expectedEntry": _to_float(parts[4]),
+        "actualEntry": _to_float(parts[5]),
+        "slippage": _to_float(parts[6]),
+        "tp1Hit": str(parts[10]).strip().lower() == "true",
+        "mfe": _to_float(parts[12]),
+        "mae": _to_float(parts[13]),
+        "realizedR": _to_float(parts[14]),
+        "runnerCaptured": str(parts[11]).strip().lower() == "true",
+        "exitReason": parts[20] if len(parts) > 20 else "",
+        "exitTime": parts[21] if len(parts) > 21 else "",
         "observerTs": time.time(),
     }
 

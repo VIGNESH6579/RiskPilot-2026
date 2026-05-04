@@ -127,10 +127,18 @@ public class AngelTickStreamClient {
      * Resets the subscription state to allow re-subscription if needed.
      */
     public void resubscribe() {
-        log.info("Resubscription requested, clearing deduplication state");
+        log.info("Resubscription requested, resetting deduplication state");
         subscriptionActive.set(false);
         lastSpotValue.set(0);
-        init(); // Re-initialize
+        if (pollerFuture != null && !pollerFuture.isCancelled()) {
+            pollerFuture.cancel(true);
+            try {
+                poller.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        init();
     }
 
     public boolean isStreamActive() {

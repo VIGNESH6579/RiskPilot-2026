@@ -28,14 +28,15 @@ services:
         sync: false
       - key: ANGEL_INDIA_VIX_TOKEN
         sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
     
     # Health check configuration
     healthCheckPath: /actuator/health
     healthCheckTimeout: 30
     healthCheckInterval: 60
-    
-    # Build optimization
-    buildCommand: "cd riskpilot && mvn clean package -DskipTests -Dmaven.test.skip=true"
     
     # Start command optimization
     startCommand: "./start.sh"

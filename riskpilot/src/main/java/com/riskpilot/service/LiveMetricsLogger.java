@@ -29,7 +29,7 @@ public class LiveMetricsLogger {
     private static final Logger log = LoggerFactory.getLogger(LiveMetricsLogger.class);
     private static final String CSV_PATH = "shadow_live_forward_logs.csv";
     private static final String CSV_HEADER =
-        "signalTime,executionTime,latencySec,expectedEntry,actualEntry,entrySlippage," +
+        "signalTime,executionTime,direction,latencySec,expectedEntry,actualEntry,entrySlippage," +
         "expectedExit,actualExit,exitSlippage,tp1Hit,runnerCaptured,mfe,mae,realizedR," +
         "gateDecision,rejectReason,regime,timePhase,feedStable,exitReason,exitTime";
     
@@ -81,8 +81,9 @@ public class LiveMetricsLogger {
     ) {
         ensureHeader();
         appendRow(String.format(
-            "%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
+            "%s,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,REJECT,%s,%s,%s,%s,%s,%s",
             signalTime,
+            "",
             "",
             0,
             "",
@@ -126,15 +127,42 @@ public class LiveMetricsLogger {
         String exitReason,
         LocalDateTime exitTime
     ) {
+        logShadowExecution(signalTime, executionTime, "", expectedEntryPrice, actualEntryPrice,
+            expectedExitPrice, actualExitPrice, tp1Hit, runnerCaptured, mfe, mae, realizedR,
+            gateDecision, rejectReason, regime, timePhase, feedStable, exitReason, exitTime);
+    }
+
+    public synchronized void logShadowExecution(
+        LocalDateTime signalTime,
+        LocalDateTime executionTime,
+        String direction,
+        double expectedEntryPrice,
+        double actualEntryPrice,
+        double expectedExitPrice,
+        double actualExitPrice,
+        boolean tp1Hit,
+        boolean runnerCaptured,
+        double mfe,
+        double mae,
+        double realizedR,
+        String gateDecision,
+        String rejectReason,
+        Regime regime,
+        TimePhase timePhase,
+        boolean feedStable,
+        String exitReason,
+        LocalDateTime exitTime
+    ) {
         ensureHeader();
         long latencySec = java.time.Duration.between(signalTime, executionTime).getSeconds();
         double entrySlippage = actualEntryPrice - expectedEntryPrice;
         double exitSlippage = actualExitPrice - expectedExitPrice;
 
         appendRow(String.format(
-            "%s,%s,%d,%f,%f,%f,%f,%f,%f,%b,%b,%f,%f,%f,%s,%s,%s,%s,%b,%s,%s",
+            "%s,%s,%s,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%b,%b,%.4f,%.4f,%.4f,%s,%s,%s,%s,%b,%s,%s",
             signalTime,
             executionTime,
+            direction == null ? "" : direction,
             latencySec,
             expectedEntryPrice,
             actualEntryPrice,

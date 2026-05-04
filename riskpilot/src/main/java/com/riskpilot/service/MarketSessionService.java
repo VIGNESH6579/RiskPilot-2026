@@ -59,7 +59,7 @@ public class MarketSessionService {
         int minute = now.getMinute();
         int timeValue = hour * 100 + minute;
         
-        return timeValue >= 915 && timeValue <= 1530;
+        return timeValue >= 915 && timeValue < 1530;
     }
 
     /**

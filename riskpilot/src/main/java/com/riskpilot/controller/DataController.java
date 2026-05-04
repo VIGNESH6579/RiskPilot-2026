@@ -19,6 +19,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/api/v1/data")
@@ -26,8 +28,13 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DataController {
 
+    private static final long TRADE_HISTORY_CACHE_TTL_MS = 5_000L;
+
     private final VixService vixService;
     private final OptionChainService optionChainService;
+
+    private final AtomicReference<List<Map<String, Object>>> tradeHistoryCache = new AtomicReference<>(null);
+    private final AtomicLong tradeHistoryCacheTime = new AtomicLong(0L);
 
     @GetMapping("/vix")
     public double getVix() {
@@ -65,6 +72,13 @@ public class DataController {
 
     @GetMapping("/trade-history")
     public List<Map<String, Object>> tradeHistory(@RequestParam(defaultValue = "25") int limit) {
+        long now = System.currentTimeMillis();
+        List<Map<String, Object>> cached = tradeHistoryCache.get();
+        if (cached != null && (now - tradeHistoryCacheTime.get()) < TRADE_HISTORY_CACHE_TTL_MS) {
+            int capped = Math.max(1, Math.min(limit, 200));
+            return cached.size() > capped ? new ArrayList<>(cached.subList(0, capped)) : cached;
+        }
+
         int capped = Math.max(1, Math.min(limit, 200));
         Path csvPath = Path.of(System.getenv().getOrDefault("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv"));
         if (!Files.exists(csvPath)) {
@@ -82,35 +96,40 @@ public class DataController {
                 }
                 if (line.isBlank()) continue;
                 List<String> parts = parseCsvLine(line);
-                if (parts.size() < 21) continue;
+                if (parts.size() < 22) continue;
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("signalTime", parts.get(0));
                 row.put("executionTime", parts.get(1));
-                row.put("latencySec", toDouble(parts.get(2)));
-                row.put("expectedEntry", toDouble(parts.get(3)));
-                row.put("actualEntry", toDouble(parts.get(4)));
-                row.put("entrySlippage", toDouble(parts.get(5)));
-                row.put("expectedExit", toDouble(parts.get(6)));
-                row.put("actualExit", toDouble(parts.get(7)));
-                row.put("exitSlippage", toDouble(parts.get(8)));
-                row.put("tp1Hit", Boolean.parseBoolean(parts.get(9)));
-                row.put("runnerCaptured", Boolean.parseBoolean(parts.get(10)));
-                row.put("mfe", toDouble(parts.get(11)));
-                row.put("mae", toDouble(parts.get(12)));
-                row.put("realizedR", toDouble(parts.get(13)));
-                row.put("gateDecision", parts.get(14));
-                row.put("rejectReason", parts.get(15));
-                row.put("regime", parts.get(16));
-                row.put("timePhase", parts.get(17));
-                row.put("feedStable", parts.get(18));
-                row.put("exitReason", parts.get(19));
-                row.put("exitTime", parts.get(20));
+                row.put("direction", parts.get(2));
+                row.put("latencySec", toDouble(parts.get(3)));
+                row.put("expectedEntry", toDouble(parts.get(4)));
+                row.put("actualEntry", toDouble(parts.get(5)));
+                row.put("entrySlippage", toDouble(parts.get(6)));
+                row.put("expectedExit", toDouble(parts.get(7)));
+                row.put("actualExit", toDouble(parts.get(8)));
+                row.put("exitSlippage", toDouble(parts.get(9)));
+                row.put("tp1Hit", Boolean.parseBoolean(parts.get(10)));
+                row.put("runnerCaptured", Boolean.parseBoolean(parts.get(11)));
+                row.put("mfe", toDouble(parts.get(12)));
+                row.put("mae", toDouble(parts.get(13)));
+                row.put("realizedR", toDouble(parts.get(14)));
+                row.put("gateDecision", parts.get(15));
+                row.put("rejectReason", parts.get(16));
+                row.put("regime", parts.get(17));
+                row.put("timePhase", parts.get(18));
+                row.put("feedStable", parts.get(19));
+                row.put("exitReason", parts.get(20));
+                row.put("exitTime", parts.get(21));
                 rows.add(row);
             }
         } catch (IOException ignored) {
             return Collections.emptyList();
         }
         Collections.reverse(rows);
+
+        tradeHistoryCache.set(rows);
+        tradeHistoryCacheTime.set(System.currentTimeMillis());
+
         if (rows.size() > capped) {
             return new ArrayList<>(rows.subList(0, capped));
         }

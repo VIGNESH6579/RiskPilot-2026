@@ -55,6 +55,7 @@ public class HeartbeatMonitor {
     public void monitorHealth() {
         if (!marketSessionService.isMarketOpen()) {
             TradingSessionSnapshot snapshotBeforeClose = stateManager.getSnapshot();
+            candleAggregator.clearFeedInstability();
             stateManager.update(current -> new TradingSessionSnapshot(
                 false,
                 current.regime(),

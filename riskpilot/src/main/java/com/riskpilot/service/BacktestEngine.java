@@ -17,6 +17,8 @@ import java.util.List;
 
 public class BacktestEngine {
     private static final Logger log = LoggerFactory.getLogger(BacktestEngine.class);
+    private static final double NIFTY_LOT_SIZE    = 75;
+    private static final double NIFTY_POINT_VALUE = 1.0;
 
     private final TrapEngine trapEngine;
 
@@ -190,7 +192,8 @@ public class BacktestEngine {
         activeTrade.currentExposure = 0.0;
         activeTrade.active = false;
         
-        tradeLog.add(new TradeResult(activeTrade.realizedPL, activeTrade.orExpansion, activeTrade.tp1Hit && distanceCaptured > 0, activeTrade.entryTime)); 
+        double rupeesPL = activeTrade.realizedPL * NIFTY_LOT_SIZE * NIFTY_POINT_VALUE;
+        tradeLog.add(new TradeResult(rupeesPL, activeTrade.orExpansion, activeTrade.tp1Hit && distanceCaptured > 0, activeTrade.entryTime));
     }
 
     private void checkExit(Candle c, double slippageExit, double tp1Fraction, double earlyKillMaeLimit, double earlyKillFraction) {
@@ -208,7 +211,8 @@ public class BacktestEngine {
             
             if (activeTrade.currentExposure <= 0.001) {
                 activeTrade.active = false;
-                tradeLog.add(new TradeResult(activeTrade.realizedPL, activeTrade.orExpansion, false, activeTrade.entryTime));
+                double rupeesPL1 = activeTrade.realizedPL * NIFTY_LOT_SIZE * NIFTY_POINT_VALUE;
+                tradeLog.add(new TradeResult(rupeesPL1, activeTrade.orExpansion, false, activeTrade.entryTime));
                 return;
             }
         }
@@ -222,7 +226,8 @@ public class BacktestEngine {
             activeTrade.currentExposure = 0.0;
             
             activeTrade.active = false;
-            tradeLog.add(new TradeResult(activeTrade.realizedPL, activeTrade.orExpansion, activeTrade.tp1Hit && distanceCaptured > 0, activeTrade.entryTime));
+            double rupeesPL2 = activeTrade.realizedPL * NIFTY_LOT_SIZE * NIFTY_POINT_VALUE;
+            tradeLog.add(new TradeResult(rupeesPL2, activeTrade.orExpansion, activeTrade.tp1Hit && distanceCaptured > 0, activeTrade.entryTime));
         } 
         else if (!activeTrade.tp1Hit && c.low <= activeTrade.tp1Target) {
             activeTrade.tp1Hit = true;
@@ -236,7 +241,8 @@ public class BacktestEngine {
             
             if (activeTrade.currentExposure <= 0.001) {
                 activeTrade.active = false;
-                tradeLog.add(new TradeResult(activeTrade.realizedPL, activeTrade.orExpansion, false, activeTrade.entryTime));
+                double rupeesPL3 = activeTrade.realizedPL * NIFTY_LOT_SIZE * NIFTY_POINT_VALUE;
+                tradeLog.add(new TradeResult(rupeesPL3, activeTrade.orExpansion, false, activeTrade.entryTime));
                 return;
             }
         }

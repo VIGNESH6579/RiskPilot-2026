@@ -2,6 +2,8 @@ package com.riskpilot.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -28,19 +30,20 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
 
     public static class TradeDataWebSocketHandler extends TextWebSocketHandler {
         
+        private static final Logger log = LoggerFactory.getLogger(TradeDataWebSocketHandler.class);
         private static final ConcurrentHashMap<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
         private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().registerModule(new JavaTimeModule());
 
         @Override
         public void afterConnectionEstablished(WebSocketSession session) {
             sessions.put(session.getId(), session);
-            System.out.println("WebSocket connected: " + session.getId());
+            log.info("WebSocket client connected: id={} remote={}", session.getId(), session.getRemoteAddress());
         }
 
         @Override
         public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
             sessions.remove(session.getId());
-            System.out.println("WebSocket disconnected: " + session.getId());
+            log.info("WebSocket client disconnected: id={} status={}", session.getId(), status);
         }
 
         @Override

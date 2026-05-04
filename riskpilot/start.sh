@@ -7,7 +7,7 @@ export JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
 echo "[*] Starting Python Observer (supervised)... "
 (
   while true; do
-    OBSERVER_PORT="${OBSERVER_PORT:-8765}" OBSERVER_HOST="${OBSERVER_HOST:-127.0.0.1}" python3 observer.py
+    OBSERVER_PORT="${OBSERVER_PORT:-8765}" OBSERVER_HOST="${OBSERVER_HOST:-0.0.0.0}" python3 observer.py
     echo "[!] Observer crashed, restarting in 5s..."
     sleep 5
   done

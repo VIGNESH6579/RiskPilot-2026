@@ -1,7 +1,9 @@
 package com.riskpilot.engine;
 
+import com.riskpilot.config.RiskPilotProperties;
 import com.riskpilot.model.TradingSessionSnapshot;
 import lombok.Data;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -10,7 +12,10 @@ import java.util.List;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class RegimeConfidenceEngine {
+
+    private final RiskPilotProperties riskPilotProperties;
 
     private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 45);
     private static final LocalTime EARLY_SESSION_END = LocalTime.of(10, 30);
@@ -101,11 +106,15 @@ public class RegimeConfidenceEngine {
         if (!Double.isFinite(orRange) || orRange <= 0.0) {
             return 0;
         }
-        
-        if (orRange < 90) return 0;
-        if (orRange < 120) return 10;
-        if (orRange < 150) return 18;
-        return 25; // >150
+
+        double minOrRange = riskPilotProperties != null
+            ? riskPilotProperties.getFilters().getMinOrRange()
+            : 120.0;
+
+        if (orRange < minOrRange * 0.75) return 0;
+        if (orRange < minOrRange) return 10;
+        if (orRange < minOrRange * 1.25) return 18;
+        return 25;
     }
 
     /**
