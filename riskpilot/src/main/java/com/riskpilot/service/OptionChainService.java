@@ -211,7 +211,7 @@ public class OptionChainService {
             return false;
         }
         LocalTime t = now.toLocalTime();
-        return !t.isBefore(LocalTime.of(9, 15)) && !t.isAfter(LocalTime.of(15, 30));
+        return !t.isBefore(LocalTime.of(9, 15)) && t.isBefore(LocalTime.of(15, 30));
     }
 
     private void writeCache(OptionChainSnapshot snapshot) {

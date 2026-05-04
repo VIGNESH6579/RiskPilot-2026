@@ -29,6 +29,8 @@ public class AngelTickStreamClient {
     private final OptionChainService optionChainService;
     private final ShadowExecutionEngine shadowExecutionEngine;
     private final MarketSessionService marketSessionService;
+    private final AngelOneMarketDataService angelOneMarketDataService;
+    private final RealTimeTickAggregator realTimeTickAggregator;
     
     // BUG-035: Named thread factory for executor
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(
@@ -55,13 +57,17 @@ public class AngelTickStreamClient {
         HeartbeatMonitor heartbeatMonitor,
         OptionChainService optionChainService,
         ShadowExecutionEngine shadowExecutionEngine,
-        MarketSessionService marketSessionService
+        MarketSessionService marketSessionService,
+        AngelOneMarketDataService angelOneMarketDataService,
+        RealTimeTickAggregator realTimeTickAggregator
     ) {
         this.candleAggregator = candleAggregator;
         this.heartbeatMonitor = heartbeatMonitor;
         this.optionChainService = optionChainService;
         this.shadowExecutionEngine = shadowExecutionEngine;
         this.marketSessionService = marketSessionService;
+        this.angelOneMarketDataService = angelOneMarketDataService;
+        this.realTimeTickAggregator = realTimeTickAggregator;
     }
 
     @PostConstruct
@@ -88,34 +94,42 @@ public class AngelTickStreamClient {
                 return;
             }
 
+            // Primary: get spot from option chain
+            double spot = 0.0;
             OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
-            if (snap == null || snap.spot() <= 0.0 || !snap.live()) {
-                candleAggregator.markUnstable();
-                return;
+            if (snap != null && snap.spot() > 0.0 && snap.live()) {
+                spot = snap.spot();
+            } else {
+                // Fallback: hit Angel One LTP directly so candles keep building
+                // even when the option chain snapshot is stale or unavailable
+                java.util.Optional<Double> directLtp = angelOneMarketDataService.getNiftyLtp();
+                if (directLtp.isPresent() && directLtp.get() > 0.0) {
+                    spot = directLtp.get();
+                    log.debug("AngelTickStreamClient: option chain unavailable, using direct LTP={}", spot);
+                } else {
+                    candleAggregator.markUnstable();
+                    return;
+                }
             }
-            
-            long currentSpot = (long) (snap.spot() * 100); // Store as long to avoid float precision issues
-            lastSpotValue.set(currentSpot);
-            
+
+            lastSpotValue.set((long) (spot * 100));
             heartbeatMonitor.registerTick();
-            
+
             int candleMinute = (receivedAt.getMinute() / 5) * 5;
             LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
 
-            candleAggregator.processTick(
-                receivedAt,
-                snap.spot(),
-                1L,
-                sequenceCounter.incrementAndGet(),
-                receivedAt
-            );
+            long seq = sequenceCounter.incrementAndGet();
+            candleAggregator.processTick(receivedAt, spot, 1L, seq, receivedAt);
 
-            shadowExecutionEngine.evaluateTick(snap.spot());
+            // Also feed the real-time aggregator so CandleEntity history is built
+            realTimeTickAggregator.processAngelTick("NIFTY", spot, 1L);
+
+            shadowExecutionEngine.evaluateTick(spot);
             if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
                 shadowExecutionEngine.evaluateCandleClose();
             }
             lastCandleSlot = currentSlot;
-            
+
         } catch (Exception e) {
             candleAggregator.markUnstable();
             log.debug("Tick polling failed: {}", e.getMessage());

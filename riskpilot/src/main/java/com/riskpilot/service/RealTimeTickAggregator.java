@@ -157,12 +157,16 @@ public class RealTimeTickAggregator {
     }
 
     private boolean shouldStartNewCandle(Instant candleStart, Instant now) {
-        // 5-minute candles
-        long candleMinute = candleStart.atZone(ZoneId.of("Asia/Kolkata")).getMinute();
-        long currentMinute = now.atZone(ZoneId.of("Asia/Kolkata")).getMinute();
-        
-        return (currentMinute / 5) > (candleMinute / 5) || 
-               java.time.Duration.between(candleStart, now).toMinutes() >= 5;
+        // Compare total 5-minute slot numbers using full hour+minute, so hour boundaries work correctly.
+        // e.g. 09:55 slot = (9*60+55)/5 = 119, 10:00 slot = (10*60+0)/5 = 120 → new candle.
+        ZoneId ist = ZoneId.of("Asia/Kolkata");
+        java.time.ZonedDateTime zStart = candleStart.atZone(ist);
+        java.time.ZonedDateTime zNow   = now.atZone(ist);
+        int startSlot   = (zStart.getHour() * 60 + zStart.getMinute()) / 5;
+        int currentSlot = (zNow.getHour()   * 60 + zNow.getMinute())   / 5;
+        // Also guard against day rollover by checking date
+        boolean nextDay = zNow.toLocalDate().isAfter(zStart.toLocalDate());
+        return nextDay || currentSlot > startSlot;
     }
 
     private void addCandleToHistory(CandleEntity candle) {

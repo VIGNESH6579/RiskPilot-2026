@@ -26,7 +26,7 @@ public class VixService {
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,
         @Value("${ANGEL_INDIA_VIX_EXCHANGE:NSE}") String indiaVixExchange,
-        @Value("${ANGEL_INDIA_VIX_TOKEN:}") String indiaVixToken,
+        @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken,
         @Value("${RISK_VIX_FALLBACK:15.0}") double fallbackVix
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
