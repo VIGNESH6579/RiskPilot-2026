@@ -4,6 +4,7 @@
   export OBSERVER_PORT=8765
 
   # Build PostgreSQL JDBC URL from env vars (or fall back to H2)
+  # PG_JDBC_URL must include ?sslmode=require for Render external connections
   DB_URL="${PG_JDBC_URL:-jdbc:h2:mem:riskpilot;DB_CLOSE_DELAY=-1}"
   DB_USR="${PG_USER:-sa}"
   DB_PWD="${PG_PASS:-}"
@@ -12,6 +13,10 @@
     DB_DRIVER="org.postgresql.Driver"
     DB_DIALECT="org.hibernate.dialect.PostgreSQLDialect"
     FLYWAY_ENABLED="true"
+    # Ensure SSL is set (required for Render external PostgreSQL)
+    if [[ "$DB_URL" != *sslmode* ]]; then
+      DB_URL="${DB_URL}?sslmode=require"
+    fi
   else
     DB_DRIVER="org.h2.Driver"
     DB_DIALECT="org.hibernate.dialect.H2Dialect"
@@ -30,7 +35,7 @@
 
   # Start Spring Boot — DB config passed as command-line args (highest Spring Boot priority,
   # overrides any auto-injected SPRING_DATASOURCE_URL from Render-linked database)
-  echo "[*] Starting RiskPilot Spring Boot on port ${PORT:-8080}..."
+  echo "[*] Starting RiskPilot Spring Boot on port ${PORT:-8080} with DB: ${DB_URL%\?*}"
   exec java ${JAVA_OPTS} -jar app.jar \
     --server.port="${PORT:-8080}" \
     --spring.datasource.url="${DB_URL}" \
