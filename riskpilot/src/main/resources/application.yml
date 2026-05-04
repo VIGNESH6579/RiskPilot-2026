@@ -1,6 +1,9 @@
 server:
   port: 8080
 
+ADMIN_USERNAME: ${ADMIN_USERNAME:admin-dev}
+ADMIN_PASSWORD: ${ADMIN_PASSWORD:changeme-dev}
+
 spring:
   application:
     name: riskpilot
