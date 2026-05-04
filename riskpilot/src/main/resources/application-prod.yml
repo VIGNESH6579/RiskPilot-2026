@@ -28,16 +28,6 @@ spring:
       time-zone: Asia/Kolkata
       date-format: yyyy-MM-dd HH:mm:ss
 
-  # =========================================================
-  # ADMIN CREDENTIALS
-  # =========================================================
-  ADMIN_USERNAME: ${ADMIN_USERNAME}
-  ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-
-  # =========================================================
-  # RISKPILOT DOCTRINE-ENFORCED CONFIG
-  # =========================================================
-
   riskpilot:
 
     mode: SHADOW
@@ -59,12 +49,10 @@ spring:
         start: "09:15"
         end: "12:00"
         position-scale: 1.0
-
       mid:
         start: "12:00"
         end: "13:30"
         position-scale: 0.35
-
       late:
         start: "13:30"
         end: "15:30"
@@ -83,12 +71,10 @@ spring:
         tp1-max: 3.0
         runner-max: 6.0
         panic-exit-max: 8.0
-
       latency:
         soft-block-ms: 500
         hard-block-ms: 1500
         panic-ms: 5000
-
       reject-on-high-slippage: true
       reject-on-latency-breach: true
 
@@ -98,7 +84,6 @@ spring:
         position-size: 0.15
         min-points: 15
         volatility-factor: 0.12
-
       runner:
         position-size: 0.85
         stage2-activation-r: 0.8
@@ -119,12 +104,10 @@ spring:
         instability-timeout-sec: 15
         real-time-only: true
         data-source: "angelone-live"
-
       heartbeat:
         enabled: true
         panic-exit-on-failure: true
         timeout-sec: 30
-
       market-data:
         cache-ttl-seconds: 5
         refresh-interval-seconds: 2
@@ -135,15 +118,12 @@ spring:
       csv:
         enabled: true
         path: shadow_live_forward_logs.csv
-
       decision-log:
         enabled: true
         path: decision_log.csv
-
       reject-log:
         enabled: true
         path: reject_log.csv
-
       include:
         - regime
         - volatility
@@ -157,27 +137,12 @@ spring:
         - timePhase
         - feedStable
 
-  # =========================================================
-  # ANGEL ONE CONFIG (NO DEFAULTS)
-  # =========================================================
-
   angelapi:
     key: ${ANGEL_API_KEY:}
     clientcode: ${ANGEL_CLIENT_ID:}
     pin: ${ANGEL_PIN:}
     totp:
       secret: ${ANGEL_TOTP_SECRET:}
-
-  # =========================================================
-  # INDIA VIX REAL-TIME CONFIG
-  # =========================================================
-  ANGEL_INDIA_VIX_TOKEN: ${ANGEL_INDIA_VIX_TOKEN:999920005}
-  ANGEL_INDIA_VIX_EXCHANGE: ${ANGEL_INDIA_VIX_EXCHANGE:NSE}
-  RISK_VIX_FALLBACK: ${RISK_VIX_FALLBACK:15.0}
-
-  # =========================================================
-  # LOGGING (STRUCTURED, NOT VERBOSE)
-  # =========================================================
 
   logging:
     level:
@@ -191,25 +156,15 @@ spring:
       max-size: 5MB
       max-history: 7
 
-  # =========================================================
-  # HEALTH — liveness always UP; custom indicators advisory only
-  # =========================================================
-
+  # Health — custom indicators always return UP; /actuator/health always 200
   management:
     endpoints:
       web:
         exposure:
-          include: health
+          include: health,info
         base-path: /actuator
-
     endpoint:
       health:
         show-details: always
         show-components: always
-        # liveness group ONLY checks JVM liveness — always 200 for Render health check
-        group:
-          liveness:
-            include: livenessState
-          readiness:
-            include: readinessState,marketDataHealth,tradingEngineHealth
   
