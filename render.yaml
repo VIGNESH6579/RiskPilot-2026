@@ -1,47 +1,56 @@
 services:
-  # Production Web Service
-  - type: web
-    name: riskpilot-2026
-    env: docker
-    plan: free
-    dockerfilePath: ./riskpilot/Dockerfile
-    dockerContext: ./riskpilot
-    autoDeploy: true
-    
-    # Environment variables for free tier optimization
-    envVars:
-      - key: JAVA_OPTS
-        value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
-      - key: MAVEN_OPTS
-        value: "-Xms256m -Xmx512m"
-      - key: SPRING_PROFILES_ACTIVE
-        value: prod
-      - key: ANGEL_API_KEY
-        sync: false
-      - key: ANGEL_CLIENT_ID
-        sync: false
-      - key: ANGEL_PIN
-        sync: false
-      - key: ANGEL_TOTP_SECRET
-        sync: false
-      - key: ANGEL_CLIENT_PUBLIC_IP
-        sync: false
-      - key: ANGEL_INDIA_VIX_TOKEN
-        sync: false
-      - key: ADMIN_USERNAME
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
-    
-    # Health check configuration
-    healthCheckPath: /actuator/health
-    healthCheckTimeout: 30
-    healthCheckInterval: 60
-    
-    # Start command optimization
-    startCommand: "./start.sh"
-    
-    # Resource limits for free tier
-    resourceLimits:
-      memory: 512Mi
-      cpu: 0.5
+    # Production Web Service
+    - type: web
+      name: riskpilot-2026
+      env: docker
+      plan: free
+      dockerfilePath: ./riskpilot/Dockerfile
+      dockerContext: ./riskpilot
+      autoDeploy: true
+
+      # Health check configuration
+      healthCheckPath: /actuator/health
+      healthCheckTimeout: 300
+      healthCheckInterval: 60
+
+      # Start command
+      startCommand: "./start.sh"
+
+      # Environment variables
+      envVars:
+        - key: JAVA_OPTS
+          value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
+        - key: MAVEN_OPTS
+          value: "-Xms256m -Xmx512m"
+        - key: SPRING_PROFILES_ACTIVE
+          value: prod
+        - key: OBSERVER_PORT
+          value: "8765"
+        - key: DATABASE_URL
+          sync: false
+        - key: DATABASE_USERNAME
+          sync: false
+        - key: DATABASE_PASSWORD
+          sync: false
+        - key: ADMIN_USERNAME
+          sync: false
+        - key: ADMIN_PASSWORD
+          sync: false
+        - key: ANGEL_API_KEY
+          sync: false
+        - key: ANGEL_CLIENT_ID
+          sync: false
+        - key: ANGEL_PIN
+          sync: false
+        - key: ANGEL_TOTP_SECRET
+          sync: false
+        - key: ANGEL_CLIENT_PUBLIC_IP
+          sync: false
+        - key: ANGEL_INDIA_VIX_TOKEN
+          sync: false
+
+      # Resource limits for free tier
+      resourceLimits:
+        memory: 512Mi
+        cpu: 0.5
+  
