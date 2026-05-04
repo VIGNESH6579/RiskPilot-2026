@@ -2,8 +2,9 @@ package com.riskpilot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -16,13 +17,21 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RealTimeMarketDataService {
 
     private final AngelAuthService authService;
+    // @Lazy breaks the circular dependency:
+    // AngelTickStreamClient → RealTimeTickAggregator → RealTimeMarketDataService → AngelTickStreamClient
     private final AngelTickStreamClient tickStreamClient;
     private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Autowired
+    public RealTimeMarketDataService(AngelAuthService authService,
+                                     @Lazy AngelTickStreamClient tickStreamClient) {
+        this.authService = authService;
+        this.tickStreamClient = tickStreamClient;
+    }
     
     // Real-time data cache with TTL
     private final Map<String, MarketData> realTimeCache = new ConcurrentHashMap<>();
