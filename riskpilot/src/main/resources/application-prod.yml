@@ -156,7 +156,6 @@ spring:
       max-size: 5MB
       max-history: 7
 
-  # Health — custom indicators always return UP; /actuator/health always 200
   management:
     endpoints:
       web:
