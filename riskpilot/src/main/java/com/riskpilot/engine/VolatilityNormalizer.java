@@ -15,10 +15,9 @@ public class VolatilityNormalizer {
     private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 45);
     private static final double TP1_VOLATILITY_RATIO_MIN = 0.10;
     private static final double TP1_VOLATILITY_RATIO_MAX = 0.15;
-    private static final double FIXED_TP1_FALLBACK = 15.0;
 
     private final AtomicReference<Double> openingRange = new AtomicReference<>(0.0);
-    private final AtomicReference<Double> currentTP1 = new AtomicReference<>(FIXED_TP1_FALLBACK);
+    private final AtomicReference<Double> currentTP1 = new AtomicReference<>(0.0);
     private final AtomicReference<LocalDateTime> lastUpdate = new AtomicReference<>(LocalDateTime.now());
 
     @Data
@@ -59,7 +58,7 @@ public class VolatilityNormalizer {
     private void recalculateTP1() {
         double or = openingRange.get();
         if (or <= 0) {
-            currentTP1.set(FIXED_TP1_FALLBACK);
+            currentTP1.set(0.0);
             return;
         }
 
@@ -73,7 +72,7 @@ public class VolatilityNormalizer {
         // Use volatility normalization if OR is significant
         boolean usedNormalization = or > 80.0; // Only normalize if meaningful range
 
-        currentTP1.set(usedNormalization ? finalTP1 : FIXED_TP1_FALLBACK);
+        currentTP1.set(usedNormalization ? finalTP1 : 0.0);
         lastUpdate.set(LocalDateTime.now());
 
         log.debug("📊 TP1 Calculation: OR={}, Ratio={}, TP1={}, Normalized={}",
@@ -113,7 +112,7 @@ public class VolatilityNormalizer {
      */
     public void reset() {
         openingRange.set(0.0);
-        currentTP1.set(FIXED_TP1_FALLBACK);
+        currentTP1.set(0.0);
         lastUpdate.set(LocalDateTime.now());
         log.info("🔄 Volatility normalizer reset");
     }

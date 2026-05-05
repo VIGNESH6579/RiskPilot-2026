@@ -17,6 +17,7 @@ import java.util.List;
 public class TrapEngine {
     private final double minVix;
     private final double maxVix;
+    private final double riskCapital;
     
     // BUG-019: ATR-relative constants (instead of hardcoded points)
     private static final double BREAKOUT_DEPTH_ATR_MULTIPLIER = 0.20;  // ~20% of ATR
@@ -25,10 +26,12 @@ public class TrapEngine {
 
     public TrapEngine(
         @Value("${TRAP_MIN_VIX:12}") double minVix,
-        @Value("${TRAP_MAX_VIX:25}") double maxVix
+        @Value("${TRAP_MAX_VIX:25}") double maxVix,
+        @Value("${RISK_CAPITAL:100000}") double riskCapital
     ) {
         this.minVix = minVix;
         this.maxVix = maxVix;
+        this.riskCapital = riskCapital;
     }
     
     /**
@@ -36,7 +39,7 @@ public class TrapEngine {
      * BUG-019: Used for ATR-normalized thresholds.
      */
     private double calculateAtr(List<Candle> history, int periods) {
-        if (history.size() < 2) return 50.0; // Default ATR for NIFTY
+        if (history.size() < 2) return Double.NaN;
         
         int start = Math.max(0, history.size() - periods);
         double totalRange = 0.0;
@@ -55,7 +58,7 @@ public class TrapEngine {
         
         return (history.size() - start - 1) > 0 
             ? totalRange / (history.size() - start - 1) 
-            : 50.0;
+            : Double.NaN;
     }
 
     /**
@@ -75,7 +78,10 @@ public class TrapEngine {
             return null;
         }
 
-        double effectiveAtr = Double.isFinite(atr) && atr > 0.0 ? atr : 25.0;
+        if (!Double.isFinite(atr) || atr <= 0.0) {
+            return null;
+        }
+        double effectiveAtr = atr;
 
         Candle t0 = history.get(history.size() - 1); 
         Candle t1 = history.get(history.size() - 2); 
@@ -125,9 +131,8 @@ public class TrapEngine {
                 s.setStopLoss(sl);
                 s.setTarget(tp1); 
                 
-                double riskCapital = 100000 * 0.01;
                 // Position Sizing normalized against risk mapping exactly 1% scale
-                int qty = (int) (riskCapital / distanceToSL);
+                int qty = (int) ((riskCapital * 0.01) / distanceToSL);
                 if (qty < 2) qty = 2; 
                 if (qty % 2 != 0) qty++; 
                 

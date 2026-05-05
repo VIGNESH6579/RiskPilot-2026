@@ -12,8 +12,6 @@ import java.io.IOException;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
@@ -23,7 +21,6 @@ import java.util.Optional;
 public class OptionChainService {
 
     private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
-    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final String CACHE_FILE = "option_chain_cache.json";
     private static final long ANGEL_QUOTE_CACHE_MS = 3_000L;
     private static final long ANGEL_WARNING_INTERVAL_MS = 60_000L;
@@ -32,6 +29,7 @@ public class OptionChainService {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final AngelOneMarketDataService angelOneMarketDataService;
+    private final MarketSessionService marketSessionService;
     private final DayOfWeek defaultExpiryDay;
     private final String explicitExpiryOverride;
 
@@ -41,6 +39,7 @@ public class OptionChainService {
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
+        MarketSessionService marketSessionService,
         // BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY.
         // render.yaml sets NIFTY_WEEKLY_EXPIRY_DAY=THURSDAY; this default
         // ensures correctness even if the env var is absent.
@@ -48,12 +47,13 @@ public class OptionChainService {
         @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
+        this.marketSessionService = marketSessionService;
         this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
         this.explicitExpiryOverride = explicitExpiryOverride == null ? "" : explicitExpiryOverride.trim();
     }
 
     public synchronized OptionChainSnapshot fetchNiftyChain() {
-        boolean marketOpen = isMarketOpenNow();
+        boolean marketOpen = isMarketOpen();
         OptionChainSnapshot recent = recentAngelSnapshot(marketOpen);
         if (recent != null) {
             return recent;
@@ -74,7 +74,7 @@ public class OptionChainService {
                 cached.support(),
                 cached.resistance(),
                 cached.spot(),
-                resolveFallbackExpiry(),
+                resolveProjectedExpiry(),
                 cached.previousClose() > 0.0 ? cached.previousClose() : cached.spot(),
                 "MARKET_CLOSED_CACHE",
                 cached.updatedEpochMs(),
@@ -97,7 +97,7 @@ public class OptionChainService {
     }
 
     public boolean isMarketOpen() {
-        return isMarketOpenNow();
+        return marketSessionService.isMarketOpen();
     }
 
     private OptionChainSnapshot recentAngelSnapshot(boolean marketOpen) {
@@ -125,7 +125,7 @@ public class OptionChainService {
 
             OptionChainSnapshot snapshot = new OptionChainSnapshot(
                 support, resistance, ltp,
-                resolveFallbackExpiry(),
+                resolveProjectedExpiry(),
                 prevClose,
                 marketOpen ? "ANGELONE_LTP" : "ANGELONE_LTP_CLOSED",
                 System.currentTimeMillis(),
@@ -151,7 +151,7 @@ public class OptionChainService {
     private OptionChainSnapshot unavailableLiveSnapshot() {
         double prevClose = resolvePreviousClose(0.0);
         OptionChainSnapshot unavailable = new OptionChainSnapshot(
-            0, 0, 0.0, resolveFallbackExpiry(), prevClose, "ANGELONE_UNAVAILABLE", 0L, false
+            0, 0, 0.0, resolveProjectedExpiry(), prevClose, "ANGELONE_UNAVAILABLE", 0L, false
         );
         lastKnownSnapshot = unavailable;
         return unavailable;
@@ -160,13 +160,13 @@ public class OptionChainService {
     private OptionChainSnapshot closedMarketNoCacheSnapshot() {
         double prevClose = resolvePreviousClose(0.0);
         OptionChainSnapshot closed = new OptionChainSnapshot(
-            0, 0, 0.0, resolveFallbackExpiry(), prevClose, "MARKET_CLOSED_NO_CACHE", 0L, false
+            0, 0, 0.0, resolveProjectedExpiry(), prevClose, "MARKET_CLOSED_NO_CACHE", 0L, false
         );
         lastKnownSnapshot = closed;
         return closed;
     }
 
-    private double resolvePreviousClose(double fallback) {
+    private double resolvePreviousClose(double defaultValue) {
         OptionChainSnapshot current = lastKnownSnapshot;
         if (current.previousClose() > 0.0) return current.previousClose();
         OptionChainSnapshot cached = readCache();
@@ -174,15 +174,7 @@ public class OptionChainService {
             if (cached.previousClose() > 0.0) return cached.previousClose();
             if (cached.spot() > 0.0) return cached.spot();
         }
-        return fallback;
-    }
-
-    private boolean isMarketOpenNow() {
-        ZonedDateTime now = ZonedDateTime.now(IST);
-        DayOfWeek day = now.getDayOfWeek();
-        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) return false;
-        LocalTime t = now.toLocalTime();
-        return !t.isBefore(LocalTime.of(9, 15)) && t.isBefore(LocalTime.of(15, 30));
+        return defaultValue;
     }
 
     private void writeCache(OptionChainSnapshot snapshot) {
@@ -204,11 +196,11 @@ public class OptionChainService {
         }
     }
 
-    private String resolveFallbackExpiry() {
+    private String resolveProjectedExpiry() {
         String overridden = resolveExplicitExpiryOverride();
         if (!overridden.isBlank()) return overridden;
 
-        LocalDate today = LocalDate.now(IST);
+        LocalDate today = marketSessionService.nowIst().toLocalDate();
         OptionChainSnapshot current = lastKnownSnapshot;
         LocalDate snapshotDate = parseExpiryDate(current.expiry() == null ? "" : current.expiry().trim());
         if (snapshotDate != null && !snapshotDate.isBefore(today) && snapshotDate.getDayOfWeek() == defaultExpiryDay) {
@@ -243,11 +235,13 @@ public class OptionChainService {
     }
 
     private String computeNextExpiry() {
-        LocalDate d = LocalDate.now(IST);
+        LocalDate today = marketSessionService.nowIst().toLocalDate();
+        LocalDate d = today;
         while (d.getDayOfWeek() != defaultExpiryDay) {
             d = d.plusDays(1);
         }
-        if (d.equals(LocalDate.now(IST)) && ZonedDateTime.now(IST).toLocalTime().isAfter(LocalTime.of(15, 30))) {
+        LocalTime marketClose = LocalTime.parse(marketSessionService.getMarketCloseTime());
+        if (d.equals(today) && marketSessionService.nowIst().toLocalTime().isAfter(marketClose)) {
             d = d.plusDays(7);
         }
         return d.toString();

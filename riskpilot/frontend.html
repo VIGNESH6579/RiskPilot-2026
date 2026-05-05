@@ -180,18 +180,35 @@
       if (cls) el.classList.add(cls);
     }
 
-    async function refreshLiveData() {
+    async function fetchJson(url) {
       try {
-        const [health, state, candles] = await Promise.all([
-          fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
-        ]);
+        const response = await fetch(url, { cache: 'no-store' });
+        const data = await response.json().catch(() => ({}));
+        return response.ok ? { data } : { error: `HTTP ${response.status}`, data };
+      } catch (error) {
+        return { error: error.message || 'request failed', data: {} };
+      }
+    }
 
+    async function refreshLiveData() {
+      const [healthResult, stateResult, candlesResult] = await Promise.all([
+        fetchJson(`/api/v1/data/health?ts=${Date.now()}`),
+        fetchJson(`/api/v1/engine/state?ts=${Date.now()}`),
+        fetchJson(`/api/v1/engine/candle-history?ts=${Date.now()}`)
+      ]);
+
+      if (healthResult.error) {
+        els.feedHealth.textContent = `Market API down (${healthResult.error})`;
+        setClass(els.feedHealth, 'bad');
+        return;
+      }
+
+      try {
+        const health = healthResult.data;
+        const state = stateResult.error ? {} : stateResult.data;
+        const candles = candlesResult.error ? {} : candlesResult.data;
         const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
-        const live = health.marketDataStatus === 'LIVE'
-          && health.optionChainSource === 'ANGELONE_LTP'
-          && health.spot > 0;
+        const live = health.marketDataStatus === 'LIVE' && health.marketDataHealthy === true && health.spot > 0;
         const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
         const freshnessText = live
           ? `${ageSeconds}s old`
@@ -204,21 +221,23 @@
         els.expiry.textContent = health.expiry || '--';
         els.source.textContent = health.optionChainSource || 'UNKNOWN';
         els.freshness.textContent = freshnessText;
-        els.feedHealth.textContent = live ? 'Live Angel One' : (marketClosed ? 'Market closed' : 'No live Angel tick');
+        els.feedHealth.textContent = live
+          ? 'Live Angel One'
+          : (marketClosed ? 'Market closed' : (health.marketDataReason || 'No live Angel quote'));
         els.range.textContent = health.spot > 0
           ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
           : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         els.regime.textContent = state.regime || '--';
-        els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        els.session.textContent = stateResult.error ? 'Engine API down' : (state.sessionActive ? 'Active' : 'Inactive');
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
-        els.candles.textContent = candles.candleHistorySize ?? 0;
+        els.candles.textContent = candlesResult.error ? '--' : (candles.candleHistorySize ?? 0);
 
         setClass(els.source, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
         setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
         setClass(els.feedHealth, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
       } catch (error) {
-        els.feedHealth.textContent = 'Market API down';
+        els.feedHealth.textContent = `Market API down (${error.message || 'render failed'})`;
         setClass(els.feedHealth, 'bad');
       }
     }

@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 
 @Slf4j
@@ -248,9 +250,24 @@ public class RiskGateEngine {
     }
 
     public boolean shouldForceLateSessionExit(TradingSessionSnapshot s) {
-        return "LATE".equalsIgnoreCase(s.getTimePhase()) &&
-               config.getTimePhase().getLate().getForceExit() &&
-               s.isTradeActive();
+        if (!"LATE".equalsIgnoreCase(s.getTimePhase()) ||
+            !config.getTimePhase().getLate().getForceExit() ||
+            !s.isTradeActive()) {
+            return false;
+        }
+
+        LocalTime sessionEnd = parseTime(config.getSession().getEnd(), LocalTime.of(15, 30));
+        LocalTime forceExitStart = sessionEnd.minusMinutes(10);
+        ZoneId zone = ZoneId.of(config.getSession().getTimezone());
+        return !LocalTime.now(zone).isBefore(forceExitStart);
+    }
+
+    private static LocalTime parseTime(String raw, LocalTime fallback) {
+        try {
+            return raw == null || raw.isBlank() ? fallback : LocalTime.parse(raw.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     public void logDecision(TradingSessionSnapshot state, double orRange, long latencyMs,

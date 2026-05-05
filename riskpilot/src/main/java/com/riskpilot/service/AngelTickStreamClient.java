@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * AngelTickStreamClient polls NIFTY spot as tick data until SmartAPI WebSocket is ready.
+ * AngelTickStreamClient bridges confirmed Angel One quote updates into the engine.
  * 
  * BUG-032: Deduplication on re-subscription (prevents duplicate subscriptions).
  * BUG-035: Unique thread names for executor.
@@ -100,8 +100,8 @@ public class AngelTickStreamClient {
             if (snap != null && snap.spot() > 0.0 && snap.live()) {
                 spot = snap.spot();
             } else {
-                // Fallback: hit Angel One LTP directly so candles keep building
-                // even when the option chain snapshot is stale or unavailable
+                // Secondary live quote path: use Angel One LTP directly when
+                // the option-chain snapshot is stale or unavailable.
                 java.util.Optional<Double> directLtp = angelOneMarketDataService.getNiftyLtp();
                 if (directLtp.isPresent() && directLtp.get() > 0.0) {
                     spot = directLtp.get();
@@ -112,17 +112,21 @@ public class AngelTickStreamClient {
                 }
             }
 
-            lastSpotValue.set((long) (spot * 100));
+            long scaledSpot = Math.round(spot * 100.0);
+            long previousSpot = lastSpotValue.getAndSet(scaledSpot);
+            if (previousSpot == scaledSpot) {
+                return;
+            }
             heartbeatMonitor.registerTick();
 
             int candleMinute = (receivedAt.getMinute() / 5) * 5;
             LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
 
             long seq = sequenceCounter.incrementAndGet();
-            candleAggregator.processTick(receivedAt, spot, 1L, seq, receivedAt);
+            candleAggregator.processTick(receivedAt, spot, 0L, seq, receivedAt);
 
             // Also feed the real-time aggregator so CandleEntity history is built
-            realTimeTickAggregator.processAngelTick("NIFTY", spot, 1L);
+            realTimeTickAggregator.processAngelTick("NIFTY", spot, 0L);
 
             shadowExecutionEngine.evaluateTick(spot);
             if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {

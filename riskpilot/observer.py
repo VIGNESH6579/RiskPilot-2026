@@ -114,7 +114,7 @@ async def notify_ntfy(session: aiohttp.ClientSession, payload: dict):
         f"RiskPilot Alert\n"
         f"Exit: {payload.get('exitReason')}\n"
         f"Slippage: ₹{payload.get('slippage')}\n"
-        f"Runner: {payload.get('isRunner')}\n"
+        f"Runner: {payload.get('runnerCaptured')}\n"
         f"Latency: {payload.get('latencySec')}s"
     )
     headers = {

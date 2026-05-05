@@ -22,7 +22,8 @@ ANGEL_CLIENT_ID=your_client_id
 ANGEL_PIN=your_pin
 ANGEL_TOTP_SECRET=your_totp_secret
 ANGEL_CLIENT_PUBLIC_IP=your_broker_registered_public_ip
-ANGEL_INDIA_VIX_TOKEN=your_angel_india_vix_token_optional
+ANGEL_INDIA_VIX_TOKEN=your_angel_india_vix_token
+NSE_TRADING_HOLIDAYS=2026-01-26,2026-02-26,2026-03-20,2026-03-31,2026-04-02,2026-04-03,2026-04-14,2026-05-01,2026-08-15,2026-10-02,2026-11-02,2026-11-03,2026-12-25
 RISKPILOT_NTFY_TOPIC=riskpilot-live-signals
 OBSERVER_PORT=8765
 OBSERVER_HOST=127.0.0.1
@@ -47,7 +48,7 @@ JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
 
 Also add the public IP registered with Angel One as `ANGEL_CLIENT_PUBLIC_IP`. Do not rely on runtime IP discovery in production.
 
-If you want live India VIX gating from Angel One, set `ANGEL_INDIA_VIX_TOKEN` to the Angel token for India VIX. If it is not set, RiskPilot uses `RISK_VIX_FALLBACK` without calling an external market-data fallback.
+Set `ANGEL_INDIA_VIX_TOKEN` to the Angel token for India VIX. If live VIX is unavailable during market hours, VIX-dependent strategy decisions are blocked instead of using a fallback value.
 
 ### In Render Dashboard:
 - Paste each credential into corresponding environment variable
@@ -63,7 +64,7 @@ If you want live India VIX gating from Angel One, set `ANGEL_INDIA_VIX_TOKEN` to
 3. Click **Add New Monitor**
 4. Set:
    - **Monitor Type**: HTTP(s)
-   - **URL**: `https://your-service.onrender.com/api/v1/monitor/state` 
+   - **URL**: `https://your-service.onrender.com/api/v1/health/pipeline`
    - **Interval**: 5 minutes
    - **Alert Contacts**: Email + Slack (optional)
 
@@ -84,16 +85,15 @@ If you want live India VIX gating from Angel One, set `ANGEL_INDIA_VIX_TOKEN` to
 
 ### Check Health Endpoint:
 ```bash
-curl https://your-service.onrender.com/api/v1/monitor/state
+curl https://your-service.onrender.com/api/v1/health/pipeline
 ```
 
 Expected response:
 ```json
 {
   "status": "healthy",
-  "service": "riskpilot-2026",
-  "angelOneConnected": true,
-  "version": "1.0.0"
+  "tickFeed": { "streamActive": true },
+  "optionChain": { "marketOpen": true, "live": true }
 }
 ```
 

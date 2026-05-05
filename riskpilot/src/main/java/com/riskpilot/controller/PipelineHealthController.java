@@ -5,6 +5,7 @@ import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.RealTimeTickAggregator;
 import com.riskpilot.service.VixService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -45,21 +46,32 @@ public class PipelineHealthController {
         tickSection.put("lastCandleTime", aggStats.get("lastCandleTime"));
 
         Map<String, Object> vixSection = new LinkedHashMap<>();
-        double vix = vixService.getIndiaVix();
-        vixSection.put("value",    vix);
-        vixSection.put("category", vixCategory(vix));
+        boolean vixLive = false;
+        try {
+            double vix = vixService.getIndiaVix();
+            vixLive = true;
+            vixSection.put("value",    vix);
+            vixSection.put("category", vixCategory(vix));
+        } catch (Exception e) {
+            vixSection.put("value", null);
+            vixSection.put("category", "UNAVAILABLE");
+            vixSection.put("error", e.getMessage());
+        }
 
         Map<String, Object> chainSection = new LinkedHashMap<>();
-        OptionChainService.OptionChainSnapshot snap = optionChainService.getLastKnownSnapshot();
+        OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
         long ageMs = optionChainService.getLastKnownSnapshotAgeMs();
-        chainSection.put("marketOpen",    optionChainService.isMarketOpen());
+        boolean marketOpen = optionChainService.isMarketOpen();
+        boolean marketDataHealthy = !marketOpen || (snap.live() && snap.spot() > 0.0);
+        chainSection.put("marketOpen",    marketOpen);
         chainSection.put("spot",          snap.spot());
         chainSection.put("source",        snap.source());
         chainSection.put("snapshotAgeMs", ageMs == Long.MAX_VALUE ? "never" : ageMs);
         chainSection.put("live",          snap.live());
         chainSection.put("expiry",        snap.expiry());
+        chainSection.put("healthy",       marketDataHealthy);
 
-        boolean healthy = streamActive && feedStable && snap.spot() > 0.0;
+        boolean healthy = !marketOpen || (streamActive && feedStable && marketDataHealthy && vixLive);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("status",      healthy ? "healthy" : "degraded");
@@ -68,7 +80,7 @@ public class PipelineHealthController {
         payload.put("vix",         vixSection);
         payload.put("optionChain", chainSection);
 
-        return ResponseEntity.ok(payload);
+        return ResponseEntity.status(healthy ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE).body(payload);
     }
 
     private static String vixCategory(double vix) {

@@ -66,9 +66,9 @@ riskpilot:
     
   # Notification Configuration
   notification:
-    ntfy-enabled: ${NTFY_ENABLED:false}
-    ntfy-topic: ${NTFY_TOPIC:riskpilot_shadow_alerts}
-    ntfy-cooldown-sec: ${NTFY_COOLDOWN_SEC:10}
+    ntfy-enabled: ${RISKPILOT_ENABLE_NTFY:false}
+    ntfy-topic: ${RISKPILOT_NTFY_TOPIC:riskpilot_shadow_alerts}
+    ntfy-cooldown-sec: ${RISKPILOT_NOTIFY_COOLDOWN_SEC:10}
 
 # Logging Configuration
 logging:
