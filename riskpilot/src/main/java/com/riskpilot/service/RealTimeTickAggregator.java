@@ -39,13 +39,13 @@ public class RealTimeTickAggregator {
         Instant startTime;
         String symbol;
         
-        CandleBuilder(String symbol, double firstPrice, Instant startTime) {
+        CandleBuilder(String symbol, double firstPrice, long firstVolume, Instant startTime) {
             this.symbol = symbol;
             this.open = firstPrice;
             this.high = firstPrice;
             this.low = firstPrice;
             this.close = firstPrice;
-            this.volume = 0;
+            this.volume = Math.max(0L, firstVolume);
             this.startTime = startTime;
         }
         
@@ -87,9 +87,12 @@ public class RealTimeTickAggregator {
         // Update feed stability
         updateFeedStability(now);
         
-        // Get or create candle builder for this symbol
-        CandleBuilder builder = candleBuilders.computeIfAbsent(symbol, 
-            s -> new CandleBuilder(s, price, now));
+        CandleBuilder builder = candleBuilders.get(symbol);
+        if (builder == null) {
+            candleBuilders.put(symbol, new CandleBuilder(symbol, price, volume, now));
+            log.debug("Real-time candle builder started: {} @ {}, Volume: {}", symbol, price, volume);
+            return;
+        }
         
         // Check if we need to start a new candle (5-minute intervals)
         if (shouldStartNewCandle(builder.startTime, now)) {
@@ -98,7 +101,7 @@ public class RealTimeTickAggregator {
             addCandleToHistory(completedCandle);
             
             // Start new candle
-            candleBuilders.put(symbol, new CandleBuilder(symbol, price, now));
+            candleBuilders.put(symbol, new CandleBuilder(symbol, price, volume, now));
         } else {
             // Update current candle
             builder.update(price, volume);
@@ -193,12 +196,12 @@ public class RealTimeTickAggregator {
         
         // Refresh NIFTY
         marketDataService.getNiftyLtp().ifPresent(ltp -> {
-            processRealTimeTick("NIFTY", ltp, 1000); // Default volume
+            processRealTimeTick("NIFTY", ltp, 0);
         });
         
         // Refresh BankNIFTY
         marketDataService.getBankNiftyLtp().ifPresent(ltp -> {
-            processRealTimeTick("BANKNIFTY", ltp, 1000); // Default volume
+            processRealTimeTick("BANKNIFTY", ltp, 0);
         });
     }
 

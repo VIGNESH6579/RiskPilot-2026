@@ -3,6 +3,7 @@ package com.riskpilot.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -41,10 +42,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/actuator/health", "/api/actuator/info").permitAll()
                 .requestMatchers("/ws", "/ws/**", "/ws/signals/**", "/stomp", "/stomp/**").permitAll()
                 .requestMatchers("/api/v1/engine/reset", "/api/v1/trading/engine/restart").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/trading/signals/manual", "/api/v1/trading/trades/*/close").hasRole("ADMIN")
                 .requestMatchers("/api/v1/trading/status").permitAll()
-                .requestMatchers("/api/v1/**").permitAll()
+                .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/h2-console/**").hasRole("ADMIN")
-                .anyRequest().permitAll()
+                .anyRequest().authenticated()
             );
 
         http.headers(headers -> headers.frameOptions(frame -> frame.disable()));

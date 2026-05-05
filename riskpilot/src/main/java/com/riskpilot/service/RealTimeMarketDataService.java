@@ -106,7 +106,11 @@ public class RealTimeMarketDataService {
             headers.set("X-MACAddress", authService.getMacAddress());
             headers.set("X-PrivateKey", authService.getApiKey());
 
-            HttpEntity<String> entity = new HttpEntity<>("{\"mode\":\"FULL\",\"exchangeTokens\":{\"NSE\":\"" + token + "\"}}", headers);
+            Map<String, Object> payload = Map.of(
+                "mode", "FULL",
+                "exchangeTokens", Map.of("NSE", List.of(token))
+            );
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
             
             ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
             

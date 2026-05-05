@@ -52,6 +52,9 @@ public class DataController {
         boolean marketOpen = optionChainService.isMarketOpen();
         boolean live = chain.live() && chain.spot() > 0.0;
         String marketDataStatus = live ? "LIVE" : (marketOpen ? "UNAVAILABLE" : "MARKET_CLOSED");
+        String marketDataReason = live
+            ? "LIVE_ANGEL_ONE_QUOTE"
+            : (marketOpen ? chain.source() : "MARKET_CLOSED");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("optionChainSource", chain.source());
         payload.put("spot", chain.spot());
@@ -62,11 +65,19 @@ public class DataController {
         payload.put("live", chain.live());
         payload.put("marketOpen", marketOpen);
         payload.put("marketDataStatus", marketDataStatus);
+        payload.put("marketDataReason", marketDataReason);
         payload.put("marketDataHealthy", live || !marketOpen);
         payload.put("updatedEpochMs", chain.updatedEpochMs());
         payload.put("ageMs", chain.updatedEpochMs() > 0L ? System.currentTimeMillis() - chain.updatedEpochMs() : null);
-        payload.put("vix", vixService.getIndiaVix());
-        payload.put("healthy", live || !marketOpen);
+        try {
+            payload.put("vix", vixService.getIndiaVix());
+            payload.put("vixLive", true);
+        } catch (Exception e) {
+            payload.put("vix", null);
+            payload.put("vixLive", false);
+            payload.put("vixError", e.getMessage());
+        }
+        payload.put("healthy", !marketOpen || (live && Boolean.TRUE.equals(payload.get("vixLive"))));
         return payload;
     }
 

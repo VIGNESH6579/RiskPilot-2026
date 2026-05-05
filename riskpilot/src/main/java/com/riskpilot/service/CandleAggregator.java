@@ -103,7 +103,7 @@ public class CandleAggregator {
             currentBuildingCandle = new Candle(
                 tickTime.toLocalDate().toString(),
                 candleStart.toLocalTime().toString(),
-                price, price, price, price
+                price, price, price, price, Math.max(0L, volume)
             );
         } else {
             // BUG-003: Date-safe comparison using LocalDateTime
@@ -115,11 +115,11 @@ public class CandleAggregator {
                 currentBuildingCandle = new Candle(
                     tickTime.toLocalDate().toString(),
                     candleStart.toLocalTime().toString(),
-                    price, price, price, price
+                    price, price, price, price, Math.max(0L, volume)
                 );
             } else if (candleStart.isEqual(currentCandleStart)) {
                 // Same candle - apply tick
-                currentBuildingCandle.applyTick(price);
+                currentBuildingCandle.applyTick(price, volume);
             } else {
                 // BUG-002: Out-of-order tick (candleStart < currentCandleStart)
                 outOfOrderTickCount++;

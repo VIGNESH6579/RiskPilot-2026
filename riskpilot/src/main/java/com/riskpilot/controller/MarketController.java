@@ -24,15 +24,16 @@ public class MarketController {
     public ResponseEntity<Map<String, Object>> getMarketData() {
         try {
             OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
+            double price = chain != null ? chain.spot() : 0.0;
             if (chain == null || chain.spot() <= 0.0) {
-                marketService.getPrice("NIFTY");
+                price = marketService.getPrice("NIFTY");
             }
 
             Map<String, Object> response = new HashMap<>();
             response.put("symbol", "NIFTY");
-            response.put("price", chain.spot());
-            response.put("source", chain.source());
-            response.put("expiry", chain.expiry());
+            response.put("price", price);
+            response.put("source", chain != null ? chain.source() : "ANGELONE_LTP_DIRECT");
+            response.put("expiry", chain != null ? chain.expiry() : null);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.status(503).body(Map.of(

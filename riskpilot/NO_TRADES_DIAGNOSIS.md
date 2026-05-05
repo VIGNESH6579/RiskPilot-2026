@@ -11,4 +11,4 @@ The live trading path is:
 
 If Angel One credentials or tokens are unavailable, the API reports `ANGELONE_UNAVAILABLE` with `spot=0.0`; the engine marks the feed unstable instead of generating trades from fallback prices.
 
-For live India VIX gating, configure `ANGEL_INDIA_VIX_TOKEN`. Without that token, `VixService` uses `RISK_VIX_FALLBACK` and logs the missing token.
+For live India VIX gating, configure `ANGEL_INDIA_VIX_TOKEN`. Without that token, VIX-dependent decisions are blocked instead of using a fallback value.

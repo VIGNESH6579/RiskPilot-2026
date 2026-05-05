@@ -53,7 +53,8 @@ Follow: PRODUCTION_SETUP.md
 ## API Endpoints
 
 ### Health & Monitoring
-- `GET /api/v1/monitor/state` - Health status
+- `GET /api/v1/health/pipeline` - Live pipeline health for market data monitoring
+- `GET /api/v1/monitor/state` - Engine state snapshot
 - `GET /api/v1/monitor/detailed` - Detailed system status
 - `GET /actuator/health` - Spring Boot health
 - `GET /actuator/metrics` - Application metrics
@@ -71,6 +72,7 @@ ANGEL_CLIENT_ID         # Client ID
 ANGEL_PIN              # Account PIN
 ANGEL_TOTP_SECRET      # 2FA TOTP secret
 RISKPILOT_NTFY_TOPIC   # ntfy.sh topic for alerts
+NSE_TRADING_HOLIDAYS   # comma-separated yyyy-MM-dd NSE holiday list
 DATABASE_URL           # MySQL connection string
 ```
 
@@ -98,12 +100,12 @@ riskpilot/
 ## Monitoring
 
 ### UptimeRobot
-- Monitor: `/api/v1/monitor/state`
+- Monitor: `/api/v1/health/pipeline`
 - Interval: 5 minutes
 - Alerts: Email + Slack
 
 ### ntfy.sh
-- Topic: riskpilot-live-signals
+- Topic URL: https://ntfy.sh/riskpilot-live-signals
 - Alerts: Real-time trade exits
 
 ### Prometheus Metrics

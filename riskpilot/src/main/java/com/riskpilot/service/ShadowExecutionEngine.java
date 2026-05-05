@@ -224,14 +224,18 @@ public class ShadowExecutionEngine {
     }
 
     private void ingestClosedCandleForIndicators(Candle candle) {
-        if (candle == null || candle.time.equals(lastStoredCandleTime)) {
+        if (candle == null) {
+            return;
+        }
+        String candleKey = candle.date + "T" + candle.time;
+        if (candleKey.equals(lastStoredCandleTime)) {
             return;
         }
 
         storeCandleData(candle);
         updateRegimeFilter(candle);
         volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
-        lastStoredCandleTime = candle.time;
+        lastStoredCandleTime = candleKey;
     }
 
     private void updateRegimeFilter(Candle candle) {
@@ -243,17 +247,23 @@ public class ShadowExecutionEngine {
     }
 
     private void updateSessionStateFromTime(LocalTime now) {
-        TimePhase phase = now.isBefore(LocalTime.NOON)
+        LocalTime sessionStart = parseTime(config.getSession().getStart(), LocalTime.of(9, 15));
+        LocalTime sessionEnd = parseTime(config.getSession().getEnd(), LocalTime.of(15, 30));
+        LocalTime openingRangeEnd = parseTime(config.getSession().getOpeningRangeEnd(), LocalTime.of(9, 45));
+        LocalTime midStart = parseTime(config.getTimePhase().getMid().getStart(), LocalTime.NOON);
+        LocalTime lateStart = parseTime(config.getTimePhase().getLate().getStart(), LocalTime.of(13, 30));
+
+        TimePhase phase = now.isBefore(midStart)
             ? TimePhase.EARLY
-            : (now.isBefore(LocalTime.of(13, 30)) ? TimePhase.MID : TimePhase.LATE);
+            : (now.isBefore(lateStart) ? TimePhase.MID : TimePhase.LATE);
 
         stateManager.update(current -> {
-            boolean sessionActive = !now.isBefore(LocalTime.of(9, 15)) && now.isBefore(LocalTime.of(15, 30));
+            boolean sessionActive = !now.isBefore(sessionStart) && now.isBefore(sessionEnd);
             double orHigh = current.orHigh();
             double orLow = current.orLow();
 
             List<Candle> history = candleAggregator.getValidHistory();
-            if (!history.isEmpty() && now.isBefore(LocalTime.of(9, 45))) {
+            if (!history.isEmpty() && !now.isBefore(sessionStart) && now.isBefore(openingRangeEnd)) {
                 Candle last = history.get(history.size() - 1);
                 orHigh = Double.isFinite(orHigh) ? Math.max(orHigh, last.high) : last.high;
                 orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
@@ -279,6 +289,14 @@ public class ShadowExecutionEngine {
                 current.lastRejectReason()
             );
         });
+    }
+
+    private static LocalTime parseTime(String raw, LocalTime fallback) {
+        try {
+            return raw == null || raw.isBlank() ? fallback : LocalTime.parse(raw.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     private boolean shouldEvaluateSignal(Candle candle) {
@@ -328,6 +346,11 @@ public class ShadowExecutionEngine {
 
         if (!decision.allowed()) {
             logReject(state, decision.reason());
+            return;
+        }
+
+        if (volatilityNormalizer.getCurrentTP1() <= 0.0) {
+            logReject(state, "TP1_UNAVAILABLE");
             return;
         }
 
