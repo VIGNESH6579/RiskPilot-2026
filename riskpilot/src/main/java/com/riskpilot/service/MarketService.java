@@ -55,18 +55,34 @@ package com.riskpilot.service;
        * Real option chain built from live Angel One LTP snapshot.
        * Strikes are computed dynamically from the live ATM price.
        */
-      public List<OptionData> getMockOptionChain() {
-          OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
-          double spot = chain.spot() > 0.0 ? chain.spot() : getPrice("NIFTY");
-          int atm = (int) (Math.round(spot / 100.0) * 100);
-          return List.of(
-              new OptionData(atm - 200, 0, 0),
-              new OptionData(atm - 100, 0, 0),
-              new OptionData(atm,       0, 0),
-              new OptionData(atm + 100, 0, 0),
-              new OptionData(atm + 200, 0, 0)
-          );
-      }
+      // public List<OptionData> getMockOptionChain() {
+      //     OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
+      //     double spot = chain.spot() > 0.0 ? chain.spot() : getPrice("NIFTY");
+      //     int atm = (int) (Math.round(spot / 100.0) * 100);
+      //     return List.of(
+      //         new OptionData(atm - 200, 0, 0),
+      //         new OptionData(atm - 100, 0, 0),
+      //         new OptionData(atm,       0, 0),
+      //         new OptionData(atm + 100, 0, 0),
+      //         new OptionData(atm + 200, 0, 0)
+      //     );
+      // }
+
+    @Deprecated
+public List<OptionData> getMockOptionChain() {
+    throw new UnsupportedOperationException(
+        "Mock option chain is disabled. Use real-time option chain API from Angel One."
+    );
+}
+
+/**
+ * Fetch REAL option chain from Angel One
+ */
+public List<OptionData> fetchRealOptionChain(String symbol, String expiry) {
+    // TODO: Implement real option chain fetch from Angel One API
+    // Endpoint: /rest/secure/angelbroking/market/v1/quote/optionchain
+    throw new UnsupportedOperationException("Real option chain fetch not yet implemented");
+}
 
       /**
        * RSI calculated from real candle history provided by the live tick aggregator.
