@@ -1,71 +1,95 @@
 package com.riskpilot.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.Optional;
-
+@Slf4j
 @Service
 public class VixService {
-    private static final Logger log = LoggerFactory.getLogger(VixService.class);
-    private static final long VIX_CACHE_MS = 20_000L;
-    private static final long VIX_WARNING_INTERVAL_MS = 60_000L;
 
-    private final AngelOneMarketDataService angelOneMarketDataService;
-    private final String indiaVixExchange;
-    private final String indiaVixToken;
-    private final double fallbackVix;
+    @Value("${RISK_INDIA_VIX_TOKEN:}")
+    private String indiaVixToken;
 
-    private double lastKnownVix;
-    private long lastSuccessfulFetchEpochMs = 0L;
-    private long lastUnavailableWarningEpochMs = 0L;
-    private boolean missingTokenWarned = false;
+    @Value("${RISK_API_KEY}")
+    private String apiKey;
 
-    public VixService(
-        AngelOneMarketDataService angelOneMarketDataService,
-        @Value("${ANGEL_INDIA_VIX_EXCHANGE:NSE}") String indiaVixExchange,
-        @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken,
-        @Value("${RISK_VIX_FALLBACK:15.0}") double fallbackVix
-    ) {
-        this.angelOneMarketDataService = angelOneMarketDataService;
-        this.indiaVixExchange = indiaVixExchange == null ? "NSE" : indiaVixExchange.trim();
-        this.indiaVixToken = indiaVixToken == null ? "" : indiaVixToken.trim();
-        this.fallbackVix = fallbackVix > 0.0 ? fallbackVix : 15.0;
-        this.lastKnownVix = this.fallbackVix;
+    private final RestTemplate restTemplate;
+    private volatile Double lastKnownVix = null;
+    private volatile long lastFetchTime = 0;
+    private static final long CACHE_DURATION_MS = 60000; // 1 minute
+
+    public VixService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
     }
 
-    public synchronized double getIndiaVix() {
+    public double getIndiaVix() {
+        // Validate token is configured
+        if (indiaVixToken == null || indiaVixToken.isBlank()) {
+            throw new IllegalStateException(
+                "India VIX token not configured. Set RISK_INDIA_VIX_TOKEN environment variable."
+            );
+        }
+
+        // Return cached value if fresh
         long now = System.currentTimeMillis();
-        if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
+        if (lastKnownVix != null && (now - lastFetchTime) < CACHE_DURATION_MS) {
             return lastKnownVix;
         }
 
-        if (indiaVixToken.isBlank()) {
-            if (!missingTokenWarned) {
-                log.warn("ANGEL_INDIA_VIX_TOKEN_MISSING: using configured fallback VIX={}", fallbackVix);
-                missingTokenWarned = true;
+        try {
+            // Fetch from Angel One API
+            String url = String.format(
+                "https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/quote/?symboltoken=%s&exchange=NSE",
+                indiaVixToken
+            );
+            
+            // Make API call with proper headers
+            var headers = new org.springframework.http.HttpHeaders();
+            headers.set("Authorization", "Bearer " + apiKey);
+            headers.set("Content-Type", "application/json");
+            
+            var entity = new org.springframework.http.HttpEntity<>(headers);
+            var response = restTemplate.exchange(
+                url, 
+                org.springframework.http.HttpMethod.GET, 
+                entity, 
+                java.util.Map.class
+            );
+            
+            Double vix = extractVixFromResponse(response.getBody());
+            
+            if (vix != null && vix > 0) {
+                lastKnownVix = vix;
+                lastFetchTime = now;
+                log.info("India VIX fetched: {}", vix);
+                return vix;
+            } else {
+                throw new RuntimeException("Invalid VIX value received: " + vix);
             }
-            return fallbackVix;
+            
+        } catch (Exception e) {
+            log.error("Failed to fetch India VIX from Angel One API", e);
+            
+            // If we have recent cached data (within 5 minutes), use it
+            if (lastKnownVix != null && (now - lastFetchTime) < 300000) {
+                log.warn("Using stale cached VIX: {}", lastKnownVix);
+                return lastKnownVix;
+            }
+            
+            // Otherwise, fail fast
+            throw new RuntimeException("Cannot fetch India VIX and no valid cache available", e);
         }
-
-        Optional<Double> fetched = angelOneMarketDataService.getLtp(indiaVixExchange, indiaVixToken);
-        if (fetched.isPresent() && fetched.get() > 0.0) {
-            lastKnownVix = fetched.get();
-            lastSuccessfulFetchEpochMs = now;
-            return lastKnownVix;
-        }
-
-        warnUnavailable();
-        return lastKnownVix;
     }
 
-    private void warnUnavailable() {
-        long now = System.currentTimeMillis();
-        if (now - lastUnavailableWarningEpochMs >= VIX_WARNING_INTERVAL_MS) {
-            log.warn("ANGEL_INDIA_VIX_UNAVAILABLE: returning last known VIX={}", lastKnownVix);
-            lastUnavailableWarningEpochMs = now;
+    private Double extractVixFromResponse(java.util.Map<String, Object> response) {
+        try {
+            var data = (java.util.Map<String, Object>) response.get("data");
+            return Double.parseDouble(data.get("ltp").toString());
+        } catch (Exception e) {
+            log.error("Failed to parse VIX response", e);
+            return null;
         }
     }
 }
