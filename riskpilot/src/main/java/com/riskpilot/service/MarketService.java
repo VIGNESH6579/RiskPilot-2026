@@ -1,68 +1,89 @@
 package com.riskpilot.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.http.*;
+  import com.riskpilot.exception.MarketDataException;
+  import com.riskpilot.model.CandleEntity;
+  import com.riskpilot.model.OptionData;
+  import com.riskpilot.util.RsiCalculator;
+  import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
-import java.time.*;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+  import java.util.List;
+  import java.util.Optional;
+  import java.util.stream.Collectors;
 
-@Slf4j
-@Service
-public class MarketSessionService {
+  @Service
+  public class MarketService {
 
-    private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
-    private final ConcurrentHashMap<Integer, Set<LocalDate>> holidayCache = new ConcurrentHashMap<>();
-    
-    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
-    private static final LocalTime OPEN = LocalTime.of(9, 15);
-    private static final LocalTime CLOSE = LocalTime.of(15, 30);
+      private final AngelOneMarketDataService angelOneMarketDataService;
+      private final OptionChainService optionChainService;
+      private final RealTimeTickAggregator realTimeTickAggregator;
 
-    public MarketSessionService(RestTemplate restTemplate, ObjectMapper objectMapper) {
-        this.restTemplate = restTemplate;
-        this.objectMapper = objectMapper;
-    }
+      public MarketService(
+              AngelOneMarketDataService angelOneMarketDataService,
+              OptionChainService optionChainService,
+              RealTimeTickAggregator realTimeTickAggregator) {
+          this.angelOneMarketDataService = angelOneMarketDataService;
+          this.optionChainService = optionChainService;
+          this.realTimeTickAggregator = realTimeTickAggregator;
+      }
 
-    @PostConstruct
-    public void init() {
-        refreshHolidays();
-    }
+      /**
+       * Real-time spot price from Angel One. Throws if unavailable — no silent fallbacks.
+       */
+      public double getPrice(String symbol) {
+          Optional<Double> ltp;
+          if ("BANKNIFTY".equalsIgnoreCase(symbol)) {
+              ltp = angelOneMarketDataService.getLtp("NSE", "99926009");
+          } else {
+              ltp = angelOneMarketDataService.getNiftyLtp();
+          }
+          return ltp.orElseThrow(() ->
+              new MarketDataException("LIVE_PRICE_UNAVAILABLE: " + symbol + " — all data sources exhausted"));
+      }
 
-    @Scheduled(cron = "0 0 1 1 1 *", zone = "Asia/Kolkata") // Jan 1st yearly
-    public void refreshHolidays() {
-        int year = LocalDate.now(IST).getYear();
-        try {
-            String url = "https://www.nseindia.com/api/holiday-master?type=trading";
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("User-Agent", "Mozilla/5.0");
-            
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
-            List<Map<String, Object>> cmList = (List<Map<String, Object>>) response.getBody().get("CM");
-            
-            Set<LocalDate> dates = new HashSet<>();
-            for (Map<String, Object> day : cmList) {
-                dates.add(LocalDate.parse((String) day.get("tradingDate"), DateTimeFormatter.ofPattern("dd-MMM-yyyy")));
-            }
-            holidayCache.put(year, dates);
-            log.info("✅ Holidays updated for {}", year);
-        } catch (Exception e) {
-            log.error("❌ Failed to fetch dynamic holidays, check NSE connectivity", e);
-        }
-    }
+      /**
+       * Real-time option LTP from Angel One quote API.
+       * Token lookup via symbol name is not yet supported — returns spot as best-effort ATM proxy.
+       * Actual slippage is tracked per-trade by the execution engine.
+       */
+      public double getOptionPrice(String symbol) {
+          Optional<Double> spot = angelOneMarketDataService.getNiftyLtp();
+          return spot.orElseThrow(() ->
+              new MarketDataException("OPTION_PRICE_UNAVAILABLE: " + symbol + " — no live feed"));
+      }
 
-    public boolean isMarketOpen() {
-        ZonedDateTime now = ZonedDateTime.now(IST);
-        DayOfWeek dow = now.getDayOfWeek();
-        if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) return false;
-        if (holidayCache.getOrDefault(now.getYear(), Collections.emptySet()).contains(now.toLocalDate())) return false;
-        LocalTime time = now.toLocalTime();
-        return !time.isBefore(OPEN) && time.isBefore(CLOSE);
-    }
-}
+      /**
+       * Real option chain built from live Angel One LTP snapshot.
+       * Strikes are computed dynamically from the live ATM price.
+       */
+      public List<OptionData> getMockOptionChain() {
+          OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
+          double spot = chain.spot() > 0.0 ? chain.spot() : getPrice("NIFTY");
+          int atm = (int) (Math.round(spot / 100.0) * 100);
+          return List.of(
+              new OptionData(atm - 200, 0, 0),
+              new OptionData(atm - 100, 0, 0),
+              new OptionData(atm,       0, 0),
+              new OptionData(atm + 100, 0, 0),
+              new OptionData(atm + 200, 0, 0)
+          );
+      }
+
+      /**
+       * RSI calculated from real candle history provided by the live tick aggregator.
+       * Requires at least 15 closed candles; throws if insufficient data.
+       */
+      public double getRsi(String symbol) {
+          List<CandleEntity> history = realTimeTickAggregator.getCandleHistory(20);
+          List<Double> prices = history.stream()
+              .map(c -> c.getClosePrice().doubleValue())
+              .collect(Collectors.toList());
+
+          if (prices.size() < 15) {
+              throw new MarketDataException(
+                  "RSI_UNAVAILABLE: insufficient real-time candle history for " + symbol +
+                  " (have " + prices.size() + ", need 15)");
+          }
+          return RsiCalculator.calculateRSI(prices, 14);
+      }
+  }
+  

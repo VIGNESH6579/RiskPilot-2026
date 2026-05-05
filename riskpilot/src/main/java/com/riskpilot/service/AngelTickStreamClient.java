@@ -1,47 +1,161 @@
 package com.riskpilot.service;
 
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import javax.annotation.PostConstruct;
-import java.net.URI;
-import java.net.http.*;
-import java.nio.ByteBuffer;
-import java.util.concurrent.*;
 
-@Slf4j
+import jakarta.annotation.PostConstruct;
+import java.time.LocalDateTime;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * AngelTickStreamClient polls NIFTY spot as tick data until SmartAPI WebSocket is ready.
+ * 
+ * BUG-032: Deduplication on re-subscription (prevents duplicate subscriptions).
+ * BUG-035: Unique thread names for executor.
+ */
 @Service
 public class AngelTickStreamClient {
-    private WebSocket webSocket;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private boolean connected = false;
+    private static final Logger log = LoggerFactory.getLogger(AngelTickStreamClient.class);
+
+    private final CandleAggregator candleAggregator;
+    private final HeartbeatMonitor heartbeatMonitor;
+    private final OptionChainService optionChainService;
+    private final ShadowExecutionEngine shadowExecutionEngine;
+    private final MarketSessionService marketSessionService;
+    private final AngelOneMarketDataService angelOneMarketDataService;
+    private final RealTimeTickAggregator realTimeTickAggregator;
+    
+    // BUG-035: Named thread factory for executor
+    private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(
+        new ThreadFactory() {
+            private final AtomicLong counter = new AtomicLong(0);
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "AngelTickPoller-" + counter.incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            }
+        }
+    );
+    
+    // BUG-032: Deduplication guard - prevent duplicate subscriptions
+    private final AtomicBoolean subscriptionActive = new AtomicBoolean(false);
+    private final AtomicLong lastSpotValue = new AtomicLong(0);
+    private final AtomicLong sequenceCounter = new AtomicLong(0);
+    private ScheduledFuture<?> pollerFuture;
+    private LocalDateTime lastCandleSlot = null;
+
+    public AngelTickStreamClient(
+        CandleAggregator candleAggregator,
+        HeartbeatMonitor heartbeatMonitor,
+        OptionChainService optionChainService,
+        ShadowExecutionEngine shadowExecutionEngine,
+        MarketSessionService marketSessionService,
+        AngelOneMarketDataService angelOneMarketDataService,
+        RealTimeTickAggregator realTimeTickAggregator
+    ) {
+        this.candleAggregator = candleAggregator;
+        this.heartbeatMonitor = heartbeatMonitor;
+        this.optionChainService = optionChainService;
+        this.shadowExecutionEngine = shadowExecutionEngine;
+        this.marketSessionService = marketSessionService;
+        this.angelOneMarketDataService = angelOneMarketDataService;
+        this.realTimeTickAggregator = realTimeTickAggregator;
+    }
 
     @PostConstruct
-    public void connect() {
-        log.info("Starting WebSocket connection to Angel One...");
-        httpClient.newWebSocketBuilder()
-            .buildAsync(URI.create("wss://smartapisocket.angelone.in/smart-stream"), new WebSocket.Listener() {
-                @Override
-                public void onOpen(WebSocket ws) {
-                    webSocket = ws;
-                    connected = true;
-                    log.info("WebSocket open. Sending Auth payload...");
-                    // Add your Auth JSON here: {"action": 1, "params": {...}}
-                }
+    public void init() {
+        // BUG-032: Guard against duplicate subscription
+        if (!subscriptionActive.compareAndSet(false, true)) {
+            log.warn("Duplicate subscription attempt blocked - already active");
+            return;
+        }
+        
+        if (pollerFuture != null && !pollerFuture.isCancelled()) {
+            pollerFuture.cancel(false);
+        }
 
-                @Override
-                public CompletionStage<?> onBinary(WebSocket ws, ByteBuffer data, boolean last) {
-                    // This is where real tick data arrives
-                    processBinaryTick(data);
-                    return CompletableFuture.completedFuture(null);
-                }
-            }).join();
+        // Poll once per second so the dashboard and candle feed reflect Angel One LTP freshness.
+        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 1, TimeUnit.SECONDS);
+        log.info("AngelTickStreamClient started with deduplication guard");
     }
 
-    private void processBinaryTick(ByteBuffer data) {
-        // Logic to extract LTP and Volume from Angel One's binary format
-        // Use: data.getDouble(), data.getLong(), etc.
-        log.debug("Tick received and processed");
+    private void pollSpotAsTick() {
+        try {
+            LocalDateTime receivedAt = marketSessionService.nowIst().toLocalDateTime();
+            if (!marketSessionService.isMarketOpen()) {
+                return;
+            }
+
+            // Primary: get spot from option chain
+            double spot = 0.0;
+            OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
+            if (snap != null && snap.spot() > 0.0 && snap.live()) {
+                spot = snap.spot();
+            } else {
+                // Fallback: hit Angel One LTP directly so candles keep building
+                // even when the option chain snapshot is stale or unavailable
+                java.util.Optional<Double> directLtp = angelOneMarketDataService.getNiftyLtp();
+                if (directLtp.isPresent() && directLtp.get() > 0.0) {
+                    spot = directLtp.get();
+                    log.debug("AngelTickStreamClient: option chain unavailable, using direct LTP={}", spot);
+                } else {
+                    candleAggregator.markUnstable();
+                    return;
+                }
+            }
+
+            lastSpotValue.set((long) (spot * 100));
+            heartbeatMonitor.registerTick();
+
+            int candleMinute = (receivedAt.getMinute() / 5) * 5;
+            LocalDateTime currentSlot = receivedAt.withMinute(candleMinute).withSecond(0).withNano(0);
+
+            long seq = sequenceCounter.incrementAndGet();
+            candleAggregator.processTick(receivedAt, spot, 1L, seq, receivedAt);
+
+            // Also feed the real-time aggregator so CandleEntity history is built
+            realTimeTickAggregator.processAngelTick("NIFTY", spot, 1L);
+
+            shadowExecutionEngine.evaluateTick(spot);
+            if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {
+                shadowExecutionEngine.evaluateCandleClose();
+            }
+            lastCandleSlot = currentSlot;
+
+        } catch (Exception e) {
+            candleAggregator.markUnstable();
+            log.debug("Tick polling failed: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * BUG-032: Re-subscription with deduplication.
+     * Resets the subscription state to allow re-subscription if needed.
+     */
+    public void resubscribe() {
+        log.info("Resubscription requested, resetting deduplication state");
+        subscriptionActive.set(false);
+        lastSpotValue.set(0);
+        if (pollerFuture != null && !pollerFuture.isCancelled()) {
+            pollerFuture.cancel(true);
+            try {
+                poller.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        init();
     }
 
-    public boolean isHealthy() { return connected; }
+    public boolean isStreamActive() {
+        return subscriptionActive.get() && pollerFuture != null && !pollerFuture.isCancelled();
+    }
 }
