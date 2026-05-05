@@ -2,3 +2,51 @@ spring:
   config:
     activate:
       on-profile: prod
+
+  # Production DB: Render PostgreSQL (injected via DATABASE_URL)
+  # start.sh overrides datasource with H2 in-memory when DATABASE_URL is absent,
+  # so the service still starts on the free tier without a paid DB add-on.
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:mem:riskpilot;DB_CLOSE_DELAY=-1;MODE=PostgreSQL}
+    driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD:}
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
+
+  flyway:
+    enabled: false   # managed by start.sh to avoid dialect mismatch on free tier
+
+# Reduce actuator surface area in production
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    com.riskpilot: INFO
+    org.springframework.web: WARN
+    org.hibernate.SQL: WARN
+
+riskpilot:
+  mode: SHADOW
+  strict-mode: true
+  infra:
+    feed:
+      real-time-only: true
+      data-source: angelone-live
+      require-stable: true
+    market-data:
+      fallback-disabled: true
+      mock-disabled: true

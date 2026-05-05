@@ -50,6 +50,7 @@ public class Trade {
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxFavorableExcursion; // MFE
+
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxAdverseExcursion; // MAE
     
@@ -93,6 +94,11 @@ public class Trade {
         if (tp1Hit == null) tp1Hit = false;
         if (runnerActive == null) runnerActive = false;
         if (tailHalfLocked == null) tailHalfLocked = false;
+        // BUG-FIX: Initialize nullable=false fields that were missing from @PrePersist
+        if (maxFavorableExcursion == null) maxFavorableExcursion = BigDecimal.ZERO;
+        if (maxAdverseExcursion == null) maxAdverseExcursion = BigDecimal.ZERO;
+        if (trailingStopLoss == null) trailingStopLoss = (stopLoss != null ? stopLoss : BigDecimal.ZERO);
+        if (exitReason == null) exitReason = "NONE";
     }
     
     @PreUpdate

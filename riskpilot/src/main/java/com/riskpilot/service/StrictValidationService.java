@@ -50,7 +50,6 @@ public class StrictValidationService {
             throw new IllegalStateException("STRICT_MODE_REQUIRED: Strict mode must be enabled");
         }
         
-        // 🔴 REAL-TIME DATA VALIDATION
         if (!properties.getInfra().getFeed().isRealTimeOnly()) {
             throw new IllegalStateException("REAL_TIME_REQUIRED: System must use real-time data only");
         }
@@ -78,13 +77,11 @@ public class StrictValidationService {
     public void validateTradingParameters() {
         log.info("🔒 STRICT MODE: Validating trading parameters against doctrine");
         
-        // Trade count validation
         if (properties.getRisk().getMaxTradesPerDay() > 2) {
             throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 2. Current: " + 
                 properties.getRisk().getMaxTradesPerDay());
         }
         
-        // Slippage validation
         var slippage = properties.getExecution().getSlippage();
         if (slippage.getEntryMax() > 2.0) {
             throw new TradingException("STRICT_MODE_VIOLATION: entry-max slippage cannot exceed 2.0. Current: " + 
@@ -96,7 +93,6 @@ public class StrictValidationService {
                 slippage.getTp1Max());
         }
         
-        // Latency validation
         var latency = properties.getExecution().getLatency();
         if (latency.getSoftBlockMs() > 1000) {
             throw new TradingException("STRICT_MODE_VIOLATION: soft-block-ms cannot exceed 1000. Current: " + 
@@ -107,13 +103,10 @@ public class StrictValidationService {
     }
 
     public boolean canExecuteNewTrade() {
-        if (!properties.isStrictMode()) {
-            return true; // Allow if not in strict mode
-        }
+        if (!properties.isStrictMode()) return true;
 
         LocalDateTime now = LocalDateTime.now();
         
-        // Reset daily counters at start of new trading day
         if (lastTradeDate == null || now.toLocalDate().isAfter(lastTradeDate.toLocalDate())) {
             dailyTradeCount.set(0);
             consecutiveLosses.set(0);
@@ -122,28 +115,25 @@ public class StrictValidationService {
             log.info("📅 Daily trading counters reset for new day");
         }
 
-        // Check daily trade limit
         if (dailyTradeCount.get() >= properties.getRisk().getMaxTradesPerDay()) {
+            // BUG-FIX: Use {} placeholders throughout — never mix {} with %.2f/%d
             log.warn("🚫 TRADE REJECTED: Daily trade limit reached ({}/{})", 
                 dailyTradeCount.get(), properties.getRisk().getMaxTradesPerDay());
             return false;
         }
 
-        // Check consecutive losses
         if (consecutiveLosses.get() >= properties.getRisk().getMaxConsecutiveLosses()) {
             log.warn("🚫 TRADE REJECTED: Consecutive loss limit reached ({}/{})", 
                 consecutiveLosses.get(), properties.getRisk().getMaxConsecutiveLosses());
             return false;
         }
 
-        // Check daily loss limit
         if (dailyLossR <= -properties.getRisk().getMaxDailyLossR()) {
-            log.warn("🚫 TRADE REJECTED: Daily loss limit reached ({}R/{})", 
+            log.warn("🚫 TRADE REJECTED: Daily loss limit reached ({}R / max {}R)", 
                 dailyLossR, properties.getRisk().getMaxDailyLossR());
             return false;
         }
 
-        // Check time phase restrictions
         LocalTime currentTime = now.toLocalTime();
         var timePhase = properties.getTimePhase();
         
@@ -156,9 +146,7 @@ public class StrictValidationService {
     }
 
     public void recordTradeExecution(double pnl) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
+        if (!properties.isStrictMode()) return;
 
         dailyTradeCount.incrementAndGet();
         
@@ -175,9 +163,7 @@ public class StrictValidationService {
     }
 
     public void validateSlippage(String tradeType, double actualSlippage) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
+        if (!properties.isStrictMode()) return;
 
         var slippageConfig = properties.getExecution().getSlippage();
         double maxAllowed = switch (tradeType.toUpperCase()) {
@@ -194,16 +180,15 @@ public class StrictValidationService {
                     "STRICT_MODE_VIOLATION: %s slippage %.2f exceeds maximum %.2f", 
                     tradeType, actualSlippage, maxAllowed));
             } else {
-                log.warn("⚠️ HIGH SLIPPAGE: {} slippage %.2f exceeds maximum %.2f", 
+                // BUG-FIX: Use {} placeholders consistently — String.format used only in exception messages
+                log.warn("⚠️ HIGH SLIPPAGE: {} slippage {} exceeds maximum {}", 
                     tradeType, actualSlippage, maxAllowed);
             }
         }
     }
 
     public void validateLatency(long actualLatencyMs) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
+        if (!properties.isStrictMode()) return;
 
         var latencyConfig = properties.getExecution().getLatency();
         
@@ -219,21 +204,21 @@ public class StrictValidationService {
                     "STRICT_MODE_VIOLATION: Latency %dms exceeds hard block threshold %dms", 
                     actualLatencyMs, latencyConfig.getHardBlockMs()));
             } else {
-                log.warn("⚠️ HIGH LATENCY: %dms exceeds hard block threshold %dms", 
+                // BUG-FIX: {} placeholders instead of %d
+                log.warn("⚠️ HIGH LATENCY: {}ms exceeds hard block threshold {}ms", 
                     actualLatencyMs, latencyConfig.getHardBlockMs());
             }
         }
 
         if (actualLatencyMs > latencyConfig.getSoftBlockMs()) {
-            log.warn("⚠️ ELEVATED LATENCY: %dms exceeds soft block threshold %dms", 
+            // BUG-FIX: {} placeholders instead of %d
+            log.warn("⚠️ ELEVATED LATENCY: {}ms exceeds soft block threshold {}ms", 
                 actualLatencyMs, latencyConfig.getSoftBlockMs());
         }
     }
 
     public void validateRegime(String currentRegime) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
+        if (!properties.isStrictMode()) return;
 
         String requiredRegime = properties.getFilters().getRegimeRequired();
         
@@ -245,9 +230,7 @@ public class StrictValidationService {
     }
 
     public void validateTimePhase(LocalTime currentTime) {
-        if (!properties.isStrictMode()) {
-            return;
-        }
+        if (!properties.isStrictMode()) return;
 
         var timePhase = properties.getTimePhase();
         

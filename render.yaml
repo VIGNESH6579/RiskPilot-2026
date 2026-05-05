@@ -25,8 +25,14 @@ services:
           value: "999920005"
         - key: ANGEL_INDIA_VIX_EXCHANGE
           value: "NSE"
+        # BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY
         - key: NIFTY_WEEKLY_EXPIRY_DAY
           value: "THURSDAY"
+        # BUG-FIX: Added missing ntfy observer env vars required by observer.py
+        - key: RISKPILOT_NTFY_TOPIC
+          value: "riskpilot-live-signals"
+        - key: RISKPILOT_ENABLE_NTFY
+          value: "true"
         - key: DATABASE_URL
           sync: false
         - key: DATABASE_USERNAME
@@ -47,4 +53,3 @@ services:
           sync: false
         - key: ANGEL_CLIENT_PUBLIC_IP
           sync: false
-  

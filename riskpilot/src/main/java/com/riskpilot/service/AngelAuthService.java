@@ -6,6 +6,7 @@ import dev.samstevens.totp.exceptions.CodeGenerationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -20,6 +21,7 @@ import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
@@ -41,14 +43,18 @@ public class AngelAuthService {
 
     @Value("${ANGEL_TOTP_SECRET:${angelapi.totp.secret:}}")
     private String totpSecret;
+
     @Value("${ANGEL_CLIENT_LOCAL_IP:}")
     private String configuredLocalIp;
+
     @Value("${ANGEL_CLIENT_PUBLIC_IP:}")
     private String configuredPublicIp;
+
     @Value("${ANGEL_CLIENT_MAC:}")
     private String configuredMac;
 
-    // BUG-029: RestTemplate with proper timeouts
+    private final Environment environment;
+
     private final RestTemplate restTemplate = buildRestTemplate();
     
     private static RestTemplate buildRestTemplate() {
@@ -57,10 +63,15 @@ public class AngelAuthService {
         factory.setReadTimeout(10_000);
         return new RestTemplate(factory);
     }
+
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
     private volatile String cachedPublicIp;
+
+    public AngelAuthService(Environment environment) {
+        this.environment = environment;
+    }
 
     public synchronized boolean authenticate() {
         if (!hasCredentials()) {
@@ -100,13 +111,11 @@ public class AngelAuthService {
             if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
                 return applyAuthTokens(response.getBody(), "Angel auth");
             } else {
-                // BUG-038: Sanitized log - never log full response body
                 Map<?, ?> respBody = response.getBody();
                 String errorCode = respBody != null ? String.valueOf(respBody.get("errorcode")) : "UNKNOWN";
                 String message = respBody != null ? String.valueOf(respBody.get("message")) : "NO_RESPONSE";
                 log.warn("Angel auth rejected errorCode={} message={}", errorCode, message);
                 
-                // BUG-028: If TOTP error (AB1010), try forward bucket
                 if ("AB1010".equals(errorCode)) {
                     log.info("TOTP validation failed, trying forward bucket...");
                     return tryForwardBucketAuth(body, headers);
@@ -134,6 +143,7 @@ public class AngelAuthService {
     public String getLocalIp() { return resolveLocalIp(); }
     public String getPublicIp() { return resolvePublicIp(); }
     public String getMacAddress() { return resolveMacAddress(); }
+
     public boolean hasCredentials() {
         return apiKey != null && !apiKey.isBlank()
             && clientCode != null && !clientCode.isBlank()
@@ -141,14 +151,28 @@ public class AngelAuthService {
             && totpSecret != null && !totpSecret.isBlank();
     }
 
+    /**
+     * BUG-FIX: Only enforce credentials as a hard startup requirement on the prod profile.
+     * In dev/test the app must be able to start without Angel One credentials so
+     * unit tests and local smoke-tests work without live broker access.
+     */
     @jakarta.annotation.PostConstruct
     public void assertCredentialsPresent() {
+        boolean isProd = Arrays.stream(environment.getActiveProfiles())
+            .anyMatch(p -> "prod".equalsIgnoreCase(p) || "production".equalsIgnoreCase(p));
+
         if (!hasCredentials()) {
-            throw new IllegalStateException(
-                "Angel One credentials are not configured. " +
-                "Set ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PIN, ANGEL_TOTP_SECRET.");
+            if (isProd) {
+                throw new IllegalStateException(
+                    "Angel One credentials are not configured. " +
+                    "Set ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PIN, ANGEL_TOTP_SECRET.");
+            } else {
+                log.warn("Angel One credentials not set — running in credential-less dev mode. " +
+                         "Live market data will be unavailable.");
+            }
         }
     }
+
     public synchronized void invalidateSession() {
         currentJwtToken = null;
         currentFeedToken = null;
@@ -172,7 +196,6 @@ public class AngelAuthService {
         if (cachedPublicIp != null && !cachedPublicIp.isBlank()) {
             return cachedPublicIp;
         }
-        // Best-effort fallback; keep request valid even if lookup fails.
         try {
             String ip = restTemplate.getForObject("https://api.ipify.org", String.class);
             if (ip != null && !ip.isBlank()) {
@@ -186,10 +209,6 @@ public class AngelAuthService {
         return cachedPublicIp;
     }
 
-    /**
-     * BUG-039: Resolve MAC address with proper fallback.
-     * If no real MAC found, generates stable pseudo-MAC from clientCode hash.
-     */
     private String resolveMacAddress() {
         if (configuredMac != null && !configuredMac.isBlank()) {
             return configuredMac.trim();
@@ -210,24 +229,16 @@ public class AngelAuthService {
             }
         } catch (SocketException ignored) {
         }
-        
-        // BUG-039: Generate stable pseudo-MAC from clientCode hash
         return generatePseudoMac();
     }
     
-    /**
-     * BUG-039: Generate stable pseudo-MAC from clientCode hash.
-     * Angel flags zero-MAC as suspicious, so we generate a valid-looking MAC.
-     */
     private String generatePseudoMac() {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256")
-                .digest(clientCode.getBytes(StandardCharsets.UTF_8));
-            // First 6 bytes as MAC address
+                .digest((clientCode != null ? clientCode : "default").getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 6; i++) {
                 if (i > 0) sb.append(":");
-                // Locally administered, unicast: set bit 1 of first byte
                 byte b = (i == 0) ? (byte)(hash[i] & 0xFE | 0x02) : hash[i];
                 sb.append(String.format("%02X", b));
             }
@@ -235,17 +246,13 @@ public class AngelAuthService {
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
             log.error("Failed to generate pseudo-MAC: {}", e.getMessage());
-            return "02:00:00:00:00:01"; // Fallback: locally administered MAC
+            return "02:00:00:00:00:01";
         }
     }
     
-    /**
-     * BUG-028: Forward-bucket TOTP retry for clock drift > 30s ahead.
-     */
     private boolean tryForwardBucketAuth(Map<String, String> originalBody, HttpHeaders originalHeaders) {
         try {
             Map<String, String> retryBody = new HashMap<>(originalBody);
-            // BUG-028: Try forward bucket (currentBucket + 1)
             DefaultCodeGenerator generator = new DefaultCodeGenerator(HashingAlgorithm.SHA1, 6);
             long currentBucket = Math.floorDiv(System.currentTimeMillis() / 1000, 30);
             retryBody.put("totp", generator.generate(totpSecret, currentBucket + 1));
@@ -256,7 +263,6 @@ public class AngelAuthService {
             if (response.getBody() != null && Boolean.TRUE.equals(response.getBody().get("status"))) {
                 return applyAuthTokens(response.getBody(), "Forward bucket Angel auth");
             } else {
-                // BUG-038: Sanitized log
                 Map<?, ?> respBody = response.getBody();
                 String errorCode = respBody != null ? String.valueOf(respBody.get("errorcode")) : "UNKNOWN";
                 log.warn("Forward bucket auth also failed errorCode={}", errorCode);
