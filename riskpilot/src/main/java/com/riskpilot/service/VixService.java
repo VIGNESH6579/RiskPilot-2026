@@ -2,6 +2,7 @@ package com.riskpilot.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.riskpilot.exception.MarketDataException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -16,7 +17,7 @@ public class VixService {
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final String indiaVixExchange;
     private final String indiaVixToken;
-    private final double fallbackVix;
+
 
     private double lastKnownVix;
     private long lastSuccessfulFetchEpochMs = 0L;
@@ -26,14 +27,12 @@ public class VixService {
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,
         @Value("${ANGEL_INDIA_VIX_EXCHANGE:NSE}") String indiaVixExchange,
-        @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken,
-        @Value("${RISK_VIX_FALLBACK:15.0}") double fallbackVix
+        @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.indiaVixExchange = indiaVixExchange == null ? "NSE" : indiaVixExchange.trim();
         this.indiaVixToken = indiaVixToken == null ? "" : indiaVixToken.trim();
-        this.fallbackVix = fallbackVix > 0.0 ? fallbackVix : 15.0;
-        this.lastKnownVix = this.fallbackVix;
+        this.lastKnownVix = 0.0; // Initialize to 0, will be updated by real data
     }
 
     public synchronized double getIndiaVix() {
@@ -43,11 +42,7 @@ public class VixService {
         }
 
         if (indiaVixToken.isBlank()) {
-            if (!missingTokenWarned) {
-                log.warn("ANGEL_INDIA_VIX_TOKEN_MISSING: using configured fallback VIX={}", fallbackVix);
-                missingTokenWarned = true;
-            }
-            return fallbackVix;
+            throw new MarketDataException("ANGEL_INDIA_VIX_TOKEN_MISSING: Cannot fetch VIX without a token.");
         }
 
         Optional<Double> fetched = angelOneMarketDataService.getLtp(indiaVixExchange, indiaVixToken);
@@ -57,8 +52,7 @@ public class VixService {
             return lastKnownVix;
         }
 
-        warnUnavailable();
-        return lastKnownVix;
+        throw new MarketDataException("ANGEL_INDIA_VIX_UNAVAILABLE: Failed to fetch real-time VIX data.");
     }
 
     private void warnUnavailable() {

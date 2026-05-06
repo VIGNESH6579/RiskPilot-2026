@@ -55,17 +55,12 @@ package com.riskpilot.service;
        * Real option chain built from live Angel One LTP snapshot.
        * Strikes are computed dynamically from the live ATM price.
        */
-      public List<OptionData> getMockOptionChain() {
-          OptionChainService.OptionChainSnapshot chain = optionChainService.fetchNiftyChain();
-          double spot = chain.spot() > 0.0 ? chain.spot() : getPrice("NIFTY");
-          int atm = (int) (Math.round(spot / 100.0) * 100);
-          return List.of(
-              new OptionData(atm - 200, 0, 0),
-              new OptionData(atm - 100, 0, 0),
-              new OptionData(atm,       0, 0),
-              new OptionData(atm + 100, 0, 0),
-              new OptionData(atm + 200, 0, 0)
-          );
+      public List<OptionData> getOptionChain() {
+          // In a real scenario, this would call Angel One's API to fetch the actual option chain.
+          // For now, we are returning an empty list and logging a warning.
+          // To fully implement this, Angel One's Option Chain API would need to be integrated.
+          // The OptionChainService currently provides a simplified snapshot, not a full chain.
+          throw new MarketDataException("REAL_OPTION_CHAIN_UNAVAILABLE: Angel One Option Chain API not integrated.");
       }
 
       /**

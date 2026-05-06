@@ -48,18 +48,21 @@ public class MarketSessionService {
      * NSE Trading Holidays 2026 — verified against official NSE circular.
      */
     private static final Set<LocalDate> NSE_HOLIDAYS_2026 = Set.of(
-        LocalDate.of(2026, 1, 26),   // Republic Day
-        LocalDate.of(2026, 2, 26),   // Mahashivratri
-        LocalDate.of(2026, 3, 20),   // Id-Ul-Fitr (Ramzan Id) — subject to moon sighting
-        LocalDate.of(2026, 3, 31),   // Shri Ram Navami
-        LocalDate.of(2026, 4, 2),    // Shri Mahavir Jayanti (corrected from March 31)
-        LocalDate.of(2026, 4, 3),    // Good Friday
-        LocalDate.of(2026, 4, 14),   // Dr. Baba Saheb Ambedkar Jayanti
-        LocalDate.of(2026, 5, 1),    // Maharashtra Day
-        LocalDate.of(2026, 8, 15),   // Independence Day
-        LocalDate.of(2026, 10, 2),   // Mahatma Gandhi Jayanti
-        LocalDate.of(2026, 11, 2),   // Diwali – Lakshmi Puja
-        LocalDate.of(2026, 11, 3),   // Diwali – Balipratipada
+        LocalDate.of(2026, 1, 15),   // Municipal Corporation Election - Maharashtra,
+        LocalDate.of(2026, 1, 26),   // Republic Day,
+        LocalDate.of(2026, 3, 3),   // Holi,
+        LocalDate.of(2026, 3, 26),   // Shri Ram Navami,
+        LocalDate.of(2026, 3, 31),   // Shri Mahavir Jayanti,
+        LocalDate.of(2026, 4, 3),   // Good Friday,
+        LocalDate.of(2026, 4, 14),   // Dr. Baba Saheb Ambedkar Jayanti,
+        LocalDate.of(2026, 5, 1),   // Maharashtra Day,
+        LocalDate.of(2026, 5, 28),   // Bakri Id,
+        LocalDate.of(2026, 6, 26),   // Muharram,
+        LocalDate.of(2026, 9, 14),   // Ganesh Chaturthi,
+        LocalDate.of(2026, 10, 2),   // Mahatma Gandhi Jayanti,
+        LocalDate.of(2026, 10, 20),   // Dussehra,
+        LocalDate.of(2026, 11, 10),   // Diwali-Balipratipada,
+        LocalDate.of(2026, 11, 24),   // Prakash Gurpurb Sri Guru Nanak Dev,
         LocalDate.of(2026, 12, 25)   // Christmas
     );
 

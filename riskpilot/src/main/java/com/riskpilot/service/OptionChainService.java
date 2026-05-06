@@ -9,11 +9,11 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
-import java.time.DayOfWeek;
+
 import java.time.LocalDate;
-import java.time.LocalTime;
+
 import java.time.ZoneId;
-import java.time.ZonedDateTime;
+
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
@@ -32,6 +32,7 @@ public class OptionChainService {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final AngelOneMarketDataService angelOneMarketDataService;
+    private final MarketSessionService marketSessionService;
     private final DayOfWeek defaultExpiryDay;
     private final String explicitExpiryOverride;
 
@@ -41,19 +42,21 @@ public class OptionChainService {
 
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
+        MarketSessionService marketSessionService,
         // BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY.
         // render.yaml sets NIFTY_WEEKLY_EXPIRY_DAY=THURSDAY; this default
         // ensures correctness even if the env var is absent.
         @Value("${NIFTY_WEEKLY_EXPIRY_DAY:THURSDAY}") String expiryDayConfig,
         @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
+        this.marketSessionService = marketSessionService;
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
         this.explicitExpiryOverride = explicitExpiryOverride == null ? "" : explicitExpiryOverride.trim();
     }
 
     public synchronized OptionChainSnapshot fetchNiftyChain() {
-        boolean marketOpen = isMarketOpenNow();
+        boolean marketOpen = marketSessionService.isMarketOpen();
         OptionChainSnapshot recent = recentAngelSnapshot(marketOpen);
         if (recent != null) {
             return recent;
@@ -97,7 +100,7 @@ public class OptionChainService {
     }
 
     public boolean isMarketOpen() {
-        return isMarketOpenNow();
+        return marketSessionService.isMarketOpen();
     }
 
     private OptionChainSnapshot recentAngelSnapshot(boolean marketOpen) {
@@ -177,13 +180,7 @@ public class OptionChainService {
         return fallback;
     }
 
-    private boolean isMarketOpenNow() {
-        ZonedDateTime now = ZonedDateTime.now(IST);
-        DayOfWeek day = now.getDayOfWeek();
-        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) return false;
-        LocalTime t = now.toLocalTime();
-        return !t.isBefore(LocalTime.of(9, 15)) && t.isBefore(LocalTime.of(15, 30));
-    }
+
 
     private void writeCache(OptionChainSnapshot snapshot) {
         try {
