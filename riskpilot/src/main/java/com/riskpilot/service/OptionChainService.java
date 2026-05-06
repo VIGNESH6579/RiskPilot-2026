@@ -9,11 +9,11 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
-
+import java.time.DayOfWeek;
 import java.time.LocalDate;
-
+import java.time.LocalTime;
 import java.time.ZoneId;
-
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
@@ -33,6 +33,7 @@ public class OptionChainService {
     private final ObjectMapper mapper = new ObjectMapper();
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final MarketSessionService marketSessionService;
+    // BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY
     private final DayOfWeek defaultExpiryDay;
     private final String explicitExpiryOverride;
 
@@ -43,14 +44,12 @@ public class OptionChainService {
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
         MarketSessionService marketSessionService,
-        // BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY.
-        // render.yaml sets NIFTY_WEEKLY_EXPIRY_DAY=THURSDAY; this default
-        // ensures correctness even if the env var is absent.
+        // BUG-FIX: Default changed from TUESDAY to THURSDAY (NIFTY weekly expiry)
         @Value("${NIFTY_WEEKLY_EXPIRY_DAY:THURSDAY}") String expiryDayConfig,
         @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
-        this.marketSessionService = marketSessionService;
         this.angelOneMarketDataService = angelOneMarketDataService;
+        this.marketSessionService = marketSessionService;
         this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
         this.explicitExpiryOverride = explicitExpiryOverride == null ? "" : explicitExpiryOverride.trim();
     }
@@ -105,9 +104,15 @@ public class OptionChainService {
 
     private OptionChainSnapshot recentAngelSnapshot(boolean marketOpen) {
         OptionChainSnapshot current = lastKnownSnapshot;
-        if (current.spot() <= 0.0) return null;
-        if (current.live() != marketOpen) return null;
-        if (!current.source().startsWith("ANGELONE_LTP")) return null;
+        if (current.spot() <= 0.0) {
+            return null;
+        }
+        if (current.live() != marketOpen) {
+            return null;
+        }
+        if (!current.source().startsWith("ANGELONE_LTP")) {
+            return null;
+        }
         long ageMs = System.currentTimeMillis() - current.updatedEpochMs();
         return ageMs >= 0L && ageMs < ANGEL_QUOTE_CACHE_MS ? current : null;
     }
@@ -124,10 +129,14 @@ public class OptionChainService {
             double prevClose = resolvePreviousClose(ltp);
             int support = (int) (Math.floor(ltp / 50.0) * 50);
             int resistance = (int) (Math.ceil(ltp / 50.0) * 50);
-            if (resistance == support) resistance += 50;
+            if (resistance == support) {
+                resistance += 50;
+            }
 
             OptionChainSnapshot snapshot = new OptionChainSnapshot(
-                support, resistance, ltp,
+                support,
+                resistance,
+                ltp,
                 resolveFallbackExpiry(),
                 prevClose,
                 marketOpen ? "ANGELONE_LTP" : "ANGELONE_LTP_CLOSED",
@@ -154,7 +163,14 @@ public class OptionChainService {
     private OptionChainSnapshot unavailableLiveSnapshot() {
         double prevClose = resolvePreviousClose(0.0);
         OptionChainSnapshot unavailable = new OptionChainSnapshot(
-            0, 0, 0.0, resolveFallbackExpiry(), prevClose, "ANGELONE_UNAVAILABLE", 0L, false
+            0,
+            0,
+            0.0,
+            resolveFallbackExpiry(),
+            prevClose,
+            "ANGELONE_UNAVAILABLE",
+            0L,
+            false
         );
         lastKnownSnapshot = unavailable;
         return unavailable;
@@ -163,7 +179,14 @@ public class OptionChainService {
     private OptionChainSnapshot closedMarketNoCacheSnapshot() {
         double prevClose = resolvePreviousClose(0.0);
         OptionChainSnapshot closed = new OptionChainSnapshot(
-            0, 0, 0.0, resolveFallbackExpiry(), prevClose, "MARKET_CLOSED_NO_CACHE", 0L, false
+            0,
+            0,
+            0.0,
+            resolveFallbackExpiry(),
+            prevClose,
+            "MARKET_CLOSED_NO_CACHE",
+            0L,
+            false
         );
         lastKnownSnapshot = closed;
         return closed;
@@ -171,16 +194,20 @@ public class OptionChainService {
 
     private double resolvePreviousClose(double fallback) {
         OptionChainSnapshot current = lastKnownSnapshot;
-        if (current.previousClose() > 0.0) return current.previousClose();
+        if (current.previousClose() > 0.0) {
+            return current.previousClose();
+        }
         OptionChainSnapshot cached = readCache();
         if (cached != null) {
-            if (cached.previousClose() > 0.0) return cached.previousClose();
-            if (cached.spot() > 0.0) return cached.spot();
+            if (cached.previousClose() > 0.0) {
+                return cached.previousClose();
+            }
+            if (cached.spot() > 0.0) {
+                return cached.spot();
+            }
         }
         return fallback;
     }
-
-
 
     private void writeCache(OptionChainSnapshot snapshot) {
         try {
@@ -192,7 +219,9 @@ public class OptionChainService {
 
     private OptionChainSnapshot readCache() {
         File file = new File(CACHE_FILE);
-        if (!file.exists()) return null;
+        if (!file.exists()) {
+            return null;
+        }
         try {
             return mapper.readValue(file, OptionChainSnapshot.class);
         } catch (IOException e) {
@@ -203,7 +232,9 @@ public class OptionChainService {
 
     private String resolveFallbackExpiry() {
         String overridden = resolveExplicitExpiryOverride();
-        if (!overridden.isBlank()) return overridden;
+        if (!overridden.isBlank()) {
+            return overridden;
+        }
 
         LocalDate today = LocalDate.now(IST);
         OptionChainSnapshot current = lastKnownSnapshot;
@@ -231,7 +262,9 @@ public class OptionChainService {
     private LocalDate parseExpiryDate(String raw) {
         try {
             return LocalDate.parse(raw);
-        } catch (DateTimeParseException ignored) {}
+        } catch (DateTimeParseException ignored) {
+            // try NSE style: 24-Apr-2026
+        }
         try {
             return LocalDate.parse(raw, NSE_EXPIRY_FORMAT);
         } catch (DateTimeParseException ignored) {
@@ -250,9 +283,9 @@ public class OptionChainService {
         return d.toString();
     }
 
+    // BUG-FIX: Default changed from TUESDAY to THURSDAY
     private DayOfWeek parseExpiryDay(String raw) {
         if (raw == null || raw.isBlank()) {
-            // BUG-FIX: NIFTY weekly expiry is THURSDAY
             return DayOfWeek.THURSDAY;
         }
         try {
@@ -274,8 +307,12 @@ public class OptionChainService {
         boolean live
     ) {
         public OptionChainSnapshot(
-            int support, int resistance, double spot, String expiry,
-            double previousClose, String source
+            int support,
+            int resistance,
+            double spot,
+            String expiry,
+            double previousClose,
+            String source
         ) {
             this(support, resistance, spot, expiry, previousClose, source, System.currentTimeMillis(), false);
         }
