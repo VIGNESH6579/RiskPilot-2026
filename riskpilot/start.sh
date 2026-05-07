@@ -51,7 +51,44 @@ fi
 # ---- Database configuration ----
 if [[ -n "${DATABASE_URL:-}" ]]; then
   echo "[*] Using PostgreSQL"
-  DB_URL="${DATABASE_URL}"
+
+  # Render injects DATABASE_URL as:  postgres://user:pass@host:port/dbname
+  # Spring JDBC requires:            jdbc:postgresql://host:port/dbname?sslmode=require
+  #
+  # Additionally Render does NOT inject DATABASE_USERNAME / DATABASE_PASSWORD separately —
+  # credentials are embedded in DATABASE_URL. Extract them here.
+
+  RAW_URL="${DATABASE_URL}"
+
+  if [[ "${RAW_URL}" == postgres://* ]] || [[ "${RAW_URL}" == postgresql://* ]]; then
+    # Strip the scheme
+    WITHOUT_SCHEME="${RAW_URL#postgres://}"
+    WITHOUT_SCHEME="${WITHOUT_SCHEME#postgresql://}"
+
+    # Extract user:pass (everything before @)
+    USERINFO="${WITHOUT_SCHEME%%@*}"
+    DB_USER="${USERINFO%%:*}"
+    DB_PASS="${USERINFO#*:}"
+
+    # Extract host:port/dbname (everything after @)
+    HOSTPATH="${WITHOUT_SCHEME#*@}"
+
+    # Build JDBC URL with SSL (required by Render PostgreSQL)
+    DB_URL="jdbc:postgresql://${HOSTPATH}?sslmode=require"
+  else
+    # Already a JDBC URL — use as-is
+    DB_URL="${RAW_URL}"
+    DB_USER="${DATABASE_USERNAME:-}"
+    DB_PASS="${DATABASE_PASSWORD:-}"
+  fi
+
+  # Allow explicit overrides from env vars
+  DB_USER="${DATABASE_USERNAME:-$DB_USER}"
+  DB_PASS="${DATABASE_PASSWORD:-$DB_PASS}"
+
+  echo "[*] DB URL: ${DB_URL}"
+  echo "[*] DB User: ${DB_USER}"
+
   DB_DRIVER="org.postgresql.Driver"
   DB_DIALECT="org.hibernate.dialect.PostgreSQLDialect"
   DDL_AUTO="validate"
@@ -94,8 +131,8 @@ exec java ${JVM_OPTS} -jar app.jar \
   --spring.profiles.active="${SPRING_PROFILES_ACTIVE}" \
   --spring.datasource.url="${DB_URL}" \
   --spring.datasource.driver-class-name="${DB_DRIVER}" \
-  --spring.datasource.username="${DATABASE_USERNAME:-sa}" \
-  --spring.datasource.password="${DATABASE_PASSWORD:-}" \
+  --spring.datasource.username="${DB_USER:-sa}" \
+  --spring.datasource.password="${DB_PASS:-}" \
   --spring.jpa.hibernate.ddl-auto="${DDL_AUTO}" \
   --spring.jpa.properties.hibernate.dialect="${DB_DIALECT}" \
   --spring.flyway.enabled="${FLYWAY_ENABLED}" \

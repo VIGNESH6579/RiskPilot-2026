@@ -1,28 +1,36 @@
 -- V6__Kill_Switch_Persistent.sql
--- Makes kill switch state persistent across container restarts.
+-- Upgrades kill_switch_log (created in V3) for persistent, restart-proof state.
 --
--- BEFORE: Kill switch was stored only in a container-local file (KILL_SWITCH.flag).
---         On Render free tier the container filesystem is ephemeral — wiped on every
---         restart. A kill switch written during a crash was lost → trading resumed unsafely.
---
--- AFTER: PostgreSQL is the primary store. cleared_at IS NULL means "still active".
---        On startup KillSwitchEngine.restoreFromDatabase() reads this table before
---        allowing any trade evaluation.
+-- V3 stored kill switch as a single row with triggered=true/false — not audit-friendly.
+-- BEFORE: Container file was primary store; wiped on every Render restart.
+-- AFTER:  Each trigger event is its own row. cleared_at IS NULL = still active.
+--         KillSwitchEngine.restoreFromDatabase() reads this on every startup.
 
-CREATE TABLE IF NOT EXISTS kill_switch_log (
-    id           BIGSERIAL    PRIMARY KEY,
-    reason       VARCHAR(256) NOT NULL,
-    triggered_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    cleared_at   TIMESTAMPTZ  NULL,
-    triggered_by VARCHAR(128) NOT NULL DEFAULT 'system',
-    notes        TEXT         NULL
-);
+-- Add cleared_at column — NULL means the kill switch is still active for that reason
+ALTER TABLE kill_switch_log
+    ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMP NULL;
 
+-- Add reason column for per-reason tracking (V3 had a single combined reasons VARCHAR)
+ALTER TABLE kill_switch_log
+    ADD COLUMN IF NOT EXISTS reason VARCHAR(256);
+
+-- Add triggered_by for audit trail
+ALTER TABLE kill_switch_log
+    ADD COLUMN IF NOT EXISTS triggered_by VARCHAR(128) DEFAULT 'system';
+
+-- Back-fill reason from the old reasons column for existing rows
+UPDATE kill_switch_log
+SET reason = COALESCE(reasons, 'LEGACY_UNKNOWN')
+WHERE reason IS NULL;
+
+-- Partial index: fast lookup of currently active kill switch entries
 CREATE INDEX IF NOT EXISTS idx_kill_switch_active
-    ON kill_switch_log (triggered_at DESC)
+    ON kill_switch_log (timestamp DESC)
     WHERE cleared_at IS NULL;
 
 COMMENT ON TABLE kill_switch_log IS
-    'Persistent kill switch state. Active if any row has cleared_at IS NULL.';
+    'Persistent kill switch audit log. Active if any row has cleared_at IS NULL.';
 COMMENT ON COLUMN kill_switch_log.cleared_at IS
     'NULL = kill switch still active. Operator sets this to re-enable trading.';
+COMMENT ON COLUMN kill_switch_log.reason IS
+    'Single reason code e.g. EXPECTANCY_NEGATIVE, FEED_UNSTABLE. One row per reason.';

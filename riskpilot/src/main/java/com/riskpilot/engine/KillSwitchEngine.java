@@ -60,18 +60,19 @@ public class KillSwitchEngine {
     public void restoreFromDatabase() {
         try {
             List<String> reasons = jdbcTemplate.queryForList(
-                "SELECT reason FROM kill_switch_log WHERE cleared_at IS NULL " +
-                "ORDER BY triggered_at DESC LIMIT 20",
+                "SELECT COALESCE(reason, reasons) FROM kill_switch_log " +
+                "WHERE cleared_at IS NULL AND triggered = true " +
+                "ORDER BY timestamp DESC LIMIT 20",
                 String.class
             );
             if (!reasons.isEmpty()) {
                 killSwitchActive = true;
                 activeReasons = List.copyOf(reasons);
-                log.error("🚨 KILL SWITCH RESTORED FROM DB on startup — {} active: {}",
+                log.error("\uD83D\uDEA8 KILL SWITCH RESTORED FROM DB on startup — {} active: {}",
                     reasons.size(), String.join(", ", reasons));
             } else {
                 killSwitchActive = false;
-                log.info("✅ Kill switch: no active entries in DB — system clear");
+                log.info("\u2705 Kill switch: no active entries in DB — system clear");
             }
         } catch (DataAccessException e) {
             log.warn("DB unavailable during kill switch restore — checking file fallback: {}", e.getMessage());
@@ -117,7 +118,8 @@ public class KillSwitchEngine {
     public void clearKillSwitch() {
         try {
             jdbcTemplate.update(
-                "UPDATE kill_switch_log SET cleared_at = ? WHERE cleared_at IS NULL",
+                "UPDATE kill_switch_log SET cleared_at = ?, triggered = false " +
+                "WHERE cleared_at IS NULL AND triggered = true",
                 java.sql.Timestamp.from(Instant.now())
             );
         } catch (DataAccessException e) {
@@ -159,7 +161,9 @@ public class KillSwitchEngine {
     private void refreshFromDb() {
         try {
             List<String> reasons = jdbcTemplate.queryForList(
-                "SELECT reason FROM kill_switch_log WHERE cleared_at IS NULL ORDER BY triggered_at DESC LIMIT 20",
+                "SELECT COALESCE(reason, reasons) FROM kill_switch_log " +
+                "WHERE cleared_at IS NULL AND triggered = true " +
+                "ORDER BY timestamp DESC LIMIT 20",
                 String.class
             );
             killSwitchActive = !reasons.isEmpty();
@@ -171,10 +175,16 @@ public class KillSwitchEngine {
 
     private void persistToDb(List<String> reasons) {
         try {
-            for (String reason : reasons) {
+            // Insert one row per reason. Columns match the V3 schema:
+            // triggered (NOT NULL boolean), reasons (combined), timestamp (NOT NULL),
+            // plus V6 additions: reason (single) and cleared_at.
+            String combined = String.join(", ", reasons);
+            java.sql.Timestamp now = java.sql.Timestamp.from(Instant.now());
+            for (String r : reasons) {
                 jdbcTemplate.update(
-                    "INSERT INTO kill_switch_log (reason, triggered_at) VALUES (?, ?)",
-                    reason, java.sql.Timestamp.from(Instant.now())
+                    "INSERT INTO kill_switch_log (triggered, reasons, reason, timestamp) " +
+                    "VALUES (true, ?, ?, ?)",
+                    combined, r, now
                 );
             }
         } catch (DataAccessException e) {
