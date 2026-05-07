@@ -3,22 +3,31 @@ spring:
     activate:
       on-profile: prod
 
-  # ---- Database: PostgreSQL REQUIRED in prod ----
-  # start.sh validates DATABASE_URL is set before JVM starts.
-  datasource:
-    url: ${DATABASE_URL}
-    driver-class-name: org.postgresql.Driver
-    username: ${DATABASE_USERNAME}
-    password: ${DATABASE_PASSWORD}
+  # # ---- Database: PostgreSQL REQUIRED in prod ----
+  # # start.sh validates DATABASE_URL is set before JVM starts.
+  # datasource:
+  #   url: ${DATABASE_URL}
+  #   driver-class-name: org.postgresql.Driver
+  #   username: ${DATABASE_USERNAME}
+  #   password: ${DATABASE_PASSWORD}
+  #   hikari:
+  #     maximum-pool-size: 5          # Render free PG allows max 25 connections
+  #     minimum-idle: 2
+  #     connection-timeout: 20000
+  #     idle-timeout: 300000
+  #     max-lifetime: 1200000
+  #     keepalive-time: 60000         # Prevent firewall drops on idle connections
+  #     connection-test-query: SELECT 1
+
+ datasource:
     hikari:
-      maximum-pool-size: 5          # Render free PG allows max 25 connections
+      maximum-pool-size: 5
       minimum-idle: 2
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 1200000
-      keepalive-time: 60000         # Prevent firewall drops on idle connections
+      keepalive-time: 60000
       connection-test-query: SELECT 1
-
   jpa:
     hibernate:
       ddl-auto: none                # Flyway owns schema; JPA should not validate
