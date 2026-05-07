@@ -18,7 +18,7 @@ services:
     envVars:
       # JVM — tuned for 512 MB Render container
       - key: JAVA_OPTS
-        value: "-Xms128m -Xmx380m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:MaxGCPauseMillis=200 -Djava.security.egd=file:/dev/./urandom"
+        value: "-Xms64m -Xmx256m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:MaxGCPauseMillis=200 -Djava.security.egd=file:/dev/./urandom"
 
       - key: SPRING_PROFILES_ACTIVE
         value: prod

@@ -21,7 +21,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate            # Flyway owns schema; JPA only validates
+      ddl-auto: none                # Flyway owns schema; JPA should not validate
     show-sql: false
     properties:
       hibernate:

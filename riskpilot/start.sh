@@ -121,7 +121,7 @@ echo "[*] Starting Python Observer on internal port ${INTERNAL_OBSERVER_PORT}...
 ) &
 
 # ---- JVM: tuned for 512 MB Render container ----
-JVM_OPTS="${JAVA_OPTS:--Xms128m -Xmx380m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError \
+JVM_OPTS="${JAVA_OPTS:--Xms64m -Xmx256m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError \
   -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=4m \
   -Djava.security.egd=file:/dev/./urandom}"
 
