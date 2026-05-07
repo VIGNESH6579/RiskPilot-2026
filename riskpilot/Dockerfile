@@ -31,7 +31,8 @@ COPY start.sh .
 
 RUN chmod +x start.sh
 
-# Explicitly expose port 8080 (REST Health) and 8765 (WebSocket Observer)
-EXPOSE 8080 8765
+# Render detects the port automatically from the $PORT env var.
+# We no longer hardcode EXPOSE 8080 8765 to avoid confusion.
+EXPOSE 10000
 
 ENTRYPOINT ["./start.sh"]
