@@ -1,55 +1,77 @@
 services:
-    - type: web
-      name: riskpilot-2026
-      env: docker
-      plan: free
-      dockerfilePath: ./riskpilot/Dockerfile
-      dockerContext: ./riskpilot
-      autoDeploy: true
+  - type: web
+    name: riskpilot-2026
+    env: docker
+    plan: free
+    dockerfilePath: ./riskpilot/Dockerfile
+    dockerContext: ./riskpilot
+    autoDeploy: true
 
-      # /actuator/health is security-permitted and always returns 200
-      healthCheckPath: /actuator/health
-      healthCheckTimeout: 300
-      healthCheckInterval: 60
+    healthCheckPath: /actuator/health
+    healthCheckTimeout: 300
+    healthCheckInterval: 60
 
-      startCommand: "./start.sh"
+    startCommand: "./start.sh"
 
-      envVars:
-        - key: JAVA_OPTS
-          value: "-Xms256m -Xmx512m -XX:+UseG1GC"
-        - key: SPRING_PROFILES_ACTIVE
-          value: prod
-        - key: OBSERVER_PORT
-          value: "8765"
-        - key: ANGEL_INDIA_VIX_TOKEN
-          value: "999920005"
-        - key: ANGEL_INDIA_VIX_EXCHANGE
-          value: "NSE"
-        # BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY
-        - key: NIFTY_WEEKLY_EXPIRY_DAY
-          value: "THURSDAY"
-        # BUG-FIX: Added missing ntfy observer env vars required by observer.py
-        - key: RISKPILOT_NTFY_TOPIC
-          value: "riskpilot-live-signals"
-        - key: RISKPILOT_ENABLE_NTFY
-          value: "true"
-        - key: DATABASE_URL
-          sync: false
-        - key: DATABASE_USERNAME
-          sync: false
-        - key: DATABASE_PASSWORD
-          sync: false
-        - key: ADMIN_USERNAME
-          sync: false
-        - key: ADMIN_PASSWORD
-          sync: false
-        - key: ANGEL_API_KEY
-          sync: false
-        - key: ANGEL_CLIENT_ID
-          sync: false
-        - key: ANGEL_PIN
-          sync: false
-        - key: ANGEL_TOTP_SECRET
-          sync: false
-        - key: ANGEL_CLIENT_PUBLIC_IP
-          sync: false
+    envVars:
+      # JVM — tuned for 512 MB Render container
+      - key: JAVA_OPTS
+        value: "-Xms128m -Xmx380m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:MaxGCPauseMillis=200 -Djava.security.egd=file:/dev/./urandom"
+
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+
+      # CORS — must match your actual Render service URL exactly
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://riskpilot-2026.onrender.com"
+
+      # Trading config
+      - key: NIFTY_WEEKLY_EXPIRY_DAY
+        value: "THURSDAY"
+      - key: ANGEL_INDIA_VIX_TOKEN
+        value: "999920005"
+      - key: ANGEL_INDIA_VIX_EXCHANGE
+        value: "NSE"
+
+      # Notifications
+      - key: RISKPILOT_NTFY_TOPIC
+        value: "riskpilot-live-signals"
+      - key: RISKPILOT_ENABLE_NTFY
+        value: "true"
+
+      # ---- SECRETS: set these in Render Dashboard → Environment tab ----
+      # Never commit values here.
+
+      # Admin API credentials
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+
+      # PostgreSQL (add Render PostgreSQL add-on and it injects DATABASE_URL automatically)
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_USERNAME
+        sync: false
+      - key: DATABASE_PASSWORD
+        sync: false
+
+      # Angel One broker credentials
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_ID
+        sync: false
+      - key: ANGEL_PIN
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      - key: ANGEL_CLIENT_PUBLIC_IP
+        sync: false
+
+      # Observer WebSocket auth (random string, 32+ chars)
+      - key: OBSERVER_SECRET
+        sync: false
+
+      # Optional: ntfy.sh access token for private ntfy topics
+      - key: RISKPILOT_NTFY_AUTH_TOKEN
+        sync: false

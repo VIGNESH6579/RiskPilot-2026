@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,71 +20,64 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * PRODUCTION Trading Controller.
+ *
+ * BEFORE problems:
+ * 1. @CrossOrigin(origins = "*") — overrides SecurityConfig CORS; any site could call these APIs.
+ *    REMOVED entirely. CORS is now controlled exclusively by SecurityConfig.
+ *
+ * 2. POST /engine/restart protected in SecurityConfig BUT SecurityConfig had
+ *    ".requestMatchers("/api/v1/**").permitAll()" evaluated FIRST → permAll won.
+ *    FIX: @PreAuthorize at method level as defense-in-depth (two security layers).
+ *
+ * 3. restartEngine() had no kill-switch guard → ADMIN could restart while kill switch active.
+ *    FIX: Hard block on restart if kill switch is active. Must clear first.
+ *
+ * 4. New endpoints: /kill-switch/state (GET) and /kill-switch/clear (POST) for ops team.
+ */
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/trading")
 @RequiredArgsConstructor
 @Validated
-@CrossOrigin(origins = "*")
+// REMOVED: @CrossOrigin(origins = "*")
 public class TradingController {
 
     private final ShadowExecutionEngine shadowExecutionEngine;
     private final TradingSessionService tradingSessionService;
+    private final com.riskpilot.engine.KillSwitchEngine killSwitchEngine;
+
+    // ---- Public read-only endpoints ----
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getTradingStatus() {
-        try {
-            Map<String, Object> status = Map.of(
-                "status", "ACTIVE",
-                "timestamp", LocalDateTime.now(),
-                "engine", "SHADOW_EXECUTION",
-                "message", "RiskPilot trading engine is running"
-            );
-            return ResponseEntity.ok(status);
-        } catch (Exception e) {
-            log.error("Error getting trading status", e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get trading status: " + e.getMessage());
-        }
+        return ResponseEntity.ok(Map.of(
+            "status", "ACTIVE",
+            "timestamp", LocalDateTime.now(),
+            "engine", "SHADOW_EXECUTION",
+            "killSwitchActive", killSwitchEngine.isKillSwitchTriggered(),
+            "message", "RiskPilot trading engine is running"
+        ));
     }
 
     @GetMapping("/sessions/current")
-    public ResponseEntity<Object> getCurrentSession(
-            @RequestParam @NotBlank String symbol) {
-        try {
-            var session = tradingSessionService.getCurrentSession(symbol);
-            if (session == null) {
-                throw new com.riskpilot.exception.RiskPilotException("No active session found for symbol: " + symbol);
-            }
-            return ResponseEntity.ok(session);
-        } catch (Exception e) {
-            log.error("Error getting current session for symbol: {}", symbol, e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get current session: " + e.getMessage());
-        }
+    public ResponseEntity<Object> getCurrentSession(@RequestParam @NotBlank String symbol) {
+        var session = tradingSessionService.getCurrentSession(symbol);
+        if (session == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(session);
     }
 
     @GetMapping("/trades/active")
-    public ResponseEntity<List<Trade>> getActiveTrades(
-            @RequestParam @NotBlank String symbol) {
-        try {
-            List<Trade> activeTrades = tradingSessionService.getActiveTrades(symbol);
-            return ResponseEntity.ok(activeTrades);
-        } catch (Exception e) {
-            log.error("Error getting active trades for symbol: {}", symbol, e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get active trades: " + e.getMessage());
-        }
+    public ResponseEntity<List<Trade>> getActiveTrades(@RequestParam @NotBlank String symbol) {
+        return ResponseEntity.ok(tradingSessionService.getActiveTrades(symbol));
     }
 
     @GetMapping("/signals/recent")
     public ResponseEntity<List<TradingSignal>> getRecentSignals(
             @RequestParam @NotBlank String symbol,
             @RequestParam(defaultValue = "10") int limit) {
-        try {
-            List<TradingSignal> signals = tradingSessionService.getRecentSignals(symbol, limit);
-            return ResponseEntity.ok(signals);
-        } catch (Exception e) {
-            log.error("Error getting recent signals for symbol: {}", symbol, e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get recent signals: " + e.getMessage());
-        }
+        return ResponseEntity.ok(tradingSessionService.getRecentSignals(symbol, limit));
     }
 
     @GetMapping("/trades/history")
@@ -91,83 +85,91 @@ public class TradingController {
             @RequestParam @NotBlank String symbol,
             @RequestParam @NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startDate,
             @RequestParam @NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endDate) {
-        try {
-            List<Trade> trades = tradingSessionService.getTradeHistory(symbol, startDate, endDate);
-            return ResponseEntity.ok(trades);
-        } catch (Exception e) {
-            log.error("Error getting trade history for symbol: {}", symbol, e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get trade history: " + e.getMessage());
-        }
-    }
-
-    @PostMapping("/signals/manual")
-    public ResponseEntity<Map<String, Object>> createManualSignal(
-            @Valid @RequestBody TradingSignal signal) {
-        try {
-            log.info("Creating manual signal: {}", signal);
-            tradingSessionService.processManualSignal(signal);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("status", "SUCCESS");
-            response.put("message", "Manual signal created successfully");
-            response.put("signalId", signal.getId());
-            response.put("timestamp", LocalDateTime.now());
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Error creating manual signal", e);
-            throw new com.riskpilot.exception.TradingException("Failed to create manual signal: " + e.getMessage());
-        }
-    }
-
-    @PostMapping("/trades/{tradeId}/close")
-    public ResponseEntity<Map<String, Object>> closeTrade(
-            @PathVariable Long tradeId,
-            @RequestParam(required = false) String reason) {
-        try {
-            log.info("Closing trade {} with reason: {}", tradeId, reason);
-            tradingSessionService.closeTrade(tradeId, reason);
-            
-            Map<String, Object> response = Map.of(
-                "status", "SUCCESS",
-                "message", "Trade closed successfully",
-                "tradeId", tradeId,
-                "timestamp", LocalDateTime.now()
-            );
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Error closing trade: {}", tradeId, e);
-            throw new com.riskpilot.exception.TradingException("Failed to close trade: " + e.getMessage());
-        }
+        return ResponseEntity.ok(tradingSessionService.getTradeHistory(symbol, startDate, endDate));
     }
 
     @GetMapping("/metrics/performance")
     public ResponseEntity<Map<String, Object>> getPerformanceMetrics(
             @RequestParam @NotBlank String symbol,
             @RequestParam(defaultValue = "30") int days) {
-        try {
-            Map<String, Object> metrics = tradingSessionService.getPerformanceMetrics(symbol, days);
-            return ResponseEntity.ok(metrics);
-        } catch (Exception e) {
-            log.error("Error getting performance metrics for symbol: {}", symbol, e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to get performance metrics: " + e.getMessage());
+        return ResponseEntity.ok(tradingSessionService.getPerformanceMetrics(symbol, days));
+    }
+
+    // ---- ADMIN-ONLY write operations ----
+
+    @PostMapping("/signals/manual")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> createManualSignal(@Valid @RequestBody TradingSignal signal) {
+        if (killSwitchEngine.isKillSwitchTriggered()) {
+            return ResponseEntity.status(503).body(Map.of(
+                "status", "REJECTED",
+                "reason", "KILL_SWITCH_ACTIVE",
+                "killSwitchState", killSwitchEngine.getCurrentState()
+            ));
         }
+        log.info("Admin creating manual signal: {}", signal);
+        tradingSessionService.processManualSignal(signal);
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "SUCCESS");
+        response.put("message", "Manual signal created successfully");
+        response.put("signalId", signal.getId());
+        response.put("timestamp", LocalDateTime.now());
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/trades/{tradeId}/close")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> closeTrade(
+            @PathVariable Long tradeId,
+            @RequestParam(required = false) String reason) {
+        log.info("Admin closing trade {} reason={}", tradeId, reason);
+        tradingSessionService.closeTrade(tradeId, reason);
+        return ResponseEntity.ok(Map.of(
+            "status", "SUCCESS",
+            "message", "Trade closed successfully",
+            "tradeId", tradeId,
+            "timestamp", LocalDateTime.now()
+        ));
     }
 
     @PostMapping("/engine/restart")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Map<String, Object>> restartEngine() {
-        try {
-            log.info("Restarting trading engine...");
-            shadowExecutionEngine.restart();
-            
-            Map<String, Object> response = Map.of(
-                "status", "SUCCESS",
-                "message", "Trading engine restarted successfully",
-                "timestamp", LocalDateTime.now()
-            );
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Error restarting trading engine", e);
-            throw new com.riskpilot.exception.RiskPilotException("Failed to restart engine: " + e.getMessage());
+        // Hard guard: refuse restart while kill switch is active
+        if (killSwitchEngine.isKillSwitchTriggered()) {
+            log.error("Engine restart BLOCKED — kill switch active: {}",
+                killSwitchEngine.getCurrentState().getReasons());
+            return ResponseEntity.status(503).body(Map.of(
+                "status", "REJECTED",
+                "reason", "KILL_SWITCH_ACTIVE",
+                "message", "Clear the kill switch before restarting the engine",
+                "killSwitchState", killSwitchEngine.getCurrentState()
+            ));
         }
+        log.warn("Admin restarting trading engine");
+        shadowExecutionEngine.restart();
+        return ResponseEntity.ok(Map.of(
+            "status", "SUCCESS",
+            "message", "Trading engine restarted",
+            "timestamp", LocalDateTime.now()
+        ));
+    }
+
+    @GetMapping("/kill-switch/state")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Object> getKillSwitchState() {
+        return ResponseEntity.ok(killSwitchEngine.getCurrentState());
+    }
+
+    @PostMapping("/kill-switch/clear")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> clearKillSwitch() {
+        log.warn("Admin clearing kill switch — operator has acknowledged the incident");
+        killSwitchEngine.clearKillSwitch();
+        return ResponseEntity.ok(Map.of(
+            "status", "SUCCESS",
+            "message", "Kill switch cleared. Call /engine/restart to resume trading.",
+            "timestamp", LocalDateTime.now()
+        ));
     }
 }

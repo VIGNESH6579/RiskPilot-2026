@@ -1,30 +1,103 @@
 #!/bin/bash
+set -euo pipefail
 
-  # Observer port (never use $PORT — that's the HTTP server port)
-  export OBSERVER_PORT=8765
+# ============================================================
+# RiskPilot Production Start Script
+# ============================================================
+#
+# BEFORE (critical bugs):
+# 1. Hardcoded H2 in-memory DB — ignored DATABASE_URL even when PostgreSQL is set.
+#    --spring.datasource.url="jdbc:h2:mem:riskpilot" was unconditional.
+#    ALL trade data, kill switch state, candle history lost on every restart.
+#    Render free tier restarts containers on every deploy AND after inactivity.
+#
+# 2. --spring.flyway.enabled="false" — Flyway always disabled, tables never created.
+#
+# 3. OBSERVER_PORT=8765 — Render only exposes ONE port ($PORT). Port 8765 is
+#    unreachable externally, making the observer WebSocket completely useless.
+#
+# AFTER:
+# 1. Uses PostgreSQL if DATABASE_URL set; H2 only in dev with a warning.
+# 2. Flyway enabled in prod — schema migrated on startup.
+# 3. Observer binds 127.0.0.1:8766 (localhost). Spring Boot proxies /observer/**
+#    so external clients reach it through the single $PORT over HTTPS.
+# 4. Secret validation: refuses to start in prod if critical env vars are missing.
+# 5. JVM heap tuned: 128m start / 380m max (leaves room for OS + Python + overhead).
+# ============================================================
 
-  # Start Python Observer with auto-restart
-  echo "[*] Starting Python Observer on port $OBSERVER_PORT..."
-  (
-    while true; do
-      OBSERVER_PORT="${OBSERVER_PORT}" OBSERVER_HOST="${OBSERVER_HOST:-0.0.0.0}" python3 observer.py
-      echo "[!] Observer crashed, restarting in 5s..."
-      sleep 5
-    done
-  ) &
+: "${PORT:=8080}"
+: "${SPRING_PROFILES_ACTIVE:=prod}"
 
-  # Start Spring Boot.
-  # We pass DB config as command-line args (highest Spring Boot priority — overrides all env vars).
-  # We use H2 in-memory DB with PostgreSQL-compatible mode so Flyway and JPA work without
-  # needing a real PostgreSQL connection. Real-time market data comes from Angel One API.
-  echo "[*] Starting RiskPilot Spring Boot on port ${PORT:-8080}..."
-  exec java ${JAVA_OPTS} -jar app.jar \
-    --server.port="${PORT:-8080}" \
-    --spring.datasource.url="jdbc:h2:mem:riskpilot;DB_CLOSE_DELAY=-1;MODE=PostgreSQL" \
-    --spring.datasource.username="sa" \
-    --spring.datasource.password="" \
-    --spring.datasource.driver-class-name="org.h2.Driver" \
-    --spring.jpa.hibernate.ddl-auto="create" \
-    --spring.jpa.properties.hibernate.dialect="org.hibernate.dialect.H2Dialect" \
-    --spring.flyway.enabled="false"
-  
+echo "[*] RiskPilot starting — profile=${SPRING_PROFILES_ACTIVE} port=${PORT}"
+
+# ---- Validate critical secrets (prod only) ----
+if [[ "${SPRING_PROFILES_ACTIVE}" == "prod" ]]; then
+  MISSING=""
+  [[ -z "${ADMIN_USERNAME:-}"      ]] && MISSING="${MISSING} ADMIN_USERNAME"
+  [[ -z "${ADMIN_PASSWORD:-}"      ]] && MISSING="${MISSING} ADMIN_PASSWORD"
+  [[ -z "${DATABASE_URL:-}"        ]] && MISSING="${MISSING} DATABASE_URL"
+  [[ -z "${ANGEL_API_KEY:-}"       ]] && MISSING="${MISSING} ANGEL_API_KEY"
+  [[ -z "${ANGEL_CLIENT_ID:-}"     ]] && MISSING="${MISSING} ANGEL_CLIENT_ID"
+  [[ -z "${ANGEL_PIN:-}"           ]] && MISSING="${MISSING} ANGEL_PIN"
+  [[ -z "${ANGEL_TOTP_SECRET:-}"   ]] && MISSING="${MISSING} ANGEL_TOTP_SECRET"
+  [[ -z "${CORS_ALLOWED_ORIGINS:-}" ]] && MISSING="${MISSING} CORS_ALLOWED_ORIGINS"
+  if [[ -n "${MISSING}" ]]; then
+    echo "[FATAL] Missing required env vars:${MISSING}"
+    echo "[FATAL] System will NOT start with missing credentials in prod mode."
+    exit 1
+  fi
+fi
+
+# ---- Database configuration ----
+if [[ -n "${DATABASE_URL:-}" ]]; then
+  echo "[*] Using PostgreSQL"
+  DB_URL="${DATABASE_URL}"
+  DB_DRIVER="org.postgresql.Driver"
+  DB_DIALECT="org.hibernate.dialect.PostgreSQLDialect"
+  DDL_AUTO="validate"
+  FLYWAY_ENABLED="true"
+  H2_CONSOLE="false"
+else
+  echo "[WARN] DATABASE_URL not set — H2 in-memory (dev only, all data lost on restart)"
+  DB_URL="jdbc:h2:mem:riskpilot;DB_CLOSE_DELAY=-1;MODE=PostgreSQL"
+  DB_DRIVER="org.h2.Driver"
+  DB_DIALECT="org.hibernate.dialect.H2Dialect"
+  DDL_AUTO="create"
+  FLYWAY_ENABLED="false"
+  H2_CONSOLE="true"
+fi
+
+# ---- Observer: localhost-only, Spring proxies externally ----
+INTERNAL_OBSERVER_PORT=8766
+export OBSERVER_PORT="${INTERNAL_OBSERVER_PORT}"
+export OBSERVER_HOST="127.0.0.1"
+
+echo "[*] Starting Python Observer on internal port ${INTERNAL_OBSERVER_PORT}..."
+(
+  while true; do
+    OBSERVER_PORT="${INTERNAL_OBSERVER_PORT}" \
+    OBSERVER_HOST="127.0.0.1" \
+    python3 observer.py 2>&1 | sed 's/^/[observer] /'
+    echo "[!] Observer crashed — restarting in 5s..."
+    sleep 5
+  done
+) &
+
+# ---- JVM: tuned for 512 MB Render container ----
+JVM_OPTS="${JAVA_OPTS:--Xms128m -Xmx380m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError \
+  -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=4m \
+  -Djava.security.egd=file:/dev/./urandom}"
+
+echo "[*] Starting Spring Boot on port ${PORT}..."
+exec java ${JVM_OPTS} -jar app.jar \
+  --server.port="${PORT}" \
+  --spring.profiles.active="${SPRING_PROFILES_ACTIVE}" \
+  --spring.datasource.url="${DB_URL}" \
+  --spring.datasource.driver-class-name="${DB_DRIVER}" \
+  --spring.datasource.username="${DATABASE_USERNAME:-sa}" \
+  --spring.datasource.password="${DATABASE_PASSWORD:-}" \
+  --spring.jpa.hibernate.ddl-auto="${DDL_AUTO}" \
+  --spring.jpa.properties.hibernate.dialect="${DB_DIALECT}" \
+  --spring.flyway.enabled="${FLYWAY_ENABLED}" \
+  --spring.h2.console.enabled="${H2_CONSOLE}" \
+  --riskpilot.observer.internal-port="${INTERNAL_OBSERVER_PORT}"

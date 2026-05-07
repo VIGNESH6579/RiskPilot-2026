@@ -3,27 +3,47 @@ spring:
     activate:
       on-profile: prod
 
-  # Production DB: Render PostgreSQL (injected via DATABASE_URL)
-  # start.sh overrides datasource with H2 in-memory when DATABASE_URL is absent,
-  # so the service still starts on the free tier without a paid DB add-on.
+  # ---- Database: PostgreSQL REQUIRED in prod ----
+  # start.sh validates DATABASE_URL is set before JVM starts.
   datasource:
-    url: ${DATABASE_URL:jdbc:h2:mem:riskpilot;DB_CLOSE_DELAY=-1;MODE=PostgreSQL}
-    driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
-    username: ${DATABASE_USERNAME:sa}
-    password: ${DATABASE_PASSWORD:}
+    url: ${DATABASE_URL}
+    driver-class-name: org.postgresql.Driver
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+    hikari:
+      maximum-pool-size: 5          # Render free PG allows max 25 connections
+      minimum-idle: 2
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      keepalive-time: 60000         # Prevent firewall drops on idle connections
+      connection-test-query: SELECT 1
 
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate            # Flyway owns schema; JPA only validates
     show-sql: false
     properties:
       hibernate:
-        dialect: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          lob:
+            non_contextual_creation: true
 
+  # ---- Flyway: ENABLED in prod ----
+  # BEFORE: always disabled → tables never created on fresh DB.
   flyway:
-    enabled: false   # managed by start.sh to avoid dialect mismatch on free tier
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    out-of-order: false
 
-# Reduce actuator surface area in production
+  # ---- H2 console: DISABLED in prod ----
+  h2:
+    console:
+      enabled: false
+
+# ---- Actuator ----
 management:
   endpoints:
     web:
@@ -31,14 +51,17 @@ management:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      show-details: never
+      show-details: never           # Never leak DB credentials in health response
 
+# ---- Logging ----
 logging:
   level:
     com.riskpilot: INFO
     org.springframework.web: WARN
     org.hibernate.SQL: WARN
+    org.flywaydb: INFO
 
+# ---- RiskPilot mode ----
 riskpilot:
   mode: SHADOW
   strict-mode: true
@@ -50,3 +73,5 @@ riskpilot:
     market-data:
       fallback-disabled: true
       mock-disabled: true
+  observer:
+    internal-port: 8766
