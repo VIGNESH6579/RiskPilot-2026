@@ -91,7 +91,8 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
 
   DB_DRIVER="org.postgresql.Driver"
   DB_DIALECT="org.hibernate.dialect.PostgreSQLDialect"
-  DDL_AUTO="validate"
+  # DDL_AUTO="validate"
+  DDL_AUTO="none"  
   FLYWAY_ENABLED="true"
   H2_CONSOLE="false"
 else
