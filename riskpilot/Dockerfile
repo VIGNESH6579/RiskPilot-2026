@@ -32,7 +32,7 @@ COPY start.sh .
 RUN chmod +x start.sh
 
 # Render detects the port automatically from the $PORT env var.
-# We no longer hardcode EXPOSE 8080 8765 to avoid confusion.
+# We use EXPOSE 10000 as a standard default, but the app will bind to $PORT.
 EXPOSE 10000
 
 ENTRYPOINT ["./start.sh"]

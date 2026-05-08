@@ -25,7 +25,7 @@ set -euo pipefail
 # 5. JVM heap tuned: 128m start / 380m max (leaves room for OS + Python + overhead).
 # ============================================================
 
-: "${PORT:=8080}"
+: "${PORT:=10000}"
 : "${SPRING_PROFILES_ACTIVE:=prod}"
 
 echo "[*] RiskPilot starting — profile=${SPRING_PROFILES_ACTIVE} port=${PORT}"

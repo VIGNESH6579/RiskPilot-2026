@@ -16,6 +16,9 @@ services:
     startCommand: "./start.sh"
 
     envVars:
+      - key: PORT
+        value: "10000"
+
       # JVM — tuned for 512 MB Render container
       - key: JAVA_OPTS
         value: "-Xms64m -Xmx256m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:MaxGCPauseMillis=200 -Djava.security.egd=file:/dev/./urandom"
