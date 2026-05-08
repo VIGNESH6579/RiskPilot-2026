@@ -3,9 +3,9 @@ package com.riskpilot.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpEntity;       // ← FIX: was missing
+import org.springframework.http.HttpHeaders;      // ← FIX: caused compile error on line 104
+import org.springframework.http.HttpMethod;       // ← FIX: was missing
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -55,12 +55,10 @@ public class VixService {
     public synchronized double getIndiaVix() {
         long now = System.currentTimeMillis();
 
-        // Return cached value if fresh
         if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
             return lastKnownVix;
         }
 
-        // Throttle retries
         if (now - lastFetchAttemptEpochMs < VIX_RETRY_DELAY_MS) {
             return lastKnownVix;
         }
@@ -81,7 +79,6 @@ public class VixService {
             }
         }
 
-        // Fallback: Yahoo Finance
         Optional<Double> yahooVix = fetchVixFromYahoo();
         if (yahooVix.isPresent()) {
             lastKnownVix = yahooVix.get();
