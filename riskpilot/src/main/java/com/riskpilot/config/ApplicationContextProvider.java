@@ -1,4 +1,4 @@
-﻿package com.riskpilot.config;
+package com.riskpilot.config;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
