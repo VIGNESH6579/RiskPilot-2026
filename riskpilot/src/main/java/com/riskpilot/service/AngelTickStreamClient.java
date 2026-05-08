@@ -30,6 +30,7 @@ public class AngelTickStreamClient {
     private final ShadowExecutionEngine shadowExecutionEngine;
     private final MarketSessionService marketSessionService;
     private final AngelOneMarketDataService angelOneMarketDataService;
+    private final CentralizedMarketDataService centralizedMarketDataService;
     private final RealTimeTickAggregator realTimeTickAggregator;
     
     // BUG-035: Named thread factory for executor
@@ -59,6 +60,7 @@ public class AngelTickStreamClient {
         ShadowExecutionEngine shadowExecutionEngine,
         MarketSessionService marketSessionService,
         AngelOneMarketDataService angelOneMarketDataService,
+        CentralizedMarketDataService centralizedMarketDataService,
         RealTimeTickAggregator realTimeTickAggregator
     ) {
         this.candleAggregator = candleAggregator;
@@ -67,6 +69,7 @@ public class AngelTickStreamClient {
         this.shadowExecutionEngine = shadowExecutionEngine;
         this.marketSessionService = marketSessionService;
         this.angelOneMarketDataService = angelOneMarketDataService;
+        this.centralizedMarketDataService = centralizedMarketDataService;
         this.realTimeTickAggregator = realTimeTickAggregator;
     }
 
@@ -82,8 +85,8 @@ public class AngelTickStreamClient {
             pollerFuture.cancel(false);
         }
 
-        // Poll once per second so the dashboard and candle feed reflect Angel One LTP freshness.
-        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 1, TimeUnit.SECONDS);
+        // Poll once per 2 seconds (was 1s) to reduce session load.
+        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
         log.info("AngelTickStreamClient started with deduplication guard");
     }
 
@@ -94,18 +97,14 @@ public class AngelTickStreamClient {
                 return;
             }
 
-            // Primary: get spot from option chain
-            double spot = 0.0;
-            OptionChainService.OptionChainSnapshot snap = optionChainService.fetchNiftyChain();
-            if (snap != null && snap.spot() > 0.0 && snap.live()) {
-                spot = snap.spot();
-            } else {
-                // Fallback: hit Angel One LTP directly so candles keep building
-                // even when the option chain snapshot is stale or unavailable
+            // Use centralized market data instead of hitting API directly
+            double spot = centralizedMarketDataService.getNiftyLtp();
+            
+            if (spot <= 0.0) {
+                // Last resort fallback: hit Angel One LTP directly if centralized data is empty
                 java.util.Optional<Double> directLtp = angelOneMarketDataService.getNiftyLtp();
                 if (directLtp.isPresent() && directLtp.get() > 0.0) {
                     spot = directLtp.get();
-                    log.debug("AngelTickStreamClient: option chain unavailable, using direct LTP={}", spot);
                 } else {
                     candleAggregator.markUnstable();
                     return;

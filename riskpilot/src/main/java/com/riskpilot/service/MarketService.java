@@ -14,14 +14,17 @@ package com.riskpilot.service;
   public class MarketService {
 
       private final AngelOneMarketDataService angelOneMarketDataService;
+      private final CentralizedMarketDataService centralizedMarketDataService;
       private final OptionChainService optionChainService;
       private final RealTimeTickAggregator realTimeTickAggregator;
 
       public MarketService(
               AngelOneMarketDataService angelOneMarketDataService,
+              CentralizedMarketDataService centralizedMarketDataService,
               OptionChainService optionChainService,
               RealTimeTickAggregator realTimeTickAggregator) {
           this.angelOneMarketDataService = angelOneMarketDataService;
+          this.centralizedMarketDataService = centralizedMarketDataService;
           this.optionChainService = optionChainService;
           this.realTimeTickAggregator = realTimeTickAggregator;
       }
@@ -30,14 +33,23 @@ package com.riskpilot.service;
        * Real-time spot price from Angel One. Throws if unavailable — no silent fallbacks.
        */
       public double getPrice(String symbol) {
-          Optional<Double> ltp;
+          double ltp;
           if ("BANKNIFTY".equalsIgnoreCase(symbol)) {
-              ltp = angelOneMarketDataService.getLtp("NSE", "99926009");
+              ltp = centralizedMarketDataService.getBankNiftyLtp();
+              if (ltp <= 0.0) {
+                  ltp = angelOneMarketDataService.getLtp("NSE", "99926009").orElse(0.0);
+              }
           } else {
-              ltp = angelOneMarketDataService.getNiftyLtp();
+              ltp = centralizedMarketDataService.getNiftyLtp();
+              if (ltp <= 0.0) {
+                  ltp = angelOneMarketDataService.getNiftyLtp().orElse(0.0);
+              }
           }
-          return ltp.orElseThrow(() ->
-              new MarketDataException("LIVE_PRICE_UNAVAILABLE: " + symbol + " — all data sources exhausted"));
+          
+          if (ltp <= 0.0) {
+              throw new MarketDataException("LIVE_PRICE_UNAVAILABLE: " + symbol + " — all data sources exhausted");
+          }
+          return ltp;
       }
 
       /**
@@ -46,9 +58,15 @@ package com.riskpilot.service;
        * Actual slippage is tracked per-trade by the execution engine.
        */
       public double getOptionPrice(String symbol) {
-          Optional<Double> spot = angelOneMarketDataService.getNiftyLtp();
-          return spot.orElseThrow(() ->
-              new MarketDataException("OPTION_PRICE_UNAVAILABLE: " + symbol + " — no live feed"));
+          double spot = centralizedMarketDataService.getNiftyLtp();
+          if (spot <= 0.0) {
+              spot = angelOneMarketDataService.getNiftyLtp().orElse(0.0);
+          }
+          
+          if (spot <= 0.0) {
+              throw new MarketDataException("OPTION_PRICE_UNAVAILABLE: " + symbol + " — no live feed");
+          }
+          return spot;
       }
 
       /**

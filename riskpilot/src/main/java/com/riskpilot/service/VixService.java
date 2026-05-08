@@ -19,6 +19,7 @@ public class VixService {
     private static final long VIX_WARNING_INTERVAL_MS = 300_000L; // Warn every 5 mins
 
     private final AngelOneMarketDataService angelOneMarketDataService;
+    private final CentralizedMarketDataService centralizedMarketDataService;
     private final RestTemplate restTemplate = new RestTemplate();
     private final String indiaVixExchange;
     private final String indiaVixToken;
@@ -34,11 +35,13 @@ public class VixService {
 
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,
+        CentralizedMarketDataService centralizedMarketDataService,
         @Value("${ANGEL_INDIA_VIX_EXCHANGE:NSE}") String indiaVixExchange,
         @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken,
         @Value("${RISK_VIX_FALLBACK:15.0}") double fallbackVix
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
+        this.centralizedMarketDataService = centralizedMarketDataService;
         this.indiaVixExchange = indiaVixExchange == null ? "NSE" : indiaVixExchange.trim();
         this.indiaVixToken = indiaVixToken == null ? "" : indiaVixToken.trim();
         this.fallbackVix = fallbackVix > 0.0 ? fallbackVix : 15.0;
@@ -67,6 +70,8 @@ public class VixService {
             }
             // If token is blank, we can still try Yahoo
         } else {
+            // Try Angel One VIX via centralized market data service if possible, 
+            // but for now, we hit the API directly at a much lower frequency (due to retry guard)
             Optional<Double> fetched = angelOneMarketDataService.getLtp(indiaVixExchange, indiaVixToken);
             if (fetched.isPresent() && fetched.get() > 0.0) {
                 lastKnownVix = fetched.get();
@@ -95,7 +100,12 @@ public class VixService {
 
     private Optional<Double> fetchVixFromYahoo() {
         try {
-            ResponseEntity<String> response = restTemplate.getForEntity(YAHOO_VIX_URL, String.class);
+            // Set User-Agent to avoid 429/403 from Yahoo
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+            org.springframework.http.HttpEntity<String> entity = new org.springframework.http.HttpEntity<>(headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(YAHOO_VIX_URL, org.springframework.http.HttpMethod.GET, entity, String.class);
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 // Quick regex parse for regularMarketPrice in Yahoo JSON
                 Pattern pattern = Pattern.compile("\"regularMarketPrice\":\\s*([0-9.]+)");
