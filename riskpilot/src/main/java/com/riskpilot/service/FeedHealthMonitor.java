@@ -9,7 +9,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** State machine - logs ONLY on transitions (NO SPAM!) */
+/**
+ * State machine - logs ONLY on transitions (NO SPAM!)
+ *
+ * FIX: safety.emergencyStop() now compiles because TradingSafetyManager
+ * gained an emergencyStop() alias that delegates to emergency().
+ * No logic change needed in this file beyond that.
+ */
 @Slf4j
 @Service
 public class FeedHealthMonitor {
@@ -23,7 +29,7 @@ public class FeedHealthMonitor {
 
     @PostConstruct
     public void init() {
-        log.info("FeedHealthMonitor initialized (state machine)");
+        log.info("📡 FeedHealthMonitor initialized (state machine)");
         new Thread(() -> {
             while (true) {
                 try {
@@ -47,7 +53,7 @@ public class FeedHealthMonitor {
     public void onConnect() {
         reconnects.set(0);
         transitionTo("CONNECTED");
-        log.info("WEBSOCKET_CONNECTED");
+        log.info("✅ WEBSOCKET_CONNECTED");
     }
 
     public void onDisconnect() {
@@ -69,11 +75,11 @@ public class FeedHealthMonitor {
         }
     }
 
-    /** KEY FIX: Only logs on ACTUAL state transitions! */
+    /** Only logs on ACTUAL state transitions */
     private synchronized void transitionTo(String newState) {
         String old = state.getAndSet(newState);
         if (!old.equals(newState)) {
-            log.info("FEED_STATE: {} → {} | TickAge: {}ms",
+            log.info("📡 FEED_STATE: {} → {} | TickAge: {}ms",
                 old, newState, System.currentTimeMillis() - lastTick.get());
 
             if (newState.equals("DEGRADED") || newState.equals("DISCONNECTED")) {
@@ -85,13 +91,12 @@ public class FeedHealthMonitor {
     private void scheduleReconnect() {
         int n = reconnects.incrementAndGet();
         if (n > 10) {
-            // FIX: TradingSafetyManager has emergency() not emergencyStop()
-            // emergencyStop() alias is now also available in TradingSafetyManager
+            // FIX: emergencyStop() alias now exists in TradingSafetyManager
             safety.emergencyStop("Reconnect failed " + n + " times");
             return;
         }
         long delay = Math.min(1000L * (long) Math.pow(2, n - 1), 30000L);
-        log.info("Scheduling reconnect #{} in {}ms", n, delay);
+        log.info("🔄 Scheduling reconnect #{} in {}ms", n, delay);
         transitionTo("RECOVERING");
     }
 
