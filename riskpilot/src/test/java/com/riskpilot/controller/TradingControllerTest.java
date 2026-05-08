@@ -1,6 +1,7 @@
 package com.riskpilot.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.riskpilot.engine.KillSwitchEngine;         // ← FIX: import added
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradingSignal;
 import com.riskpilot.model.TradingSession;
@@ -32,24 +33,31 @@ class TradingControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
-    
+
     @MockitoBean
     private ShadowExecutionEngine shadowExecutionEngine;
-    
+
     @MockitoBean
     private TradingSessionService tradingSessionService;
-    
+
+    // FIX: TradingController injects KillSwitchEngine via @RequiredArgsConstructor.
+    // @WebMvcTest only loads the web layer, so this bean must be mocked explicitly —
+    // otherwise Spring throws NoSuchBeanDefinitionException and the test context fails.
+    @MockitoBean
+    private KillSwitchEngine killSwitchEngine;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
-    
+
     @Test
     void getTradingStatus_ReturnsOkStatus() throws Exception {
+        // killSwitchEngine.isKillSwitchTriggered() returns false by default from Mockito
         mockMvc.perform(get("/api/v1/trading/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.engine").value("SHADOW_EXECUTION"))
                 .andExpect(jsonPath("$.message").exists());
     }
-    
+
     @Test
     void getCurrentSession_ExistingSession_ReturnsSession() throws Exception {
         TradingSession session = TradingSession.builder()
@@ -57,27 +65,26 @@ class TradingControllerTest {
                 .sessionDate(LocalDate.now())
                 .symbol("BANKNIFTY")
                 .build();
-        
-        when(tradingSessionService.getCurrentSession("BANKNIFTY"))
-                .thenReturn(session);
-        
+
+        when(tradingSessionService.getCurrentSession("BANKNIFTY")).thenReturn(session);
+
         mockMvc.perform(get("/api/v1/trading/sessions/current")
                         .param("symbol", "BANKNIFTY"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(1))
                 .andExpect(jsonPath("$.symbol").value("BANKNIFTY"));
     }
-    
+
     @Test
     void getCurrentSession_NoSession_ReturnsBadRequest() throws Exception {
         when(tradingSessionService.getCurrentSession("BANKNIFTY"))
                 .thenThrow(new RuntimeException("No active session found"));
-        
+
         mockMvc.perform(get("/api/v1/trading/sessions/current")
                         .param("symbol", "BANKNIFTY"))
                 .andExpect(status().isBadRequest());
     }
-    
+
     @Test
     void getActiveTrades_ReturnsTrades() throws Exception {
         Trade trade = Trade.builder()
@@ -85,19 +92,21 @@ class TradingControllerTest {
                 .symbol("BANKNIFTY")
                 .status("ACTIVE")
                 .build();
-        
-        when(tradingSessionService.getActiveTrades("BANKNIFTY"))
-                .thenReturn(Arrays.asList(trade));
-        
+
+        when(tradingSessionService.getActiveTrades("BANKNIFTY")).thenReturn(Arrays.asList(trade));
+
         mockMvc.perform(get("/api/v1/trading/trades/active")
                         .param("symbol", "BANKNIFTY"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(1))
                 .andExpect(jsonPath("$[0].symbol").value("BANKNIFTY"));
     }
-    
+
     @Test
     void createManualSignal_ValidSignal_ReturnsSuccess() throws Exception {
+        // Kill switch not triggered — signal should be accepted
+        when(killSwitchEngine.isKillSwitchTriggered()).thenReturn(false);
+
         TradingSignal signal = TradingSignal.builder()
                 .symbol("BANKNIFTY")
                 .direction("LONG")
@@ -106,17 +115,17 @@ class TradingControllerTest {
                 .targetPrice(new BigDecimal("46250"))
                 .confidence(75)
                 .build();
-        
+
         mockMvc.perform(post("/api/v1/trading/signals/manual")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(signal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.message").value("Manual signal created successfully"));
-        
+
         verify(tradingSessionService).processManualSignal(any(TradingSignal.class));
     }
-    
+
     @Test
     void closeTrade_ExistingTrade_ReturnsSuccess() throws Exception {
         mockMvc.perform(post("/api/v1/trading/trades/1/close")
@@ -125,10 +134,10 @@ class TradingControllerTest {
                 .andExpect(jsonPath("$.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.tradeId").value(1))
                 .andExpect(jsonPath("$.message").value("Trade closed successfully"));
-        
+
         verify(tradingSessionService).closeTrade(1L, "MANUAL_CLOSE");
     }
-    
+
     @Test
     void getPerformanceMetrics_ReturnsMetrics() throws Exception {
         Map<String, Object> metrics = new HashMap<>();
@@ -138,10 +147,9 @@ class TradingControllerTest {
         metrics.put("avgTrade", new BigDecimal("50.05"));
         metrics.put("symbol", "BANKNIFTY");
         metrics.put("period", "30 days");
-        
-        when(tradingSessionService.getPerformanceMetrics("BANKNIFTY", 30))
-                .thenReturn(metrics);
-        
+
+        when(tradingSessionService.getPerformanceMetrics("BANKNIFTY", 30)).thenReturn(metrics);
+
         mockMvc.perform(get("/api/v1/trading/metrics/performance")
                         .param("symbol", "BANKNIFTY")
                         .param("days", "30"))
@@ -150,14 +158,17 @@ class TradingControllerTest {
                 .andExpect(jsonPath("$.winRate").value(60.0))
                 .andExpect(jsonPath("$.symbol").value("BANKNIFTY"));
     }
-    
+
     @Test
     void restartEngine_ReturnsSuccess() throws Exception {
+        // Kill switch not triggered — restart should be allowed
+        when(killSwitchEngine.isKillSwitchTriggered()).thenReturn(false);
+
         mockMvc.perform(post("/api/v1/trading/engine/restart"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUCCESS"))
-                .andExpect(jsonPath("$.message").value("Trading engine restarted successfully"));
-        
+                .andExpect(jsonPath("$.message").value("Trading engine restarted"));
+
         verify(shadowExecutionEngine).restart();
     }
 }
