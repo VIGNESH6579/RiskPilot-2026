@@ -30,7 +30,7 @@ import java.util.Map;
 public class AngelAuthService {
     private static final Logger log = LoggerFactory.getLogger(AngelAuthService.class);
     private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
-    private static final long AUTH_RETRY_GUARD_MS = 5000L;
+    private static final long AUTH_RETRY_GUARD_MS = 30000L; // Increase guard to 30s to reduce log noise
 
     @Value("${ANGEL_API_KEY:${angelapi.key:}}")
     private String apiKey;
@@ -90,7 +90,10 @@ public class AngelAuthService {
         }
 
         if (now - lastAuthAttemptEpochMs < AUTH_RETRY_GUARD_MS) {
-            log.warn("Angel auth throttled: last attempt was {}ms ago", now - lastAuthAttemptEpochMs);
+            // Only warn if we are NOT authenticated. If we ARE authenticated, just return true silently.
+            if (!isAuthenticated()) {
+                log.warn("Angel auth throttled: last attempt was {}ms ago", now - lastAuthAttemptEpochMs);
+            }
             return isAuthenticated();
         }
         lastAuthAttemptEpochMs = now;

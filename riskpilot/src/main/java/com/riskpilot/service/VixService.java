@@ -14,8 +14,9 @@ import java.util.regex.Pattern;
 @Service
 public class VixService {
     private static final Logger log = LoggerFactory.getLogger(VixService.class);
-    private static final long VIX_CACHE_MS = 20_000L;
-    private static final long VIX_WARNING_INTERVAL_MS = 60_000L;
+    private static final long VIX_CACHE_MS = 300_000L; // 5 minutes cache
+    private static final long VIX_RETRY_DELAY_MS = 60_000L; // Wait 1 min after failure
+    private static final long VIX_WARNING_INTERVAL_MS = 300_000L; // Warn every 5 mins
 
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final RestTemplate restTemplate = new RestTemplate();
@@ -25,6 +26,7 @@ public class VixService {
 
     private double lastKnownVix;
     private long lastSuccessfulFetchEpochMs = 0L;
+    private long lastFetchAttemptEpochMs = 0L;
     private long lastUnavailableWarningEpochMs = 0L;
     private boolean missingTokenWarned = false;
 
@@ -45,26 +47,35 @@ public class VixService {
 
     public synchronized double getIndiaVix() {
         long now = System.currentTimeMillis();
+        
+        // Return cached value if it's fresh enough
         if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
             return lastKnownVix;
         }
+
+        // Prevent spamming requests if we recently failed
+        if (now - lastFetchAttemptEpochMs < VIX_RETRY_DELAY_MS) {
+            return lastKnownVix;
+        }
+        
+        lastFetchAttemptEpochMs = now;
 
         if (indiaVixToken.isBlank()) {
             if (!missingTokenWarned) {
                 log.warn("ANGEL_INDIA_VIX_TOKEN not set: using RISK_VIX_FALLBACK={}", fallbackVix);
                 missingTokenWarned = true;
             }
-            return fallbackVix;
+            // If token is blank, we can still try Yahoo
+        } else {
+            Optional<Double> fetched = angelOneMarketDataService.getLtp(indiaVixExchange, indiaVixToken);
+            if (fetched.isPresent() && fetched.get() > 0.0) {
+                lastKnownVix = fetched.get();
+                lastSuccessfulFetchEpochMs = now;
+                return lastKnownVix;
+            }
         }
 
-        Optional<Double> fetched = angelOneMarketDataService.getLtp(indiaVixExchange, indiaVixToken);
-        if (fetched.isPresent() && fetched.get() > 0.0) {
-            lastKnownVix = fetched.get();
-            lastSuccessfulFetchEpochMs = now;
-            return lastKnownVix;
-        }
-
-        // Angel One VIX failed, try Yahoo Finance as a backup
+        // Angel One VIX failed or token missing, try Yahoo Finance as a backup
         Optional<Double> yahooVix = fetchVixFromYahoo();
         if (yahooVix.isPresent()) {
             lastKnownVix = yahooVix.get();
