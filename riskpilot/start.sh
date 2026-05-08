@@ -73,8 +73,8 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
     # Extract host:port/dbname (everything after @)
     HOSTPATH="${WITHOUT_SCHEME#*@}"
 
-    # Build JDBC URL with SSL (required by Render PostgreSQL)
-    DB_URL="jdbc:postgresql://${HOSTPATH}?sslmode=require"
+    # Build JDBC URL (internal connections don't support SSL)
+    DB_URL="jdbc:postgresql://${HOSTPATH}"
   else
     # Already a JDBC URL — use as-is
     DB_URL="${RAW_URL}"

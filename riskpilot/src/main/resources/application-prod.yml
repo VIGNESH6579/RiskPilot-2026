@@ -19,7 +19,7 @@ spring:
   #     keepalive-time: 60000         # Prevent firewall drops on idle connections
   #     connection-test-query: SELECT 1
 
- datasource:
+  datasource:
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2
