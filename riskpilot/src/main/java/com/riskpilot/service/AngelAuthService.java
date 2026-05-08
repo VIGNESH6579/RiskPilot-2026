@@ -67,6 +67,8 @@ public class AngelAuthService {
     private String currentJwtToken;
     private String currentFeedToken;
     private long lastAuthAttemptEpochMs = 0L;
+    private long lastSuccessfulAuthEpochMs = 0L;
+    private static final long TOKEN_EXPIRY_THRESHOLD_MS = 18 * 60 * 60 * 1000L; // 18 hours
     private volatile String cachedPublicIp;
 
     public AngelAuthService(Environment environment) {
@@ -78,9 +80,18 @@ public class AngelAuthService {
             log.warn("Angel auth skipped: missing credentials");
             return false;
         }
+
         long now = System.currentTimeMillis();
+
+        // If we already have a token and it's not "old", don't re-auth
+        if (isAuthenticated() && (now - lastSuccessfulAuthEpochMs < TOKEN_EXPIRY_THRESHOLD_MS)) {
+            log.debug("Using cached Angel One token (age: {}ms)", now - lastSuccessfulAuthEpochMs);
+            return true;
+        }
+
         if (now - lastAuthAttemptEpochMs < AUTH_RETRY_GUARD_MS) {
-            return currentJwtToken != null && !currentJwtToken.isBlank();
+            log.warn("Angel auth throttled: last attempt was {}ms ago", now - lastAuthAttemptEpochMs);
+            return isAuthenticated();
         }
         lastAuthAttemptEpochMs = now;
 
@@ -293,6 +304,7 @@ public class AngelAuthService {
 
         currentJwtToken = jwt.toString();
         currentFeedToken = feed != null ? feed.toString() : null;
+        lastSuccessfulAuthEpochMs = System.currentTimeMillis();
         log.info("{} success", context);
         return true;
     }
