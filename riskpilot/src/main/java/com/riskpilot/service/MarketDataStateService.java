@@ -2,15 +2,16 @@ package com.riskpilot.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;  // ← FIXED: Java 17 uses JAKARTA, not JAVAX!
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * SINGLE SOURCE OF TRUTH for market data
+ * SINGLE SOURCE OF TRUTH for all market data
  * VIX FIX: NO MORE HARDCODED 15.0!
+ * Compatible with Spring Boot 4.x / Java 17
  */
 @Slf4j
 @Service
@@ -25,7 +26,7 @@ public class MarketDataStateService {
     private static final long MAX_SPOT_STALE_MS = 5000;   // 5 seconds
     private static final long MAX_VIX_STALE_MS = 30000;    // 30 seconds
 
-    @PostConstruct
+    @PostConstruct  // ← FIXED: Now uses jakarta.annotation.PostConstruct
     public void init() {
         log.info("📊 MarketDataStateService initialized (SINGLE source of truth)");
     }
@@ -80,18 +81,13 @@ public class MarketDataStateService {
 
     /**
      * GET VIX - NEVER RETURNS FAKE 15.0!
-     * 
-     * ⚠️ CRITICAL CHANGE:
-     * OLD: return 15.0; // DANGEROUS!
-     * NEW: Throws exception if unavailable/stale - strategy MUST stop trading
+     * Throws exception if unavailable/stale - strategy MUST stop trading
      */
     public double getVix() {
         VixData v = vixData.get();
 
         if (v == null || !v.valid) {
-            log.error("🚨 VIX_UNAVAILABLE");
-            log.error("   ❌ OLD CODE WOULD: return 15.0 (FAKE!)");
-            log.error("   ✅ NEW CODE DOES: Throw exception to prevent unsafe trading");
+            log.error("🚨 VIX_UNAVAILABLE - OLD CODE would return fake 15.0!");
             TradingSafetyManager.getInstance().degrade("VIX unavailable");
             throw new IllegalStateException(
                 "VIX not available - CANNOT trade safely. Strategy must catch exception and HALT.");
@@ -100,8 +96,6 @@ public class MarketDataStateService {
         long age = Instant.now().toEpochMilli() - v.timestamp.toEpochMilli();
         if (age > MAX_VIX_STALE_MS) {
             log.error("🚨 VIX_STALE: {}ms old (max: {}ms)", age, MAX_VIX_STALE_MS);
-            log.error("   ❌ OLD CODE WOULD: Use stale value (DANGEROUS!)");
-            log.error("   ✅ NEW CODE DOES: Block trading until fresh data");
             TradingSafetyManager.getInstance().degrade("VIX stale - blocking trades");
             throw new IllegalStateException(
                 "VIX too stale (" + age + "ms) for safe trading. Max allowed: " + MAX_VIX_STALE_MS + "ms");

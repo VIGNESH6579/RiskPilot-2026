@@ -2,7 +2,7 @@ package com.riskpilot.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;  // ← FIXED: JAKARTA
 import java.time.Instant;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -22,11 +22,10 @@ public class TradingSafetyManager {
     public TradingSafetyManager() { instance = this; }
     public static TradingSafetyManager getInstance() { return instance; }
 
-    @PostConstruct
+    @PostConstruct  // ← FIXED
     public void init() {
         log.info("🛡️ TradingSafetyManager active (FAIL-CLOSED mode)");
         
-        // Background safety monitor
         new Thread(() -> {
             while (true) {
                 try {

@@ -3,7 +3,7 @@ package com.riskpilot.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;  // ← FIXED: JAKARTA not JAVAX
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -20,7 +20,7 @@ public class FeedHealthMonitor {
     private final AtomicLong lastTick = new AtomicLong(0);
     private final AtomicInteger reconnects = new AtomicInteger(0);
 
-    @PostConstruct
+    @PostConstruct  // ← FIXED
     public void init() {
         log.info("📡 FeedHealthMonitor initialized (state machine)");
         new Thread(() -> {
@@ -65,10 +65,7 @@ public class FeedHealthMonitor {
         }
     }
 
-    /**
-     * KEY FIX: Only logs on ACTUAL state transitions!
-     * This eliminates the FEED_RECOVERY spam
-     */
+    /** KEY FIX: Only logs on ACTUAL state transitions! */
     private synchronized void transitionTo(String newState) {
         String old = state.getAndSet(newState);
         if (!old.equals(newState)) {
