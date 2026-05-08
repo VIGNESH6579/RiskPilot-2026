@@ -3,7 +3,8 @@ package com.riskpilot.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import jakarta.annotation.PostConstruct;  // ← FIXED: JAKARTA not JAVAX
+import jakarta.annotation.PostConstruct;
+
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -20,15 +21,18 @@ public class FeedHealthMonitor {
     private final AtomicLong lastTick = new AtomicLong(0);
     private final AtomicInteger reconnects = new AtomicInteger(0);
 
-    @PostConstruct  // ← FIXED
+    @PostConstruct
     public void init() {
-        log.info("📡 FeedHealthMonitor initialized (state machine)");
+        log.info("FeedHealthMonitor initialized (state machine)");
         new Thread(() -> {
             while (true) {
                 try {
                     checkHealth();
                     Thread.sleep(5000);
-                } catch (InterruptedException e) { break; }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }, "FeedMonitor").start();
     }
@@ -43,7 +47,7 @@ public class FeedHealthMonitor {
     public void onConnect() {
         reconnects.set(0);
         transitionTo("CONNECTED");
-        log.info("✅ WEBSOCKET_CONNECTED");
+        log.info("WEBSOCKET_CONNECTED");
     }
 
     public void onDisconnect() {
@@ -54,7 +58,7 @@ public class FeedHealthMonitor {
     private void checkHealth() {
         long age = System.currentTimeMillis() - lastTick.get();
         String s = state.get();
-        
+
         if (age > 30000 && !s.equals("DISCONNECTED")) {
             transitionTo("DISCONNECTED");
             scheduleReconnect();
@@ -69,9 +73,9 @@ public class FeedHealthMonitor {
     private synchronized void transitionTo(String newState) {
         String old = state.getAndSet(newState);
         if (!old.equals(newState)) {
-            log.info("📡 FEED_STATE: {} → {} | TickAge: {}ms", 
+            log.info("FEED_STATE: {} → {} | TickAge: {}ms",
                 old, newState, System.currentTimeMillis() - lastTick.get());
-            
+
             if (newState.equals("DEGRADED") || newState.equals("DISCONNECTED")) {
                 safety.degrade("Feed " + newState);
             }
@@ -80,18 +84,21 @@ public class FeedHealthMonitor {
 
     private void scheduleReconnect() {
         int n = reconnects.incrementAndGet();
-        if (n > 10) { 
-            safety.emergencyStop("Reconnect failed " + n + " times"); 
-            return; 
+        if (n > 10) {
+            // FIX: TradingSafetyManager has emergency() not emergencyStop()
+            // emergencyStop() alias is now also available in TradingSafetyManager
+            safety.emergencyStop("Reconnect failed " + n + " times");
+            return;
         }
-        long delay = Math.min(1000L * (long)Math.pow(2, n-1), 30000L);
-        log.info("🔄 Scheduling reconnect #{} in {}ms", n, delay);
+        long delay = Math.min(1000L * (long) Math.pow(2, n - 1), 30000L);
+        log.info("Scheduling reconnect #{} in {}ms", n, delay);
         transitionTo("RECOVERING");
     }
 
     public String getState() { return state.get(); }
-    public boolean isSafe() { 
-        return state.get().equals("CONNECTED") && 
-               (System.currentTimeMillis()-lastTick.get()) < 15000; 
+
+    public boolean isSafe() {
+        return state.get().equals("CONNECTED")
+            && (System.currentTimeMillis() - lastTick.get()) < 15000;
     }
 }
