@@ -35,7 +35,7 @@ public class VixService {
     private boolean missingTokenWarned = false;
 
     private static final String YAHOO_VIX_URL =
-        "https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1m&range=1d";
+        "https://query1.finance.yahoo.com/v8/finance/chart/^INDIAVIX?interval=1m&range=1d";
 
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,

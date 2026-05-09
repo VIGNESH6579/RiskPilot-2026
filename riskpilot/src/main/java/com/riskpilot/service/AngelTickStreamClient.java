@@ -100,6 +100,14 @@ public class AngelTickStreamClient {
                 return;
             }
 
+            // Automatic Socket Recycling: if no ticks for > 15s during market hours
+            long age = marketDataStateService.getLastTickAgeMs();
+            if (age > 15000) {
+                log.warn("Feed stale ({}ms) - triggering automatic socket recycling", age);
+                resubscribe();
+                return;
+            }
+
             // Use centralized market data instead of hitting API directly
             double spot = centralizedMarketDataService.getNiftyLtp();
             

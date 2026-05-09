@@ -34,8 +34,19 @@ public class TradingSafetyManager {
                     MarketSessionService ms = ApplicationContextProvider.getBean(MarketSessionService.class);
                     
                     if (md != null && (ms == null || ms.isMarketOpen())) {
-                        if (md.getLastTickAgeMs() > 60000) emergency("Market data stale >60s");
-                        else if (md.getLastTickAgeMs() > 30000) degrade("Feed latency >30s");
+                        if (md.getLastTickAgeMs() > 60000) {
+                            emergency("Market data stale >60s");
+                        } else {
+                            if (md.getLastTickAgeMs() > 30000) {
+                                degrade("Feed latency >30s");
+                            }
+                            if (emergency.get()) {
+                                clearEmergency();
+                            }
+                        }
+                    } else if (ms != null && !ms.isMarketOpen() && emergency.get()) {
+                        // Suspend stale-feed checks and clear emergency if market is closed
+                        clearEmergency();
                     }
                     Thread.sleep(1000);
                 } catch (InterruptedException ie) {
@@ -72,11 +83,23 @@ public class TradingSafetyManager {
 
     /** EMERGENCY STOP - halts ALL trading immediately */
     public void emergency(String r) {
-        emergency.set(true);
-        enabled.set(false);
-        reason.set(r);
-        log.error("🚨🚨🚨 EMERGENCY_STOP: {} 🚨🚨🚨", r);
-        log.error("ALL TRADING HALTED IMMEDIATELY");
+        if (emergency.compareAndSet(false, true)) {
+            enabled.set(false);
+            reason.set(r);
+            log.error("🚨🚨🚨 EMERGENCY_STOP ACTIVATED: {} 🚨🚨🚨", r);
+            log.error("ALL TRADING HALTED IMMEDIATELY");
+            
+            // TODO: Flatten positions and cancel orders here for a complete safety system
+        }
+    }
+
+    /** Clear EMERGENCY STOP */
+    public void clearEmergency() {
+        if (emergency.compareAndSet(true, false)) {
+            enabled.set(true);
+            reason.set(null);
+            log.info("✅ EMERGENCY_STOP CLEARED - Trading resumed");
+        }
     }
 
     /**

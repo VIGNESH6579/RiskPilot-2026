@@ -54,27 +54,30 @@ public class HeartbeatMonitor {
     @Scheduled(fixedDelay = 2000)
     public void monitorHealth() {
         if (!marketSessionService.isMarketOpen()) {
-            TradingSessionSnapshot snapshotBeforeClose = stateManager.getSnapshot();
-            candleAggregator.clearFeedInstability();
-            stateManager.update(current -> new TradingSessionSnapshot(
-                false,
-                current.regime(),
-                current.volatilityQualified(),
-                current.timePhase(),
-                current.tradesTaken(),
-                current.tradeActive(),
-                true,
-                true,
-                current.orHigh(),
-                current.orLow(),
-                current.cumulativeDailyLossR(),
-                current.consecutiveLosses(),
-                current.activeTradeReference(),
-                "AWAITING_MARKET_OPEN"
-            ));
-            previousFeedStable = snapshotBeforeClose.feedStable();
-            previousHeartbeatAlive = snapshotBeforeClose.heartbeatAlive();
-            previousLastRejectReason = "AWAITING_MARKET_OPEN";
+            // BUG FIX: Suspend feed/heartbeat checks and stop candle aggregation when market is closed
+            if (!"AWAITING_MARKET_OPEN".equals(previousLastRejectReason)) {
+                log.info("Market closed - suspending feed/heartbeat monitoring");
+                candleAggregator.clearFeedInstability();
+                stateManager.update(current -> new TradingSessionSnapshot(
+                    false, // sessionActive = false
+                    current.regime(),
+                    current.volatilityQualified(),
+                    current.timePhase(),
+                    current.tradesTaken(),
+                    current.tradeActive(),
+                    true,  // feedStable = true (suspended)
+                    true,  // heartbeatAlive = true (suspended)
+                    current.orHigh(),
+                    current.orLow(),
+                    current.cumulativeDailyLossR(),
+                    current.consecutiveLosses(),
+                    current.activeTradeReference(),
+                    "AWAITING_MARKET_OPEN"
+                ));
+                previousFeedStable = true;
+                previousHeartbeatAlive = true;
+                previousLastRejectReason = "AWAITING_MARKET_OPEN";
+            }
             return;
         }
 
