@@ -95,8 +95,8 @@ public class SecurityConfig {
                     "/api/v1/data/**"
                 ).permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/market/**").permitAll()
-                // WebSocket: require authentication
-                .requestMatchers("/ws", "/ws/**", "/stomp", "/stomp/**").authenticated()
+                // WebSocket: public monitoring
+                .requestMatchers("/ws", "/ws/**", "/stomp", "/stomp/**").permitAll()
                 // Trading & engine control: ADMIN only
                 .requestMatchers(HttpMethod.POST,
                     "/api/v1/trading/**", "/api/v1/engine/**"

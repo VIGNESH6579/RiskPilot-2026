@@ -235,14 +235,27 @@
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          const payload = message.eventType && message.payload ? message.payload : message;
-          if (message.eventType && message.eventType !== 'trade') return;
-          if (!payload || !payload.id) return;
-          rows.unshift(payload);
-          if (rows.length > MAX_ROWS) rows.pop();
-          renderRows();
+          const type = message.eventType;
+          const payload = message.payload || message;
+
+          if (type === 'session_state') {
+            // Real-time session state update
+            updateUIFromState(payload);
+          } else if (type === 'trade' || (!type && payload.id)) {
+            // Real-time trade update
+            rows.unshift(payload);
+            if (rows.length > MAX_ROWS) rows.pop();
+            renderRows();
+          }
         } catch (ignored) {}
       };
+
+      function updateUIFromState(state) {
+        els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+        els.regime.textContent = state.regime || '--';
+        els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        els.tradesTaken.textContent = state.tradesTaken ?? 0;
+      }
 
       ws.onerror = () => {
         els.socketStatus.textContent = 'Socket error';

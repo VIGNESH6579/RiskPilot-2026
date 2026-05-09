@@ -22,6 +22,7 @@ public class FeedHealthMonitor {
 
     @Autowired private MarketDataStateService marketData;
     @Autowired private TradingSafetyManager safety;
+    @Autowired private MarketSessionService marketSession;
 
     private final AtomicReference<String> state = new AtomicReference<>("CONNECTING");
     private final AtomicLong lastTick = new AtomicLong(0);
@@ -62,6 +63,13 @@ public class FeedHealthMonitor {
     }
 
     private void checkHealth() {
+        if (!marketSession.isMarketOpen()) {
+            if (!state.get().equals("CONNECTED")) {
+                transitionTo("CONNECTED"); // Fake connected state when market is closed to prevent alerts
+            }
+            return;
+        }
+
         long age = System.currentTimeMillis() - lastTick.get();
         String s = state.get();
 

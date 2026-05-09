@@ -158,7 +158,7 @@ public class CandleAggregator {
     public synchronized void clearFeedInstability() {
         this.feedUnstable = false;
         this.stableSinceTime = null;
-        log.info("Feed instability flag cleared (market closed)");
+        log.info("Feed instability flag cleared");
     }
 
     /**

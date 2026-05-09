@@ -2,6 +2,7 @@ package com.riskpilot.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -85,10 +86,12 @@ public class AngelTickStreamClient {
             pollerFuture.cancel(false);
         }
 
-        // Poll once per 2 seconds (was 1s) to reduce session load.
-        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 2, TimeUnit.SECONDS);
+        // Poll once per 1 second for better real-time data resolution.
+        pollerFuture = poller.scheduleAtFixedRate(this::pollSpotAsTick, 0, 1, TimeUnit.SECONDS);
         log.info("AngelTickStreamClient started with deduplication guard");
     }
+
+    @Autowired private MarketDataStateService marketDataStateService;
 
     private void pollSpotAsTick() {
         try {
@@ -110,6 +113,9 @@ public class AngelTickStreamClient {
                     return;
                 }
             }
+
+            // CRITICAL: Update MarketDataStateService so TradingSafetyManager sees fresh data
+            marketDataStateService.updateNiftyFromWebSocket(spot, 0, 0);
 
             lastSpotValue.set((long) (spot * 100));
             heartbeatMonitor.registerTick();

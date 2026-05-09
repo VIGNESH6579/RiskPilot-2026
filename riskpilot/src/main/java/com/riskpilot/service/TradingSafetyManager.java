@@ -31,7 +31,9 @@ public class TradingSafetyManager {
             while (true) {
                 try {
                     MarketDataStateService md = ApplicationContextProvider.getBean(MarketDataStateService.class);
-                    if (md != null) {
+                    MarketSessionService ms = ApplicationContextProvider.getBean(MarketSessionService.class);
+                    
+                    if (md != null && (ms == null || ms.isMarketOpen())) {
                         if (md.getLastTickAgeMs() > 60000) emergency("Market data stale >60s");
                         else if (md.getLastTickAgeMs() > 30000) degrade("Feed latency >30s");
                     }

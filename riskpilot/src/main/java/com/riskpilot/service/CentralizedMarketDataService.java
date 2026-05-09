@@ -32,10 +32,9 @@ public class CentralizedMarketDataService {
     }
 
     /**
-     * Polls market data every 2 seconds instead of every 1 second.
-     * This reduces the load on the Angel One session and prevents constant re-auth.
+     * Polls market data every 1 second for low-latency updates.
      */
-    @Scheduled(fixedRate = 2000)
+    @Scheduled(fixedRate = 1000)
     public void refreshMarketData() {
         if (!marketSessionService.isMarketOpen()) {
             return;
