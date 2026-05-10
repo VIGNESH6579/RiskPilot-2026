@@ -60,6 +60,7 @@ public class HeartbeatMonitor {
                 // FIX: Only log and clear if we are transitioning to AWAITING_MARKET_OPEN
                 log.info("Market closed - suspending feed/heartbeat monitoring");
                 if (candleAggregator.isFeedUnstable()) {
+                    log.info("Market closed - clearing feed instability");
                     candleAggregator.clearFeedInstability();
                 }
                 stateManager.update(current -> new TradingSessionSnapshot(

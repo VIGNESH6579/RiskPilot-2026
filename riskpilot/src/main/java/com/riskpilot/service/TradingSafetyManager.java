@@ -33,21 +33,22 @@ public class TradingSafetyManager {
                     MarketDataStateService md = ApplicationContextProvider.getBean(MarketDataStateService.class);
                     MarketSessionService ms = ApplicationContextProvider.getBean(MarketSessionService.class);
                     
-                    if (md != null && (ms == null || ms.isMarketOpen())) {
-                        if (md.getLastTickAgeMs() > 60000) {
+                    boolean marketOpen = (ms == null || ms.isMarketOpen());
+                    if (marketOpen) {
+                        if (md != null && md.getLastTickAgeMs() > 60000) {
                             emergency("Market data stale >60s");
                         } else {
-                            if (md.getLastTickAgeMs() > 30000) {
+                            if (md != null && md.getLastTickAgeMs() > 30000) {
                                 degrade("Feed latency >30s");
                             }
-                            // FIX: Only clear emergency if the REASON for emergency was stale market data
+                            // Clear if stale check passed
                             if (emergency.get() && "Market data stale >60s".equals(reason.get())) {
                                 clearEmergency();
                             }
                         }
-                    } else if (ms != null && !ms.isMarketOpen() && emergency.get()) {
-                        // FIX: Only clear emergency if the REASON for emergency was stale market data
-                        if ("Market data stale >60s".equals(reason.get())) {
+                    } else {
+                        // Market closed: clear stale-data emergency if it exists
+                        if (emergency.get() && "Market data stale >60s".equals(reason.get())) {
                             clearEmergency();
                         }
                     }
