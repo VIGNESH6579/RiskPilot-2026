@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
  * 
  * BUG-030: Only broadcasts WebSocket updates on actual state changes (not every heartbeat).
  */
+@lombok.extern.slf4j.Slf4j
 @Service
 public class HeartbeatMonitor {
 
