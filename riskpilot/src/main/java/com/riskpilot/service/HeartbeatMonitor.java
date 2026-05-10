@@ -56,8 +56,11 @@ public class HeartbeatMonitor {
         if (!marketSessionService.isMarketOpen()) {
             // BUG FIX: Suspend feed/heartbeat checks and stop candle aggregation when market is closed
             if (!"AWAITING_MARKET_OPEN".equals(previousLastRejectReason)) {
+                // FIX: Only log and clear if we are transitioning to AWAITING_MARKET_OPEN
                 log.info("Market closed - suspending feed/heartbeat monitoring");
-                candleAggregator.clearFeedInstability();
+                if (candleAggregator.isFeedUnstable()) {
+                    candleAggregator.clearFeedInstability();
+                }
                 stateManager.update(current -> new TradingSessionSnapshot(
                     false, // sessionActive = false
                     current.regime(),

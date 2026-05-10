@@ -111,7 +111,11 @@ public class MarketDataStateService {
                (Instant.now().toEpochMilli() - v.timestamp.toEpochMilli()) <= MAX_VIX_STALE_MS;
     }
 
-    public long getLastTickAgeMs() { return System.currentTimeMillis() - lastTickTime.get(); }
+    public long getLastTickAgeMs() { 
+        long last = lastTickTime.get();
+        if (last == 0) return 0; // If no ticks yet, age is 0 (not stale)
+        return System.currentTimeMillis() - last; 
+    }
     public boolean isFeedHealthy() { return getLastTickAgeMs() < 10000; }
     public void recordTick() { lastTickTime.set(System.currentTimeMillis()); }
 

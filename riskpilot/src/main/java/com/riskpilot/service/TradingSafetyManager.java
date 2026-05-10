@@ -40,13 +40,16 @@ public class TradingSafetyManager {
                             if (md.getLastTickAgeMs() > 30000) {
                                 degrade("Feed latency >30s");
                             }
-                            if (emergency.get()) {
+                            // FIX: Only clear emergency if the REASON for emergency was stale market data
+                            if (emergency.get() && "Market data stale >60s".equals(reason.get())) {
                                 clearEmergency();
                             }
                         }
                     } else if (ms != null && !ms.isMarketOpen() && emergency.get()) {
-                        // Suspend stale-feed checks and clear emergency if market is closed
-                        clearEmergency();
+                        // FIX: Only clear emergency if the REASON for emergency was stale market data
+                        if ("Market data stale >60s".equals(reason.get())) {
+                            clearEmergency();
+                        }
                     }
                     Thread.sleep(1000);
                 } catch (InterruptedException ie) {
