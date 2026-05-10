@@ -81,21 +81,10 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
 
         @Override
         public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-            // Reject unauthenticated connections
-            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-            if (auth == null || !auth.isAuthenticated()
-                    || "anonymousUser".equals(auth.getPrincipal())) {
-                log.warn("Rejected unauthenticated WS connection: id={} remote={}",
-                    session.getId(), session.getRemoteAddress());
-                session.close(CloseStatus.POLICY_VIOLATION);
-                return;
-            }
-
             ConcurrentWebSocketSessionDecorator decorated =
                 new ConcurrentWebSocketSessionDecorator(session, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES);
             SESSIONS.put(session.getId(), decorated);
-            log.info("WS connected: id={} user={} remote={}",
-                session.getId(), auth.getName(), session.getRemoteAddress());
+            log.info("WS connected: id={} remote={}", session.getId(), session.getRemoteAddress());
 
             // Replay last known state on reconnect
             try {
@@ -132,7 +121,7 @@ public class PlainWebSocketConfig implements WebSocketConfigurer {
         }
 
         public static void broadcastSessionState(Object payload) {
-            String msg = serialize("session", payload);
+            String msg = serialize("session_state", payload);
             if (msg != null) lastSessionStateMessage = msg;
             broadcast(msg);
         }

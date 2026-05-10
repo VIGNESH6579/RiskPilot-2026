@@ -251,6 +251,12 @@
       };
 
       function updateUIFromState(state) {
+        if (state.spot > 0) {
+          els.spot.textContent = fmt(state.spot);
+        }
+        if (state.vix > 0) {
+          els.vix.textContent = fmt(state.vix);
+        }
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         els.regime.textContent = state.regime || '--';
         els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';

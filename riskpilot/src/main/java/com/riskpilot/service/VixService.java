@@ -3,6 +3,7 @@ package com.riskpilot.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.http.HttpEntity;       // ← FIX: was missing
 import org.springframework.http.HttpHeaders;      // ← FIX: caused compile error on line 104
 import org.springframework.http.HttpMethod;       // ← FIX: was missing
@@ -52,17 +53,9 @@ public class VixService {
         this.lastKnownVix = this.fallbackVix;
     }
 
-    public synchronized double getIndiaVix() {
+    @Scheduled(fixedDelay = 60_000)
+    public synchronized void refreshVix() {
         long now = System.currentTimeMillis();
-
-        if (now - lastSuccessfulFetchEpochMs < VIX_CACHE_MS && lastKnownVix > 0.0) {
-            return lastKnownVix;
-        }
-
-        if (now - lastFetchAttemptEpochMs < VIX_RETRY_DELAY_MS) {
-            return lastKnownVix;
-        }
-
         lastFetchAttemptEpochMs = now;
 
         if (indiaVixToken.isBlank()) {
@@ -75,7 +68,7 @@ public class VixService {
             if (fetched.isPresent() && fetched.get() > 0.0) {
                 lastKnownVix = fetched.get();
                 lastSuccessfulFetchEpochMs = now;
-                return lastKnownVix;
+                return;
             }
         }
 
@@ -84,7 +77,7 @@ public class VixService {
             lastKnownVix = yahooVix.get();
             lastSuccessfulFetchEpochMs = now;
             log.info("VIX fetched from Yahoo Finance: {}", lastKnownVix);
-            return lastKnownVix;
+            return;
         }
 
         long nowWarn = System.currentTimeMillis();
@@ -92,6 +85,18 @@ public class VixService {
             log.warn("ANGEL_INDIA_VIX_UNAVAILABLE: returning lastKnownVix={}", lastKnownVix);
             lastUnavailableWarningEpochMs = nowWarn;
         }
+    }
+
+    public synchronized double getIndiaVix() {
+        long now = System.currentTimeMillis();
+
+        // If cache is stale and no fetch in progress, trigger one-off fetch or wait for scheduler
+        if (now - lastSuccessfulFetchEpochMs >= VIX_CACHE_MS || lastKnownVix <= 0.0) {
+            if (now - lastFetchAttemptEpochMs >= VIX_RETRY_DELAY_MS) {
+                refreshVix();
+            }
+        }
+
         return lastKnownVix > 0.0 ? lastKnownVix : fallbackVix;
     }
 

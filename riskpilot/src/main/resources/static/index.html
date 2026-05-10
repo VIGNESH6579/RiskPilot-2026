@@ -121,12 +121,19 @@
     ws.onmessage = event => {
       try {
         const message = JSON.parse(event.data);
-        const payload = message.eventType && message.payload ? message.payload : message;
-        if (message.eventType && message.eventType !== 'trade') return;
-        if (!payload || !payload.id) return;
-        rows.unshift(payload);
-        if (rows.length > 50) rows.pop();
-        renderRows();
+        const type = message.eventType;
+        const payload = message.payload || message;
+        if (type === 'session_state') {
+          if (payload.spot > 0) $('spot').textContent = fmt(payload.spot);
+          if (payload.vix > 0) $('vix').textContent = fmt(payload.vix);
+          $('orRange').textContent = `${fmt(payload.orHigh, 0)} / ${fmt(payload.orLow, 0)}`;
+          $('regime').textContent = payload.regime || '--';
+          $('session').textContent = `${payload.sessionActive ? 'Active' : 'Inactive'} | ${payload.tradesTaken ?? 0}`;
+        } else if (type === 'trade' || (!type && payload.id)) {
+          rows.unshift(payload);
+          if (rows.length > 50) rows.pop();
+          renderRows();
+        }
       } catch (ignored) {}
     };
   }

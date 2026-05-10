@@ -94,6 +94,7 @@ public class ShadowExecutionEngine {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         if (!state.tradeActive() || state.activeTradeReference() == null) {
             evaluateLatestClosedCandleSignal();
+            broadcastCurrentSessionState(currentPrice);
             return;
         }
 
@@ -107,7 +108,7 @@ public class ShadowExecutionEngine {
         }
 
         updateActiveTradeState(trade, state.lastRejectReason());
-        broadcastCurrentSessionState();
+        broadcastCurrentSessionState(currentPrice);
     }
 
     private void evaluateLatestClosedCandleSignal() {
@@ -645,6 +646,10 @@ public class ShadowExecutionEngine {
     }
 
     private void broadcastCurrentSessionState() {
+        broadcastCurrentSessionState(0.0);
+    }
+
+    private void broadcastCurrentSessionState(double currentPrice) {
         TradingSessionSnapshot state = stateManager.getSnapshot();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionActive", state.sessionActive());
@@ -661,6 +666,11 @@ public class ShadowExecutionEngine {
         payload.put("lastRejectReason", state.lastRejectReason());
         payload.put("orHigh", state.orHigh());
         payload.put("orLow", state.orLow());
+
+        // Add real-time market data to broadcast
+        payload.put("spot", currentPrice > 0 ? currentPrice : 0.0);
+        payload.put("vix", vixService.getIndiaVix());
+
         webSocketService.sendSessionState(payload);
     }
 
