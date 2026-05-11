@@ -25,7 +25,7 @@ public class FeedHealthMonitor {
     @Autowired private MarketSessionService marketSession;
 
     private final AtomicReference<String> state = new AtomicReference<>("CONNECTING");
-    private final AtomicLong lastTick = new AtomicLong(0);
+    private final AtomicLong lastTick = new AtomicLong(System.currentTimeMillis());
     private final AtomicInteger reconnects = new AtomicInteger(0);
 
     @PostConstruct
@@ -103,7 +103,7 @@ public class FeedHealthMonitor {
             safety.emergencyStop("Reconnect failed " + n + " times");
             return;
         }
-        long delay = Math.min(1000L * (long) Math.pow(2, n - 1), 30000L);
+        long delay = Math.min(5000L * (long) Math.pow(2, n - 1), 60000L); // Start with 5s, cap at 60s
         log.info("🔄 Scheduling reconnect #{} in {}ms", n, delay);
         transitionTo("RECOVERING");
     }

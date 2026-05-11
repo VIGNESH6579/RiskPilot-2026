@@ -20,7 +20,7 @@ public class MarketDataStateService {
     private final AtomicReference<NiftySpot> niftySpot = new AtomicReference<>();
     private final AtomicReference<VixData> vixData = new AtomicReference<>();
     private final ConcurrentHashMap<String, Object> optionChains = new ConcurrentHashMap<>();
-    private final AtomicLong lastTickTime = new AtomicLong(0);
+    private final AtomicLong lastTickTime = new AtomicLong(System.currentTimeMillis());
 
     // Staleness thresholds
     private static final long MAX_SPOT_STALE_MS = 5000;   // 5 seconds
@@ -34,7 +34,7 @@ public class MarketDataStateService {
     /** Update NIFTY from WebSocket tick (PRIMARY source) */
     public void updateNiftyFromWebSocket(double ltp, double chg, double chgPct) {
         niftySpot.set(new NiftySpot(ltp, chg, chgPct, Instant.now(), "WS"));
-        lastTickTime.set(System.currentTimeMillis());
+        lastTickTime.set(Instant.now().toEpochMilli());
     }
 
     /** Update NIFTY from REST fallback (EMERGENCY only) */
@@ -69,7 +69,7 @@ public class MarketDataStateService {
     
     private long getSpotAgeMs() {
         NiftySpot s = niftySpot.get();
-        return s == null ? Long.MAX_VALUE : Instant.now().toEpochMilli() - s.timestamp.toEpochMilli();
+        return s == null ? Long.MAX_VALUE : System.currentTimeMillis() - s.timestamp.toEpochMilli();
     }
 
     // ==================== VIX SYSTEM - CRITICAL FIX ====================

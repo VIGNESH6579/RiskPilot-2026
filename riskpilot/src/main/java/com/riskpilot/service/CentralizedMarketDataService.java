@@ -43,14 +43,17 @@ public class CentralizedMarketDataService {
         try {
             // Fetch NIFTY
             Optional<Double> nifty = angelOneMarketDataService.getNiftyLtp();
-            nifty.ifPresent(niftyLtp::set);
+            if (nifty.isPresent()) {
+                niftyLtp.set(nifty.get());
+                // Fetch BANKNIFTY (optional, but good for completeness)
+                // Optional<Double> bankNifty = angelOneMarketDataService.getLtp("NSE", "99926009");
+                // bankNifty.ifPresent(bankNiftyLtp::set);
 
-            // Fetch BANKNIFTY (optional, but good for completeness)
-            // Optional<Double> bankNifty = angelOneMarketDataService.getLtp("NSE", "99926009");
-            // bankNifty.ifPresent(bankNiftyLtp::set);
-
-            lastUpdateEpochMs.set(System.currentTimeMillis());
-            log.debug("Centralized market data refreshed: NIFTY={}", niftyLtp.get());
+                lastUpdateEpochMs.set(System.currentTimeMillis());
+                log.debug("Centralized market data refreshed: NIFTY={}", niftyLtp.get());
+            } else {
+                log.warn("NIFTY LTP not available from Angel One, skipping update of lastUpdateEpochMs");
+            }
         } catch (Exception e) {
             log.warn("Centralized market data refresh failed: {}", e.getMessage());
         }

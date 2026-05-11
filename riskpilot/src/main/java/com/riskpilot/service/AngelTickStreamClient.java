@@ -110,6 +110,13 @@ public class AngelTickStreamClient {
 
             // Use centralized market data instead of hitting API directly
             double spot = centralizedMarketDataService.getNiftyLtp();
+
+            // Only process if centralized data is fresh
+            if (!centralizedMarketDataService.isDataFresh()) {
+                log.warn("Centralized market data is stale, skipping tick processing.");
+                candleAggregator.markUnstable();
+                return;
+            }
             
             if (spot <= 0.0) {
                 // Last resort fallback: hit Angel One LTP directly if centralized data is empty
