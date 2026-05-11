@@ -121,7 +121,7 @@ public class RiskPilotProperties {
         @Data
         public static class MarketData {
             private long cacheTtlSeconds = 5;
-            private long refreshIntervalSeconds = 2;
+            private long refreshIntervalSeconds = 1;
             private boolean fallbackDisabled = true;  // NO FALLBACKS
             private boolean mockDisabled = true;     // NO MOCKS
         }

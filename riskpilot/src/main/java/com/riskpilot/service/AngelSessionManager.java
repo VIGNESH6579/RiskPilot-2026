@@ -150,6 +150,7 @@ public class AngelSessionManager {
 
     public boolean isSessionValid() {
         SessionState state = sessionState.get();
+        if (state == null) return false;
         return state.isValid && state.expiry != null && Instant.now().isBefore(state.expiry);
     }
 
