@@ -77,7 +77,8 @@ public class HeartbeatMonitor {
                     current.cumulativeDailyLossR(),
                     current.consecutiveLosses(),
                     current.activeTradeReference(),
-                    "AWAITING_MARKET_OPEN"
+                    "AWAITING_MARKET_OPEN",
+                    current.paperBalance()
                 ));
                 previousFeedStable = true;
                 previousHeartbeatAlive = true;
@@ -116,7 +117,8 @@ public class HeartbeatMonitor {
                     current.cumulativeDailyLossR(),
                     current.consecutiveLosses(),
                     current.activeTradeReference(),
-                    newRejectReason
+                    newRejectReason,
+                    current.paperBalance()
                 ));
             }
             
@@ -151,7 +153,8 @@ public class HeartbeatMonitor {
                     current.cumulativeDailyLossR(),
                     current.consecutiveLosses(),
                     null,   // active trade reference cleared
-                    newRejectReason
+                    newRejectReason,
+                    current.paperBalance()
                 ));
             }
             
@@ -185,7 +188,8 @@ public class HeartbeatMonitor {
                     current.cumulativeDailyLossR(),
                     current.consecutiveLosses(),
                     current.activeTradeReference(),
-                    newRejectReason
+                    newRejectReason,
+                    current.paperBalance()
                 ));
             }
             

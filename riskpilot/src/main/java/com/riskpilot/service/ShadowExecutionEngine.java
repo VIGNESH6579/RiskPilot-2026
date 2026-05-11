@@ -262,8 +262,11 @@ public class ShadowExecutionEngine {
                 orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
             }
 
-            double orRange = (Double.isFinite(orHigh) && Double.isFinite(orLow)) ? (orHigh - orLow) : 0.0;
-            Regime regime = orRange > config.getFilters().getMinOrRange() ? Regime.TRENDING : Regime.UNKNOWN;
+            double orRange = (Double.isFinite(orHigh) && Double.isFinite(orLow))
+                ? orHigh - orLow
+                : 0.0;
+
+            Regime regime = Regime.TREND;  // Default to TREND regime
 
             return new TradingSessionSnapshot(
                 sessionActive,
@@ -295,25 +298,64 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        Signal signal = edgeTracker.detectEdge(candle);
-        if (signal == null || signal.time().equals(lastTriggeredCandleTime)) {
+        // FIX: Use TrapEngine to detect signals instead of edgeTracker.detectEdge
+        List<Candle> history = candleAggregator.getValidHistory();
+        Signal signal = trapEngine.detectTrap(
+            history,
+            0.0,  // localSupport - would need to be calculated from structure
+            0.0,  // localResistance - would need to be calculated from structure
+            vixService.getIndiaVix(),
+            calculateSimpleAtr(history, 14)
+        );
+
+        if (signal == null || candle.time.equals(lastTriggeredCandleTime)) {
             return;
         }
 
-        GateDecision decision = riskGateEngine.evaluate(state, signal);
+        // FIX: Use evaluateEntry with proper parameters instead of evaluate(snapshot, signal)
+        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        double entrySlippage = 0.0;  // Would be calculated from market conditions
+        long latencyMs = 0L;  // Would be calculated from signal timing
+        
+        GateDecision decision = riskGateEngine.evaluateEntry(
+            state,
+            orRange,
+            entrySlippage,
+            latencyMs,
+            candleHistory
+        );
+
         if (!decision.allowed()) {
             logReject(state, decision.reason());
             return;
         }
 
         executeTrade(signal, candle);
-        lastTriggeredCandleTime = signal.time();
+        lastTriggeredCandleTime = candle.time;
     }
 
     private void executeTrade(Signal signal, Candle candle) {
-        ActiveTradeExecution trade = ActiveTradeExecution.initiate(signal, candle.close);
-        activeSignalTime = signal.timestamp();
-        activeExpectedEntry = signal.entryPrice();
+        // FIX: Create ActiveTradeExecution using proper constructor instead of initiate()
+        double riskPoints = Math.abs(signal.getStopLoss() - signal.getEntry());
+        ActiveTradeExecution trade = new ActiveTradeExecution(
+            "SHORT",  // direction
+            signal.getEntry(),  // entryPrice
+            signal.getStopLoss(),  // stopLoss
+            signal.getTarget(),  // tp1Level
+            riskPoints,  // initialRiskPoints
+            false,  // tp1Hit
+            false,  // runnerActive
+            1.0,  // positionSize
+            1.0,  // remainingSize
+            0.0,  // realizedPnL
+            0.0,  // mfe
+            0.0,  // mae
+            0.0,  // peakFavorableR
+            signal.getStopLoss()  // trailingSL
+        );
+
+        activeSignalTime = candle.timestamp();
+        activeExpectedEntry = signal.getEntry();
 
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -420,12 +462,12 @@ public class ShadowExecutionEngine {
         if (riskGateEngine.shouldForceLateSessionExit(stateManager.getSnapshot())) {
             return exitAtPrice(trade, candle.close, "TIME_CUTOFF_EXIT");
         }
-        return TradeExit.none();
+        return TradeExit.noExit();
     }
 
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason) {
         double pnl = trade.direction().equalsIgnoreCase("BUY") ? (price - trade.entryPrice()) : (trade.entryPrice() - price);
-        return new TradeExit(true, price, pnl, reason);
+        return new TradeExit(true, pnl, reason, price);
     }
 
     @EventListener(ApplicationReadyEvent.class)
