@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
-import java.time.Duration;
+
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -130,6 +130,10 @@ public class AngelTickStreamClient {
     }
 
     private boolean transitionState(FeedConnectionState expected, FeedConnectionState next) {
+        if (!expected.canTransitionTo(next)) {
+            log.warn("⛔ INVALID_TRANSITION: {} -> {} (not allowed)", expected, next);
+            return false;
+        }
         boolean success = state.compareAndSet(expected, next);
         if (success) {
             log.info("🔄 STATE_TRANSITION: {} -> {}", expected, next);

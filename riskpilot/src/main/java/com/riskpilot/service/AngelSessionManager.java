@@ -121,7 +121,7 @@ public class AngelSessionManager {
     @Scheduled(fixedRate = 60000)
     public void checkAndRefreshIfNeeded() {
         SessionState current = sessionState.get();
-        if (!current.isValid || current.expiry == null) return;
+        if (current == null || !current.isValid || current.expiry == null) return;
 
         // FIX: Instant has no minusMinutes() — use minus(long, ChronoUnit)
         Instant refreshThreshold = current.expiry.minus(refreshBeforeExpiryMinutes, ChronoUnit.MINUTES);
@@ -134,7 +134,7 @@ public class AngelSessionManager {
 
     public String getJwtToken() {
         SessionState state = sessionState.get();
-        if (!state.isValid || state.jwtToken == null) {
+        if (state == null || !state.isValid || state.jwtToken == null) {
             throw new IllegalStateException("No valid session available");
         }
         return state.jwtToken;
@@ -142,7 +142,7 @@ public class AngelSessionManager {
 
     public String getFeedToken() {
         SessionState state = sessionState.get();
-        if (!state.isValid || state.feedToken == null) {
+        if (state == null || !state.isValid || state.feedToken == null) {
             throw new IllegalStateException("No valid feed token available");
         }
         return state.feedToken;
@@ -155,7 +155,9 @@ public class AngelSessionManager {
     }
 
     public SessionHealth getHealth() {
-        return new SessionHealth(isSessionValid(), consecutiveFailures, sessionState.get().expiry);
+        SessionState current = sessionState.get();
+        Instant expiry = (current != null) ? current.expiry : null;
+        return new SessionHealth(isSessionValid(), consecutiveFailures, expiry);
     }
 
     // ── Immutable DTOs ───────────────────────────────────────────────────────────
