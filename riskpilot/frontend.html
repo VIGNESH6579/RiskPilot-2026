@@ -112,8 +112,8 @@
       <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
       <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
       <div class="card"><div class="label">Session</div><div id="session" class="value small">--</div></div>
+      <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">₹--</div></div>
       <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value">0</div></div>
-      <div class="card"><div class="label">Candles</div><div id="candles" class="value">0</div></div>
     </section>
 
     <section class="table-wrap">
@@ -158,8 +158,8 @@
       orRange: document.getElementById('orRange'),
       regime: document.getElementById('regime'),
       session: document.getElementById('session'),
+      paperBalance: document.getElementById('paperBalance'),
       tradesTaken: document.getElementById('tradesTaken'),
-      candles: document.getElementById('candles'),
       rows: document.getElementById('rows')
     };
 
@@ -175,6 +175,10 @@
       return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '--';
     }
 
+    function fmtCurrency(v) {
+      return typeof v === 'number' && Number.isFinite(v) ? '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '₹--';
+    }
+
     function setClass(el, cls) {
       el.classList.remove('good', 'warn', 'bad', 'muted');
       if (cls) el.classList.add(cls);
@@ -182,10 +186,9 @@
 
     async function refreshLiveData() {
       try {
-        const [health, state, candles] = await Promise.all([
+        const [health, state] = await Promise.all([
           fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
+          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
         ]);
 
         const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
@@ -211,8 +214,8 @@
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         els.regime.textContent = state.regime || '--';
         els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
-        els.candles.textContent = candles.candleHistorySize ?? 0;
 
         setClass(els.source, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
         setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
@@ -260,6 +263,7 @@
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         els.regime.textContent = state.regime || '--';
         els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
       }
 

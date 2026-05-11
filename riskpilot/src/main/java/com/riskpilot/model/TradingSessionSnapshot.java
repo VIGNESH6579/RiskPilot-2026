@@ -17,7 +17,8 @@ public record TradingSessionSnapshot(
     double cumulativeDailyLossR,
     int consecutiveLosses,
     ActiveTradeExecution activeTradeReference,
-    String lastRejectReason
+    String lastRejectReason,
+    double paperBalance
 ) {
     public static TradingSessionSnapshot initial() {
         return new TradingSessionSnapshot(
@@ -34,7 +35,8 @@ public record TradingSessionSnapshot(
             0.0,
             0,
             null,
-            "INITIALIZED"
+            "INITIALIZED",
+            500000.0 // Initial paper balance: 5 Lakh
         );
     }
 
@@ -52,4 +54,5 @@ public record TradingSessionSnapshot(
     public int getConsecutiveLosses() { return consecutiveLosses; }
     public ActiveTradeExecution getActiveTradeReference() { return activeTradeReference; }
     public String getLastRejectReason() { return lastRejectReason; }
+    public double getPaperBalance() { return paperBalance; }
 }

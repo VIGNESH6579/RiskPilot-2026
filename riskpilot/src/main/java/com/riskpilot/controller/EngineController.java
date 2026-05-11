@@ -52,6 +52,7 @@ public class EngineController {
         state.put("timePhase", snapshot.timePhase().name());
         state.put("orHigh", Double.isFinite(snapshot.orHigh()) ? snapshot.orHigh() : null);
         state.put("orLow", Double.isFinite(snapshot.orLow()) ? snapshot.orLow() : null);
+        state.put("paperBalance", snapshot.paperBalance());
         state.put("marketOpen", marketOpen);
         state.put("marketDataSource", marketSnapshot.source());
         state.put("marketDataLive", marketSnapshot.live());

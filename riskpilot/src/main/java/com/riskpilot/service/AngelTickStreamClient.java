@@ -100,9 +100,10 @@ public class AngelTickStreamClient {
                 return;
             }
 
-            // Automatic Socket Recycling: if no ticks for > 15s during market hours
+            // Automatic Socket Recycling: if no ticks for > 45s during market hours
+            // Relaxed from 15s to 45s to reduce recycling frequency
             long age = marketDataStateService.getLastTickAgeMs();
-            if (age > 15000) {
+            if (age > 45000) {
                 log.warn("Feed stale ({}ms) - triggering automatic socket recycling", age);
                 resubscribe();
                 return;
