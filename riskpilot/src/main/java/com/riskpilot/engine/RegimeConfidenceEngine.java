@@ -63,6 +63,22 @@ public class RegimeConfidenceEngine {
      */
     public RegimeScore evaluate(TradingSessionSnapshot state, List<CandleData> candles) {
         ComponentScores components = calculateComponents(state, candles);
+        
+        // BUG-FIX: If we have very few candles (< 5), we shouldn't return a 0 score (which blocks trading).
+        // Instead, we use median/default scores for technical components to allow early-session trading
+        // if the OR range itself is valid.
+        if (candles.size() < 5) {
+            log.info("Insufficient candle data ({}) - using median scores for technical components", candles.size());
+            components = new ComponentScores(
+                components.getOrRangeScore(),
+                12, // Median breakout follow (max 20)
+                8,  // Median volatility expansion (max 15)
+                8,  // Median market efficiency (max 15)
+                10, // Median fake breakout (max 15)
+                5   // Median early momentum (max 10)
+            );
+        }
+
         int totalScore = components.getOrRangeScore() + components.getBreakoutFollowScore() + 
                         components.getVolatilityExpansionScore() + components.getMarketEfficiencyScore() + 
                         components.getFakeBreakoutScore() + components.getEarlyMomentumScore();

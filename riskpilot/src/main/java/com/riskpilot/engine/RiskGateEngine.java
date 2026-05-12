@@ -78,10 +78,20 @@ public class RiskGateEngine {
             candleData == null ? List.of() : candleData;
         RegimeConfidenceEngine.RegimeScore regimeScore = regimeConfidenceEngine.evaluate(s, confidenceCandles);
 
-        if (!regimeScore.isTradingAllowed()) {
+        // BUG-FIX: Early session bypass (before 9:50 AM IST)
+        // If we are very early in the session and have a valid OR range, we allow trading
+        // even if technical confidence scores are still building up.
+        java.time.LocalTime now = java.time.LocalTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+        boolean earlySessionBypass = now.isBefore(java.time.LocalTime.of(9, 50)) && 
+                                   Double.isFinite(orRange) && orRange >= config.getFilters().getMinOrRange();
+
+        if (!regimeScore.isTradingAllowed() && !earlySessionBypass) {
             log.error("🚫 REGIME_CONFIDENCE_BLOCKED: Score={}, Reason={}",
                     regimeScore.getTotalScore(), regimeScore.getReason());
             return reject("LOW_CONFIDENCE_DAY");
+        } else if (earlySessionBypass && !regimeScore.isTradingAllowed()) {
+            log.info("⚠️ REGIME_CONFIDENCE_LOW ({}) but EARLY_SESSION_BYPASS active - allowing trade", 
+                    regimeScore.getTotalScore());
         }
 
         // -------------------------

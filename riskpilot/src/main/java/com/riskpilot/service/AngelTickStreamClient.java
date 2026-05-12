@@ -36,12 +36,14 @@ public class AngelTickStreamClient {
     private final RealTimeTickAggregator realTimeTickAggregator;
     
     @Autowired private MarketDataStateService marketDataStateService;
+    @Autowired private WebSocketService webSocketService;
 
     // State Machine
     private final AtomicReference<FeedConnectionState> state = new AtomicReference<>(FeedConnectionState.DISCONNECTED);
     private final AtomicBoolean reconnectInProgress = new AtomicBoolean(false);
     private final AtomicLong lastReconnectAttempt = new AtomicLong(0);
     private final AtomicLong reconnectCounter = new AtomicLong(0);
+    private final AtomicLong consecutiveTickErrors = new AtomicLong(0);
     
     // Backoff settings
     private static final long[] BACKOFF_SCHEDULE = {1000, 2000, 5000, 10000, 30000, 60000};
@@ -192,10 +194,23 @@ public class AngelTickStreamClient {
                 shadowExecutionEngine.evaluateCandleClose();
             }
             lastCandleSlot = currentSlot;
+            
+            // Reset consecutive errors on success
+            consecutiveTickErrors.set(0);
 
         } catch (Exception e) {
-            log.error("Tick polling error: {}", e.getMessage());
+            long errors = consecutiveTickErrors.incrementAndGet();
+            log.error("Tick polling error (#{}): {}", errors, e.getMessage());
             candleAggregator.markUnstable();
+            
+            if (errors >= 10) {
+                log.warn("High consecutive tick errors (10+) - broadcasting warning");
+                webSocketService.sendSessionState(Map.of(
+                    "type", "FEED_ERROR_CRITICAL",
+                    "consecutiveErrors", errors,
+                    "message", "High frequency of tick polling errors detected"
+                ));
+            }
         }
     }
 

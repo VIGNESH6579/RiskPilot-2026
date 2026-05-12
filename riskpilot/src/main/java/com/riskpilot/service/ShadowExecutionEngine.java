@@ -300,11 +300,18 @@ public class ShadowExecutionEngine {
 
         // FIX: Use TrapEngine to detect signals instead of edgeTracker.detectEdge
         List<Candle> history = candleAggregator.getValidHistory();
+        double currentVix = 15.0; // Fallback
+        try {
+            currentVix = vixService.getIndiaVix();
+        } catch (Exception e) {
+            log.warn("VixService.getIndiaVix() failed, using fallback: {}", e.getMessage());
+        }
+
         Signal signal = trapEngine.detectTrap(
             history,
             0.0,  // localSupport - would need to be calculated from structure
             0.0,  // localResistance - would need to be calculated from structure
-            vixService.getIndiaVix(),
+            currentVix,
             calculateSimpleAtr(history, 14)
         );
 

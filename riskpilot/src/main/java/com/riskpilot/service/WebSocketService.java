@@ -20,4 +20,14 @@ public class WebSocketService {
     public void sendTradeExecution(Map<String, Object> tradeData) {
         PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastTradeData(tradeData);
     }
+
+    public void broadcastKillSwitchExit(String reason, int countdownSeconds) {
+        Map<String, Object> payload = Map.of(
+            "type", "KILL_SWITCH_EXIT",
+            "reason", reason,
+            "countdown", countdownSeconds,
+            "timestamp", java.time.Instant.now().toString()
+        );
+        PlainWebSocketConfig.TradeDataWebSocketHandler.broadcastEvent("system_exit", payload);
+    }
 }

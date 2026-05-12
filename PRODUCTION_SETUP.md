@@ -24,8 +24,9 @@ ANGEL_TOTP_SECRET=your_totp_secret
 ANGEL_CLIENT_PUBLIC_IP=your_broker_registered_public_ip
 ANGEL_INDIA_VIX_TOKEN=your_angel_india_vix_token_optional
 RISKPILOT_NTFY_TOPIC=riskpilot-live-signals
-OBSERVER_PORT=8765
+OBSERVER_PORT=8766
 OBSERVER_HOST=127.0.0.1
+RISKPILOT_EXIT_ON_KILL_SWITCH=true
 JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
 ```
 
@@ -107,3 +108,4 @@ Expected response:
 - [ ] UptimeRobot monitor created and active
 - [ ] ntfy.sh topic subscribed
 - [ ] Frontend dashboard accessible
+- [ ] Review `KNOWN_ISSUES.md` for operational characteristics

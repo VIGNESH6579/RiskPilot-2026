@@ -158,7 +158,13 @@ public class TradingController {
     @GetMapping("/kill-switch/state")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Object> getKillSwitchState() {
-        return ResponseEntity.ok(killSwitchEngine.getCurrentState());
+        var state = killSwitchEngine.getCurrentState();
+        Map<String, Object> response = new HashMap<>();
+        response.put("triggered", state.isTriggered());
+        response.put("reasons", state.getReasons());
+        response.put("timestamp", state.getTimestamp());
+        response.put("containerWillExit", state.isTriggered()); // If triggered, lifecycle will exit
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/kill-switch/clear")
