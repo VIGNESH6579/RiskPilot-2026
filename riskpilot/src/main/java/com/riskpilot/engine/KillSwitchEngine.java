@@ -230,6 +230,10 @@ public class KillSwitchEngine {
             this.reasons = new ArrayList<>(reasons);
             this.timestamp = timestamp;
         }
+
+        public String getReason() {
+            return reasons.isEmpty() ? "Unknown" : String.join(", ", reasons);
+        }
     }
 
     @Data
