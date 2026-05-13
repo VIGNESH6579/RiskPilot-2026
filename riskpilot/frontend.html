@@ -212,8 +212,18 @@
           ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
           : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        els.regime.textContent = state.regime || '--';
-        els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        // Regime: translate UNKNOWN → friendly label based on market state
+        const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
+          ? (marketClosed ? 'Market Closed' : 'Assessing…')
+          : state.regime;
+        els.regime.textContent = regimeLabel;
+        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        // Session: show "Market Closed" when inactive due to closed market, not a fault
+        const sessionLabel = state.sessionActive
+          ? 'Active'
+          : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
+        els.session.textContent = sessionLabel;
+        setClass(els.session, state.sessionActive ? 'good' : (marketClosed ? 'muted' : 'bad'));
         els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
 
@@ -261,8 +271,18 @@
           els.vix.textContent = fmt(state.vix);
         }
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        els.regime.textContent = state.regime || '--';
-        els.session.textContent = state.sessionActive ? 'Active' : 'Inactive';
+        // Regime: translate UNKNOWN → friendly label
+        const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
+          ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
+          : state.regime;
+        els.regime.textContent = wsRegimeLabel;
+        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        // Session: show context-aware label
+        const wsSessionLabel = state.sessionActive
+          ? 'Active'
+          : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
+        els.session.textContent = wsSessionLabel;
+        setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
         els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
       }

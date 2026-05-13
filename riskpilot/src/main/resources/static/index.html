@@ -99,8 +99,15 @@
       $('freshness').textContent = freshness;
       $('range').textContent = health.spot > 0 ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
       $('orRange').textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-      $('regime').textContent = state.regime || '--';
-      $('session').textContent = `${state.sessionActive ? 'Active' : 'Inactive'} | ${candles.candleHistorySize ?? 0}`;
+      const regimeLbl = (!state.regime || state.regime === 'UNKNOWN')
+        ? (marketClosed ? 'Market Closed' : 'Assessing…')
+        : state.regime;
+      $('regime').textContent = regimeLbl;
+      cls($('regime'), state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+      const sessionLbl = state.sessionActive
+        ? 'Active'
+        : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
+      $('session').textContent = `${sessionLbl} | ${candles.candleHistorySize ?? 0}`;
       cls($('freshness'), live ? 'good' : (marketClosed ? 'warn' : 'bad'));
     } catch (e) {
       $('freshness').textContent = 'Market API down';
@@ -127,8 +134,15 @@
           if (payload.spot > 0) $('spot').textContent = fmt(payload.spot);
           if (payload.vix > 0) $('vix').textContent = fmt(payload.vix);
           $('orRange').textContent = `${fmt(payload.orHigh, 0)} / ${fmt(payload.orLow, 0)}`;
-          $('regime').textContent = payload.regime || '--';
-          $('session').textContent = `${payload.sessionActive ? 'Active' : 'Inactive'} | ${payload.tradesTaken ?? 0}`;
+          const wsRegime = (!payload.regime || payload.regime === 'UNKNOWN')
+            ? (payload.marketOpen === false ? 'Market Closed' : 'Assessing…')
+            : payload.regime;
+          $('regime').textContent = wsRegime;
+          cls($('regime'), payload.regime === 'TREND' ? 'good' : (payload.regime === 'BLOCKED' ? 'bad' : 'warn'));
+          const wsSession = payload.sessionActive
+            ? 'Active'
+            : (payload.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
+          $('session').textContent = `${wsSession} | ${payload.tradesTaken ?? 0}`;
         } else if (type === 'trade' || (!type && payload.id)) {
           rows.unshift(payload);
           if (rows.length > 50) rows.pop();

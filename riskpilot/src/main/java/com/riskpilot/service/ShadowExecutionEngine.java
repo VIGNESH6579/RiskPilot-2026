@@ -249,8 +249,18 @@ public class ShadowExecutionEngine {
             ? TimePhase.EARLY
             : (now.isBefore(LocalTime.of(13, 30)) ? TimePhase.MID : TimePhase.LATE);
 
+        // Resolve regime from RegimeFilter (actual market-structure analysis)
+        // Fall back to existing snapshot regime so we never regress to UNKNOWN once assessed
+        RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
+        final Regime resolvedRegime;
+        if (regimeMetrics != null) {
+            resolvedRegime = regimeMetrics.isTradingAllowed() ? Regime.TREND : Regime.CHOP;
+        } else {
+            // No candle data yet — will be set properly once ticks arrive; keep existing
+            resolvedRegime = null; // sentinel: resolved inside lambda from current
+        }
+
         stateManager.update(current -> {
-            // FIX: Use marketSessionService to determine session activity
             boolean sessionActive = marketSessionService.isMarketOpen();
             double orHigh = current.orHigh();
             double orLow = current.orLow();
@@ -262,11 +272,11 @@ public class ShadowExecutionEngine {
                 orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
             }
 
-            double orRange = (Double.isFinite(orHigh) && Double.isFinite(orLow))
-                ? orHigh - orLow
-                : 0.0;
-
-            Regime regime = Regime.TREND;  // Default to TREND regime
+            // Use resolved regime; if regimeFilter has no data yet, keep whatever the snapshot
+            // already has (TREND/CHOP from a prior tick), falling back to CHOP (not UNKNOWN)
+            Regime regime = resolvedRegime != null
+                ? resolvedRegime
+                : (current.regime() != Regime.UNKNOWN ? current.regime() : Regime.CHOP);
 
             return new TradingSessionSnapshot(
                 sessionActive,
@@ -286,6 +296,24 @@ public class ShadowExecutionEngine {
                 current.paperBalance()
             );
         });
+    }
+
+    /**
+     * Scheduled heartbeat that keeps session state fresh even when no Angel One ticks
+     * are arriving (outside market hours or during feed gaps). Runs every 10 seconds.
+     * Without this, the session stays as the initial snapshot (sessionActive=false,
+     * regime=UNKNOWN) whenever the tick poller produces no data.
+     */
+    @Scheduled(fixedDelay = 10_000)
+    public synchronized void refreshSessionStatePeriodically() {
+        LocalTime now = marketSessionService.nowIst().toLocalTime();
+        // Only update from this path if no trade is currently active (tick path takes priority)
+        TradingSessionSnapshot current = stateManager.getSnapshot();
+        if (current.tradeActive()) {
+            return; // tick-level path is handling it
+        }
+        updateSessionStateFromTime(now);
+        broadcastCurrentSessionState();
     }
 
     private void evaluateSignalIfEligible(Candle candle, TradingSessionSnapshot state) {
@@ -590,6 +618,7 @@ public class ShadowExecutionEngine {
         // Add real-time market data to broadcast
         payload.put("spot", currentPrice > 0 ? currentPrice : 0.0);
         payload.put("vix", vixService.getIndiaVix());
+        payload.put("marketOpen", marketSessionService.isMarketOpen());
 
         webSocketService.sendSessionState(payload);
     }
