@@ -1,6 +1,7 @@
 package com.riskpilot.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -26,8 +27,8 @@ import java.util.concurrent.locks.ReentrantLock;
 @Service
 public class AngelSessionManager {
 
-    // FIX: removed @Autowired RestTemplate — no @Bean RestTemplate exists in the project.
-    // Use new RestTemplate() locally if HTTP calls are needed in attemptLogin().
+    @Autowired(required = false)
+    private AngelAuthService angelAuthService;
 
     @Value("${angel.api.url:https://apiconnect.angelone.co.in}")
     private String apiUrl;
@@ -70,10 +71,20 @@ public class AngelSessionManager {
             boolean loginSuccess = attemptLogin();
 
             if (loginSuccess) {
+                String jwtToken = "simulated-jwt-token";
+                String feedToken = "simulated-feed-token";
+                String clientCode = "client-code";
+                
+                if (angelAuthService != null && angelAuthService.isAuthenticated()) {
+                    jwtToken = angelAuthService.getJwtToken();
+                    feedToken = angelAuthService.getFeedToken();
+                    clientCode = angelAuthService.getClientCode();
+                }
+                
                 SessionState newState = new SessionState(
-                    "simulated-jwt-token",
-                    "simulated-feed-token",
-                    "client-code",
+                    jwtToken,
+                    feedToken,
+                    clientCode,
                     Instant.now().plusSeconds(3600),
                     true
                 );
@@ -92,15 +103,36 @@ public class AngelSessionManager {
     }
 
     /**
-     * Replace with real Angel One login logic.
-     * Use new RestTemplate() here if needed for HTTP calls.
+     * Perform real Angel One authentication using AngelAuthService.
+     * Falls back to simulated tokens if AngelAuthService is unavailable.
      */
     private boolean attemptLogin() {
         try {
-            log.info("📝 TODO: Implement actual Angel One authentication in attemptLogin()");
+            if (angelAuthService == null) {
+                log.warn("AngelAuthService not available, using simulated tokens for testing");
+                return true;  // Simulated for testing
+            }
+
+            log.info("🔐 Attempting real Angel One authentication...");
+            boolean authSuccess = angelAuthService.authenticate();
+            
+            if (!authSuccess) {
+                log.error("❌ Angel One authentication failed");
+                return false;
+            }
+            
+            String jwtToken = angelAuthService.getJwtToken();
+            String feedToken = angelAuthService.getFeedToken();
+            
+            if (jwtToken == null || jwtToken.isBlank() || feedToken == null || feedToken.isBlank()) {
+                log.error("❌ Angel One returned empty tokens");
+                return false;
+            }
+            
+            log.info("✅ Angel One authentication successful");
             return true;
         } catch (Exception e) {
-            log.error("Login failed: {}", e.getMessage());
+            log.error("Login failed: {}", e.getMessage(), e);
             return false;
         }
     }

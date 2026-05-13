@@ -298,7 +298,7 @@ public class ShadowExecutionEngine {
             return;
         }
 
-        // FIX: Use TrapEngine to detect signals instead of edgeTracker.detectEdge
+        // FIX: Use TrapEngine to detect signals with calculated support/resistance
         List<Candle> history = candleAggregator.getValidHistory();
         double currentVix = 15.0; // Fallback
         try {
@@ -307,10 +307,15 @@ public class ShadowExecutionEngine {
             log.warn("VixService.getIndiaVix() failed, using fallback: {}", e.getMessage());
         }
 
+        // Calculate support and resistance from recent price structure
+        double[] supportResistance = calculateSupportResistance(history);
+        double localSupport = supportResistance[0];
+        double localResistance = supportResistance[1];
+
         Signal signal = trapEngine.detectTrap(
             history,
-            0.0,  // localSupport - would need to be calculated from structure
-            0.0,  // localResistance - would need to be calculated from structure
+            localSupport,
+            localResistance,
             currentVix,
             calculateSimpleAtr(history, 14)
         );
@@ -321,8 +326,8 @@ public class ShadowExecutionEngine {
 
         // FIX: Use evaluateEntry with proper parameters instead of evaluate(snapshot, signal)
         double orRange = Math.max(0.0, state.orHigh() - state.orLow());
-        double entrySlippage = 0.0;  // Would be calculated from market conditions
-        long latencyMs = 0L;  // Would be calculated from signal timing
+        double entrySlippage = calculateEntrySlippage(signal, candle);  // Calculate from market conditions
+        long latencyMs = calculateLatency(activeSignalTime);  // Calculate from signal timing
         
         GateDecision decision = riskGateEngine.evaluateEntry(
             state,
@@ -638,5 +643,50 @@ public class ShadowExecutionEngine {
             lastRejectReason,
             current.paperBalance()
         ));
+    }
+
+    private double[] calculateSupportResistance(List<Candle> history) {
+        if (history.isEmpty()) {
+            return new double[]{0.0, 0.0};
+        }
+
+        int lookbackPeriod = Math.min(20, history.size());
+        int startIdx = history.size() - lookbackPeriod;
+
+        double highestHigh = Double.NEGATIVE_INFINITY;
+        double lowestLow = Double.POSITIVE_INFINITY;
+
+        for (int i = startIdx; i < history.size(); i++) {
+            Candle candle = history.get(i);
+            highestHigh = Math.max(highestHigh, candle.high);
+            lowestLow = Math.min(lowestLow, candle.low);
+        }
+
+        if (!Double.isFinite(highestHigh) || !Double.isFinite(lowestLow)) {
+            Candle lastCandle = history.get(history.size() - 1);
+            return new double[]{lastCandle.close, lastCandle.close};
+        }
+
+        return new double[]{lowestLow, highestHigh};
+    }
+
+    private double calculateEntrySlippage(Signal signal, Candle candle) {
+        if (signal == null || candle == null) {
+            return 0.0;
+        }
+
+        double expectedEntry = signal.getEntry();
+        double actualPrice = candle.close;
+        double slippage = Math.abs(actualPrice - expectedEntry);
+
+        double maxSlippage = expectedEntry * 0.02;
+        return Math.min(slippage, maxSlippage);
+    }
+
+    private long calculateLatency(LocalDateTime signalTime) {
+        if (signalTime == null) {
+            return 0L;
+        }
+        return java.time.Duration.between(signalTime, LocalDateTime.now()).toMillis();
     }
 }
