@@ -26,6 +26,9 @@ from aiohttp import web
 # 2. Token auth: client must pass ?token= or Authorization: Bearer header.
 # 3. ntfy content scrubbed — direction + exit reason only.
 # 4. asyncio.timeout(5) wraps every ntfy call.
+#
+# ntfy Channel: https://ntfy.sh/riskpilot-live-signals
+# UptimeRobot: https://uptimerobot.com (Monitor: /api/v1/monitor/state)
 # ============================================================
 
 logging.basicConfig(
@@ -35,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger("riskpilot.observer")
 
 CSV_PATH            = os.environ.get("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv")
-NTFY_TOPIC          = os.environ.get("RISKPILOT_NTFY_TOPIC", "riskpilot_shadow_alerts")
+NTFY_TOPIC          = os.environ.get("RISKPILOT_NTFY_TOPIC", "riskpilot-live-signals")
 NTFY_AUTH_TOKEN     = os.environ.get("RISKPILOT_NTFY_AUTH_TOKEN", "")
 ENABLE_NTFY         = os.environ.get("RISKPILOT_ENABLE_NTFY", "true").lower() == "true"
 NOTIFY_COOLDOWN_SEC = float(os.environ.get("RISKPILOT_NOTIFY_COOLDOWN_SEC", "10"))

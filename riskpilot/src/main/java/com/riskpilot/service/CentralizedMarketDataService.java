@@ -21,7 +21,6 @@ public class CentralizedMarketDataService {
     private final MarketSessionService marketSessionService;
 
     private final AtomicReference<Double> niftyLtp = new AtomicReference<>(0.0);
-    private final AtomicReference<Double> bankNiftyLtp = new AtomicReference<>(0.0);
     private final AtomicReference<Long> lastUpdateEpochMs = new AtomicReference<>(0L);
 
     public CentralizedMarketDataService(
@@ -45,10 +44,6 @@ public class CentralizedMarketDataService {
             Optional<Double> nifty = angelOneMarketDataService.getNiftyLtp();
             if (nifty.isPresent()) {
                 niftyLtp.set(nifty.get());
-                // Fetch BANKNIFTY (optional, but good for completeness)
-                // Optional<Double> bankNifty = angelOneMarketDataService.getLtp("NSE", "99926009");
-                // bankNifty.ifPresent(bankNiftyLtp::set);
-
                 lastUpdateEpochMs.set(System.currentTimeMillis());
                 log.debug("Centralized market data refreshed: NIFTY={}", niftyLtp.get());
             } else {
@@ -64,7 +59,7 @@ public class CentralizedMarketDataService {
     }
 
     public double getBankNiftyLtp() {
-        return bankNiftyLtp.get();
+        return 0.0;
     }
 
     public long getLastUpdateEpochMs() {
@@ -72,6 +67,7 @@ public class CentralizedMarketDataService {
     }
     
     public boolean isDataFresh() {
-        return (System.currentTimeMillis() - lastUpdateEpochMs.get()) < 10000;
+        // Data must be < 5s old to be considered fresh for <5s refresh requirement
+        return (System.currentTimeMillis() - lastUpdateEpochMs.get()) < 5000;
     }
 }

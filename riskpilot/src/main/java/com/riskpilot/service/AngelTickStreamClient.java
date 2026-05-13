@@ -155,7 +155,7 @@ public class AngelTickStreamClient {
 
             // Watchdog: Check for stale data
             long age = marketDataStateService.getLastTickAgeMs();
-            if (age > 45000) {
+            if (age != Long.MAX_VALUE && age > 45000) {
                 log.warn("⚠️ Feed stale ({}ms) - triggering recovery", age);
                 handleFailure();
                 return;

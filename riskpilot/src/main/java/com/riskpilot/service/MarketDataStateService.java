@@ -113,7 +113,7 @@ public class MarketDataStateService {
 
     public long getLastTickAgeMs() { 
         long last = lastTickTime.get();
-        if (last == 0) return 0; // If no ticks yet, age is 0 (not stale)
+        if (last == 0) return Long.MAX_VALUE; // If no ticks yet, return MAX_VALUE so watchdog triggers properly
         return System.currentTimeMillis() - last; 
     }
     public boolean isFeedHealthy() { return getLastTickAgeMs() < 10000; }

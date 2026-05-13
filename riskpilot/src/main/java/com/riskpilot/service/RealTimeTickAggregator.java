@@ -195,11 +195,6 @@ public class RealTimeTickAggregator {
         marketDataService.getNiftyLtp().ifPresent(ltp -> {
             processRealTimeTick("NIFTY", ltp, 1000); // Default volume
         });
-        
-        // Refresh BankNIFTY
-        marketDataService.getBankNiftyLtp().ifPresent(ltp -> {
-            processRealTimeTick("BANKNIFTY", ltp, 1000); // Default volume
-        });
     }
 
     /**

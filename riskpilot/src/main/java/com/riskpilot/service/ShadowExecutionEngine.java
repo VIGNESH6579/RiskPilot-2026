@@ -378,15 +378,15 @@ public class ShadowExecutionEngine {
         // FIX: Create ActiveTradeExecution using proper constructor instead of initiate()
         double riskPoints = Math.abs(signal.getStopLoss() - signal.getEntry());
         ActiveTradeExecution trade = new ActiveTradeExecution(
-            "SHORT",  // direction
+            signal.getDirection(),  // direction
             signal.getEntry(),  // entryPrice
             signal.getStopLoss(),  // stopLoss
             signal.getTarget(),  // tp1Level
             riskPoints,  // initialRiskPoints
             false,  // tp1Hit
             false,  // runnerActive
-            1.0,  // positionSize
-            1.0,  // remainingSize
+            signal.getQuantity(),  // positionSize
+            signal.getQuantity(),  // remainingSize
             0.0,  // realizedPnL
             0.0,  // mfe
             0.0,  // mae
@@ -506,7 +506,9 @@ public class ShadowExecutionEngine {
     }
 
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason) {
-        double pnl = trade.direction().equalsIgnoreCase("BUY") ? (price - trade.entryPrice()) : (trade.entryPrice() - price);
+        // Handle both BUY/SELL and LONG/SHORT naming conventions
+        boolean isLong = trade.direction().equalsIgnoreCase("BUY") || trade.direction().equalsIgnoreCase("LONG");
+        double pnl = isLong ? (price - trade.entryPrice()) : (trade.entryPrice() - price);
         return new TradeExit(true, pnl, reason, price);
     }
 

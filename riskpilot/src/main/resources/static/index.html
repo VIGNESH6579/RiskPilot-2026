@@ -42,12 +42,12 @@
   <section class="grid">
     <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">--</div></div>
     <div class="card"><div class="label">India VIX</div><div id="vix" class="value">--</div></div>
-    <div class="card"><div class="label">Weekly Expiry</div><div id="expiry" class="value small">--</div></div>
+    <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">--</div></div>
     <div class="card"><div class="label">Source / Freshness</div><div id="freshness" class="value small">--</div></div>
     <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
     <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
     <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
-    <div class="card"><div class="label">Session / Candles</div><div id="session" class="value small">--</div></div>
+    <div class="card"><div class="label">Trades Today</div><div id="tradesToday" class="value small">--</div></div>
   </section>
 
   <section class="table-wrap">
@@ -97,8 +97,10 @@
       $('vix').textContent = fmt(health.vix);
       $('expiry').textContent = health.expiry || '--';
       $('freshness').textContent = freshness;
+      $('paperBalance').textContent = state.paperBalance ? `₹${fmt(state.paperBalance, 0)}` : '--';
       $('range').textContent = health.spot > 0 ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
       $('orRange').textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+      $('tradesToday').textContent = state.tradesTaken ?? 0;
       const regimeLbl = (!state.regime || state.regime === 'UNKNOWN')
         ? (marketClosed ? 'Market Closed' : 'Assessing…')
         : state.regime;
@@ -133,7 +135,9 @@
         if (type === 'session_state') {
           if (payload.spot > 0) $('spot').textContent = fmt(payload.spot);
           if (payload.vix > 0) $('vix').textContent = fmt(payload.vix);
+          if (payload.paperBalance) $('paperBalance').textContent = `₹${fmt(payload.paperBalance, 0)}`;
           $('orRange').textContent = `${fmt(payload.orHigh, 0)} / ${fmt(payload.orLow, 0)}`;
+          $('tradesToday').textContent = payload.tradesTaken ?? 0;
           const wsRegime = (!payload.regime || payload.regime === 'UNKNOWN')
             ? (payload.marketOpen === false ? 'Market Closed' : 'Assessing…')
             : payload.regime;

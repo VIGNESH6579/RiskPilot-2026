@@ -80,64 +80,77 @@ public class TrapEngine {
         Candle t0 = history.get(history.size() - 1); 
         Candle t1 = history.get(history.size() - 2); 
 
-        // BUG-019: Use ATR for relative range comparison
         double sumRange = 0;
         for(int i = history.size() - 7; i <= history.size() - 3; i++) {
             Candle c = history.get(i);
             sumRange += (c.high - c.low);
         }
         double avgRange = sumRange / 5.0;
-        
         double t1Range = t1.high - t1.low;
 
-        // BUG-019: Expansion check using ATR ratio instead of absolute comparison
+        // 1. Range Expansion Check (Requires breakout candle to be relatively large)
         if (t1Range <= avgRange * MIN_EXPANSION_ATR_RATIO) {
             return null;
         }
-        
-        // BUG-019: Breakout depth using ATR multiplier instead of fixed 6.0 points
-        double breakoutDepth = t1.high - localResistance;
-        double minBreakoutDepth = effectiveAtr * BREAKOUT_DEPTH_ATR_MULTIPLIER;
-        if (breakoutDepth < minBreakoutDepth) {
-            return null;
+
+        // 2. SHORT TRAP DETECTION (Bearish Reversal from Resistance)
+        if (t1.high > localResistance) {
+            double breakoutDepth = t1.high - localResistance;
+            double minBreakoutDepth = effectiveAtr * BREAKOUT_DEPTH_ATR_MULTIPLIER;
+            
+            if (breakoutDepth >= minBreakoutDepth) {
+                double t1Midpoint = (t1.high + t1.low) / 2.0;
+                if (t0.close < localResistance && t0.close < t1Midpoint) {
+                    return createSignal("SHORT", t0.close, t1.high + (effectiveAtr * 0.30), t0.close - (effectiveAtr * 0.60), effectiveAtr);
+                }
+            }
         }
 
-        if (t1.high > localResistance) {
-            double t1Midpoint = (t1.high + t1.low) / 2.0;
+        // 3. LONG TRAP DETECTION (Bullish Reversal from Support)
+        if (t1.low < localSupport) {
+            double breakoutDepth = localSupport - t1.low;
+            double minBreakoutDepth = effectiveAtr * BREAKOUT_DEPTH_ATR_MULTIPLIER;
 
-            if (t0.close < localResistance && t0.close < t1Midpoint) {
-                double entry = t0.close;
-                
-                // BUG-019: SL and target using ATR instead of fixed values
-                double sl = t1.high + (effectiveAtr * 0.30);  // ~30% of ATR buffer
-                double tp1 = entry - (effectiveAtr * 0.60);   // 60% of ATR target (2:1 RR)
-                
-                double distanceToSL = Math.abs(sl - entry);
-
-                // BUG-019: Risk normalization using ATR multiplier
-                double maxRiskDistance = effectiveAtr * MAX_RISK_ATR_MULTIPLIER;
-                if (distanceToSL > maxRiskDistance) return null;
-
-                Signal s = new Signal();
-                s.setSymbol("NIFTY");
-                s.setDirection("SHORT");
-                s.setEntry(entry);
-                s.setStopLoss(sl);
-                s.setTarget(tp1); 
-                
-                double riskCapital = 100000 * 0.01;
-                // Position Sizing normalized against risk mapping exactly 1% scale
-                int qty = (int) (riskCapital / distanceToSL);
-                if (qty < 2) qty = 2; 
-                if (qty % 2 != 0) qty++; 
-                
-                s.setConfidence(100);
-                s.setQuantity(qty);
-                return s;
+            if (breakoutDepth >= minBreakoutDepth) {
+                double t1Midpoint = (t1.high + t1.low) / 2.0;
+                if (t0.close > localSupport && t0.close > t1Midpoint) {
+                    return createSignal("LONG", t0.close, t1.low - (effectiveAtr * 0.30), t0.close + (effectiveAtr * 0.60), effectiveAtr);
+                }
             }
         }
 
         return null;
+    }
+
+    private Signal createSignal(String direction, double entry, double sl, double target, double effectiveAtr) {
+        double distanceToSL = Math.abs(sl - entry);
+        double maxRiskDistance = effectiveAtr * MAX_RISK_ATR_MULTIPLIER;
+        
+        if (distanceToSL > maxRiskDistance || distanceToSL < (effectiveAtr * 0.1)) {
+            return null;
+        }
+
+        // Risk-Reward Guard (Minimum 1.5:1)
+        double potentialReward = Math.abs(target - entry);
+        if (potentialReward / distanceToSL < 1.5) {
+            return null;
+        }
+
+        Signal s = new Signal();
+        s.setSymbol("NIFTY");
+        s.setDirection(direction);
+        s.setEntry(entry);
+        s.setStopLoss(sl);
+        s.setTarget(target);
+        
+        double riskCapital = 100000 * 0.01; // 1% risk per trade
+        int qty = (int) (riskCapital / distanceToSL);
+        if (qty < 2) qty = 2;
+        if (qty % 2 != 0) qty++; // Round to even lot-like sizing
+        
+        s.setConfidence(100);
+        s.setQuantity(qty);
+        return s;
     }
     
     /**
