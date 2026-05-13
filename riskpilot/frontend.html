@@ -270,6 +270,9 @@
         if (state.vix > 0) {
           els.vix.textContent = fmt(state.vix);
         }
+        if (state.support && state.resistance) {
+          els.range.textContent = `${state.support} / ${state.resistance}`;
+        }
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         // Regime: translate UNKNOWN → friendly label
         const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')

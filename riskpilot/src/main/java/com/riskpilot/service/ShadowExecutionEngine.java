@@ -622,6 +622,16 @@ public class ShadowExecutionEngine {
         payload.put("vix", vixService.getIndiaVix());
         payload.put("marketOpen", marketSessionService.isMarketOpen());
 
+        // Dynamic Support/Resistance based on current price
+        double spot = currentPrice > 0 ? currentPrice : 0.0;
+        if (spot > 0) {
+            int support = (int) (Math.floor(spot / 50.0) * 50);
+            int resistance = (int) (Math.ceil(spot / 50.0) * 50);
+            if (resistance == support) resistance += 50;
+            payload.put("support", support);
+            payload.put("resistance", resistance);
+        }
+
         webSocketService.sendSessionState(payload);
     }
 
