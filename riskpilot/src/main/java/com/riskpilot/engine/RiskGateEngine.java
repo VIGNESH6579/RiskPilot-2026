@@ -107,6 +107,13 @@ public class RiskGateEngine {
         // 🔴 ADAPTIVE REGIME FILTER (SECONDARY FILTER)
         // -------------------------
         AdaptiveRegimeEngine.AdaptiveConfig adaptiveConfig = adaptiveRegimeEngine.getCurrentConfig();
+        
+        // BUG-FIX: Defensive null check for adaptiveConfig
+        if (adaptiveConfig == null) {
+            log.warn("⚠️ ADAPTIVE_CONFIG_NULL: Falling back to default configuration");
+            adaptiveConfig = new AdaptiveRegimeEngine.AdaptiveConfig();
+        }
+
         RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
         if (regime == null) {
             return reject("REGIME_NOT_INITIALIZED");

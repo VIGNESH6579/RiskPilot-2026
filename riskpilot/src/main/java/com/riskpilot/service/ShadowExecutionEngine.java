@@ -451,7 +451,11 @@ public class ShadowExecutionEngine {
         double expectedEntry = activeExpectedEntry;
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double riskPts = Math.max(0.0001, trade.initialRiskPoints());
-        double realizedR = exit.pnlPoints() / riskPts;
+        // BUG-FIX: Use exit.pnl() which returns pnlPoints (points * size)
+        // realizedR should be based on points per unit risk, so we divide by (riskPts * totalSize)
+        double totalSize = trade.positionSize();
+        double realizedR = exit.pnl() / (riskPts * totalSize);
+        
         double entrySlippage = Math.abs(trade.entryPrice() - expectedEntry);
         double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - expectedExit) : 0.0;
 
@@ -473,7 +477,8 @@ public class ShadowExecutionEngine {
         int newConsecutiveLosses = realizedR < 0.0 ? state.consecutiveLosses() + 1 : 0;
 
         // Calculate paper balance change
-        double balanceChange = exit.pnlPoints() * 50; // Assuming lot size of 50 for NIFTY
+        // BUG-FIX: exit.pnl() already includes size. Multiply by 50 for NIFTY point value.
+        double balanceChange = exit.pnl() * 50;
         
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
