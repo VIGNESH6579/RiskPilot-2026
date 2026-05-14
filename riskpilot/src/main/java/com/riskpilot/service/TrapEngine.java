@@ -101,7 +101,10 @@ public class TrapEngine {
             if (breakoutDepth >= minBreakoutDepth) {
                 double t1Midpoint = (t1.high + t1.low) / 2.0;
                 if (t0.close < localResistance && t0.close < t1Midpoint) {
-                    return createSignal("SHORT", t0.close, t1.high + (effectiveAtr * 0.30), t0.close - (effectiveAtr * 0.60), effectiveAtr);
+                    double sl = t1.high + (effectiveAtr * 0.30);
+                    double slDistance = Math.abs(sl - t0.close);
+                    double target = t0.close - (slDistance * 1.5); // FIX: Guarantee 1.5:1 R:R
+                    return createSignal("SHORT", t0.close, sl, target, effectiveAtr);
                 }
             }
         }
@@ -114,7 +117,10 @@ public class TrapEngine {
             if (breakoutDepth >= minBreakoutDepth) {
                 double t1Midpoint = (t1.high + t1.low) / 2.0;
                 if (t0.close > localSupport && t0.close > t1Midpoint) {
-                    return createSignal("LONG", t0.close, t1.low - (effectiveAtr * 0.30), t0.close + (effectiveAtr * 0.60), effectiveAtr);
+                    double sl = t1.low - (effectiveAtr * 0.30);
+                    double slDistance = Math.abs(sl - t0.close);
+                    double target = t0.close + (slDistance * 1.5); // FIX: Guarantee 1.5:1 R:R
+                    return createSignal("LONG", t0.close, sl, target, effectiveAtr);
                 }
             }
         }
