@@ -37,9 +37,16 @@ public class Candle {
     }
 
     public LocalDateTime timestamp() {
+        // BUG-FIX: LocalTime.toString() omits seconds when they are zero (e.g. "09:15" not "09:15:00").
+        // Support both "HH:mm" and "HH:mm:ss" formats so candle timestamps always resolve correctly.
         try {
+            String timeStr = time;
+            if (timeStr != null && timeStr.length() == 5) {
+                // "HH:mm" → pad to "HH:mm:ss"
+                timeStr = timeStr + ":00";
+            }
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            return LocalDateTime.parse(date + " " + time, formatter);
+            return LocalDateTime.parse(date + " " + timeStr, formatter);
         } catch (Exception e) {
             // Fallback to current time if parsing fails
             return LocalDateTime.now();

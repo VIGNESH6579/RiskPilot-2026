@@ -120,6 +120,13 @@ public class ShadowExecutionEngine {
         Candle newestCandle = history.get(history.size() - 1);
         ingestClosedCandleForIndicators(newestCandle);
         updateSessionStateFromTime(newestCandle.timestamp().toLocalTime());
+        // BUG-FIX: Guard against re-evaluating the same candle on every tick.
+        // lastEvaluatedCandleTime tracks the last candle that entered signal evaluation;
+        // without this, detectTrap() fires once per second on the same closed candle.
+        if (newestCandle.time.equals(lastEvaluatedCandleTime)) {
+            return;
+        }
+        lastEvaluatedCandleTime = newestCandle.time;
         evaluateSignalIfEligible(newestCandle, stateManager.getSnapshot());
     }
 
@@ -195,6 +202,9 @@ public class ShadowExecutionEngine {
         }
 
         evaluateSignalIfEligible(newestCandle, state);
+        // Keep the per-tick dedup in sync so evaluateLatestClosedCandleSignal
+        // doesn't re-fire for this candle on the very next tick.
+        lastEvaluatedCandleTime = newestCandle.time;
     }
 
     @Scheduled(cron = "0 14 9 * * *", zone = "Asia/Kolkata")
@@ -482,6 +492,22 @@ public class ShadowExecutionEngine {
             firstTradeFailure ? "FIRST_TRADE_FAILURE_DAY_BLOCK" : "ALLOW",
             current.paperBalance() + balanceChange
         ));
+
+        // BUG-FIX: Feed trade results to RealTimeEdgeTracker and AdaptiveRegimeEngine
+        // so edge decay detection and adaptive filtering learn from completed trades.
+        try {
+            edgeTracker.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(),
+                entrySlippage, runnerSlippage);
+        } catch (Exception e) {
+            log.warn("Failed to update RealTimeEdgeTracker with trade result: {}", e.getMessage());
+        }
+        try {
+            adaptiveRegimeEngine.addTradeResult(realizedR, trade.tp1Hit(), trade.runnerActive(),
+                entrySlippage, runnerSlippage, sessionFeatures);
+        } catch (Exception e) {
+            log.warn("Failed to update AdaptiveRegimeEngine with trade result: {}", e.getMessage());
+        }
+
         return new ClosedTradeBroadcast(
             signalTime,
             expectedEntry,
