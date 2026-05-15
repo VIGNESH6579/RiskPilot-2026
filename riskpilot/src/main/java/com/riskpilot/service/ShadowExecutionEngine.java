@@ -56,6 +56,7 @@ public class ShadowExecutionEngine {
     private final WebSocketService webSocketService;
     private final TransactionTemplate transactionTemplate;
     private final MarketSessionService marketSessionService;
+    private final TradingSafetyManager tradingSafetyManager;
 
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
@@ -328,6 +329,12 @@ public class ShadowExecutionEngine {
 
     private void evaluateSignalIfEligible(Candle candle, TradingSessionSnapshot state) {
         if (!state.sessionActive() || state.tradeActive()) {
+            return;
+        }
+
+        // BUG-FIX: Check safety before entry!
+        if (!tradingSafetyManager.isSafeToTrade()) {
+            logReject(state, "SAFETY_BLOCK_BEFORE_ENTRY");
             return;
         }
 

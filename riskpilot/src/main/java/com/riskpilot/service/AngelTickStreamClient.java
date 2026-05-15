@@ -35,6 +35,7 @@ public class AngelTickStreamClient {
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final CentralizedMarketDataService centralizedMarketDataService;
     private final RealTimeTickAggregator realTimeTickAggregator;
+    private final VixService vixService;
     
     @Autowired private MarketDataStateService marketDataStateService;
     @Autowired private WebSocketService webSocketService;
@@ -74,7 +75,8 @@ public class AngelTickStreamClient {
         MarketSessionService marketSessionService,
         AngelOneMarketDataService angelOneMarketDataService,
         CentralizedMarketDataService centralizedMarketDataService,
-        RealTimeTickAggregator realTimeTickAggregator
+        RealTimeTickAggregator realTimeTickAggregator,
+        VixService vixService
     ) {
         this.candleAggregator = candleAggregator;
         this.heartbeatMonitor = heartbeatMonitor;
@@ -84,6 +86,7 @@ public class AngelTickStreamClient {
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.centralizedMarketDataService = centralizedMarketDataService;
         this.realTimeTickAggregator = realTimeTickAggregator;
+        this.vixService = vixService;
     }
 
     @PostConstruct
@@ -181,6 +184,12 @@ public class AngelTickStreamClient {
 
             // Process valid tick
             marketDataStateService.updateNiftyFromWebSocket(spot, 0, 0);
+            
+            // BUG-FIX: Ensure VIX state is updated during tick polling
+            // VixService already has internal caching/throttling
+            double currentVix = vixService.getIndiaVix();
+            marketDataStateService.updateVix(currentVix, java.time.Instant.now());
+            
             heartbeatMonitor.registerTick();
 
             int candleMinute = (now.getMinute() / 5) * 5;

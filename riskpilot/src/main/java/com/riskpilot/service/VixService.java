@@ -14,6 +14,7 @@ import org.springframework.web.client.RestTemplate;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.util.Optional;
 
 @Service
@@ -25,6 +26,7 @@ public class VixService {
 
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final CentralizedMarketDataService centralizedMarketDataService;
+    private final MarketDataStateService marketDataStateService;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final String indiaVixExchange;
@@ -43,12 +45,14 @@ public class VixService {
     public VixService(
         AngelOneMarketDataService angelOneMarketDataService,
         CentralizedMarketDataService centralizedMarketDataService,
+        MarketDataStateService marketDataStateService,
         @Value("${ANGEL_INDIA_VIX_EXCHANGE:NSE}") String indiaVixExchange,
         @Value("${ANGEL_INDIA_VIX_TOKEN:999920005}") String indiaVixToken,
         @Value("${RISK_VIX_FALLBACK:15.0}") double fallbackVix
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.centralizedMarketDataService = centralizedMarketDataService;
+        this.marketDataStateService = marketDataStateService;
         this.indiaVixExchange = indiaVixExchange == null ? "NSE" : indiaVixExchange.trim();
         this.indiaVixToken = indiaVixToken == null ? "" : indiaVixToken.trim();
         this.fallbackVix = fallbackVix > 0.0 ? fallbackVix : 15.0;
@@ -70,6 +74,7 @@ public class VixService {
             if (fetched.isPresent() && fetched.get() > 0.0) {
                 lastKnownVix = fetched.get();
                 lastSuccessfulFetchEpochMs = now;
+                marketDataStateService.updateVix(lastKnownVix, Instant.now());
                 return;
             }
         }
@@ -78,6 +83,7 @@ public class VixService {
         if (yahooVix.isPresent()) {
             lastKnownVix = yahooVix.get();
             lastSuccessfulFetchEpochMs = now;
+            marketDataStateService.updateVix(lastKnownVix, Instant.now());
             log.info("VIX fetched from Yahoo Finance: {}", lastKnownVix);
             return;
         }
