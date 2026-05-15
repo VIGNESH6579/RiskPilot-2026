@@ -116,39 +116,43 @@ public class RiskGateEngine {
 
         RegimeFilter.RegimeMetrics regime = regimeFilter.getCurrentRegime();
         if (regime == null) {
-            return reject("REGIME_NOT_INITIALIZED");
-        }
+            if (!earlySessionBypass) {
+                log.warn("🚫 REGIME_NOT_INITIALIZED: waiting for candles to build regime");
+                return reject("REGIME_NOT_INITIALIZED");
+            }
+            log.info("⚠️ REGIME_NOT_INITIALIZED but EARLY_SESSION_BYPASS active — skipping regime metric checks");
+        } else {
+            // Check adaptive thresholds (only when regime is initialized)
+            if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
+                log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}",
+                        regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(),
+                        String.join(", ", regime.getBlockingReasons()));
+                return reject("ADAPTIVE_REGIME_WEAK");
+            }
 
-        // Check adaptive thresholds
-        if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
-            log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}",
-                    regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(),
-                    String.join(", ", regime.getBlockingReasons()));
-            return reject("ADAPTIVE_REGIME_WEAK");
-        }
+            if (regime.getOrRange() < adaptiveConfig.getMinORRange()) {
+                log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={} < {}",
+                        regime.getOrRange(), adaptiveConfig.getMinORRange());
+                return reject("ADAPTIVE_OR_TOO_SMALL");
+            }
 
-        if (regime.getOrRange() < adaptiveConfig.getMinORRange()) {
-            log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={} < {}",
-                    regime.getOrRange(), adaptiveConfig.getMinORRange());
-            return reject("ADAPTIVE_OR_TOO_SMALL");
-        }
+            if (regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
+                log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={} < {}",
+                        regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
+                return reject("ADAPTIVE_ATR_WEAK");
+            }
 
-        if (regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
-            log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={} < {}",
-                    regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
-            return reject("ADAPTIVE_ATR_WEAK");
-        }
+            if (regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
+                log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={} < {}",
+                        regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
+                return reject("ADAPTIVE_CHOPPY");
+            }
 
-        if (regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
-            log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={} < {}",
-                    regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
-            return reject("ADAPTIVE_CHOPPY");
-        }
-
-        if (regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
-            log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={} < {}",
-                    regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
-            return reject("ADAPTIVE_BREAKOUT_WEAK");
+            if (regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
+                log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={} < {}",
+                        regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
+                return reject("ADAPTIVE_BREAKOUT_WEAK");
+            }
         }
 
         // -------------------------

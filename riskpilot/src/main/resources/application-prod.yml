@@ -61,6 +61,11 @@ logging:
 riskpilot:
   mode: SHADOW
   strict-mode: true
+  risk:
+    max-trades-per-day: 2          # Hard cap: 2 shadow trades per session
+    one-trade-at-a-time: true
+    max-daily-loss-r: 1.5          # Stop trading after -1.5R loss on the day
+    max-consecutive-losses: 3      # Stop after 3 losses in a row
   infra:
     feed:
       real-time-only: true

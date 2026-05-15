@@ -325,6 +325,8 @@
       }
     }
 
+    let pingTimer = null;
+
     function connectSocket() {
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${protocol}://${location.host}/ws`);
@@ -332,6 +334,11 @@
       ws.onopen = () => {
         els.socketStatus.textContent = 'Socket connected';
         els.socketStatus.className = 'status ok';
+        // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+        }, 25000);
       };
 
       ws.onmessage = (event) => {
@@ -387,8 +394,9 @@
       ws.onclose = () => {
         els.socketStatus.textContent = 'Socket reconnecting';
         els.socketStatus.className = 'status bad';
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSocket, 1500);
+        reconnectTimer = setTimeout(connectSocket, 3000);
       };
     }
 

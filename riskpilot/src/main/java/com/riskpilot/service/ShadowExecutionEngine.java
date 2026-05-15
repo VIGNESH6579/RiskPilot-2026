@@ -277,10 +277,25 @@ public class ShadowExecutionEngine {
             double orLow = current.orLow();
 
             List<Candle> history = candleAggregator.getValidHistory();
-            if (!history.isEmpty() && now.isBefore(LocalTime.of(9, 45))) {
-                Candle last = history.get(history.size() - 1);
-                orHigh = Double.isFinite(orHigh) ? Math.max(orHigh, last.high) : last.high;
-                orLow = Double.isFinite(orLow) ? Math.min(orLow, last.low) : last.low;
+
+            // Restore OR from full candle history (handles service restart mid-session).
+            // If OR not yet built (values are still infinite), scan all pre-09:45 candles.
+            if (!history.isEmpty()) {
+                boolean orNotBuilt = !Double.isFinite(orHigh) || !Double.isFinite(orLow);
+                if (orNotBuilt) {
+                    // Full scan: restore from any candle whose timestamp is before 09:45
+                    for (Candle c : history) {
+                        if (c.timestamp().toLocalTime().isBefore(LocalTime.of(9, 45))) {
+                            orHigh = Double.isFinite(orHigh) ? Math.max(orHigh, c.high) : c.high;
+                            orLow  = Double.isFinite(orLow)  ? Math.min(orLow,  c.low)  : c.low;
+                        }
+                    }
+                } else if (now.isBefore(LocalTime.of(9, 45))) {
+                    // Still inside OR window: extend from latest candle
+                    Candle last = history.get(history.size() - 1);
+                    orHigh = Math.max(orHigh, last.high);
+                    orLow  = Math.min(orLow,  last.low);
+                }
             }
 
             // Use resolved regime; if regimeFilter has no data yet, keep whatever the snapshot
