@@ -127,7 +127,7 @@ public class SecurityConfig {
                         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
                         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; " +
                         "font-src 'self' https://fonts.gstatic.com; " +
-                        "connect-src 'self' wss://riskpilot-2026.onrender.com ws://riskpilot-2026.onrender.com wss: ws:; " +
+                        "connect-src 'self' wss://riskpilot-2026.onrender.com ws://riskpilot-2026.onrender.com wss: ws: https://cdn.jsdelivr.net; " +
                         "img-src 'self' data: https://cdn.jsdelivr.net; " +
                         "frame-ancestors 'none'"
                     )
