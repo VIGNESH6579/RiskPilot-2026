@@ -12,8 +12,8 @@ services:
     healthCheckInterval: 60
     # Render free tier requires port to be detected or specified.
     # The start.sh script uses the $PORT env var provided by Render.
-
-    startCommand: "./start.sh"
+    # NOTE: startCommand is intentionally omitted — Dockerfile ENTRYPOINT ["./start.sh"] is used.
+    # Setting startCommand here would pass it as an argument to the ENTRYPOINT, not override it.
 
     envVars:
       - key: PORT
@@ -53,7 +53,11 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
 
-      # PostgreSQL (add Render PostgreSQL add-on and it injects DATABASE_URL automatically)
+      # PostgreSQL — REQUIRED in prod.
+      # SETUP: In Render Dashboard → your web service → Environment → Link your PostgreSQL database.
+      # If using "Link database" in the dashboard, DATABASE_URL is injected automatically.
+      # The internal DATABASE_URL format is: postgres://user:pass@dpg-xxx-a:5432/dbname
+      # ⚠️  DATABASE_URL must be set or the app will refuse to start in prod mode.
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_USERNAME

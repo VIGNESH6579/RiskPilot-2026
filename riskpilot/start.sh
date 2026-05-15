@@ -73,8 +73,17 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
     # Extract host:port/dbname (everything after @)
     HOSTPATH="${WITHOUT_SCHEME#*@}"
 
-    # Build JDBC URL (internal connections don't support SSL)
-    DB_URL="jdbc:postgresql://${HOSTPATH}"
+    # Build JDBC URL
+    # Render internal connections use plain TCP (no SSL).
+    # However, if DATABASE_URL is the external hostname, SSL is required.
+    # We append ?sslmode=prefer so the driver upgrades to SSL when available
+    # but falls back gracefully on internal/plaintext connections.
+    if [[ "${HOSTPATH}" == *"?"* ]]; then
+      # URL already has query params — append sslmode
+      DB_URL="jdbc:postgresql://${HOSTPATH}&sslmode=prefer"
+    else
+      DB_URL="jdbc:postgresql://${HOSTPATH}?sslmode=prefer"
+    fi
   else
     # Already a JDBC URL — use as-is
     DB_URL="${RAW_URL}"

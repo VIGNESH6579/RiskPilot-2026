@@ -81,11 +81,15 @@ public class AngelSessionManager {
                     clientCode = angelAuthService.getClientCode();
                 }
                 
+                // Angel One tokens are valid for ~24h. Use 23h expiry so the
+                // proactive refresh (checkAndRefreshIfNeeded) kicks in before they expire.
+                // Using only 1h here caused unnecessary re-auth every hour and made the
+                // session state stale if the reauth briefly failed.
                 SessionState newState = new SessionState(
                     jwtToken,
                     feedToken,
                     clientCode,
-                    Instant.now().plusSeconds(3600),
+                    Instant.now().plusSeconds(23 * 3600),
                     true
                 );
                 sessionState.set(newState);

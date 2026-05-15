@@ -11,9 +11,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class VixService {
@@ -25,6 +26,7 @@ public class VixService {
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final CentralizedMarketDataService centralizedMarketDataService;
     private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final String indiaVixExchange;
     private final String indiaVixToken;
     private final double fallbackVix;
@@ -105,16 +107,27 @@ public class VixService {
             HttpHeaders headers = new HttpHeaders();
             headers.set("User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                + "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+                + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
             HttpEntity<String> entity = new HttpEntity<>(headers);
 
             ResponseEntity<String> response =
                 restTemplate.exchange(YAHOO_VIX_URL, HttpMethod.GET, entity, String.class);
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                Pattern pattern = Pattern.compile("\"regularMarketPrice\":\\s*([0-9.]+)");
-                Matcher matcher = pattern.matcher(response.getBody());
-                if (matcher.find()) {
-                    return Optional.of(Double.parseDouble(matcher.group(1)));
+                // Parse JSON properly instead of using a fragile regex.
+                // Yahoo Finance v8 structure:
+                //   chart.result[0].meta.regularMarketPrice
+                JsonNode root = objectMapper.readTree(response.getBody());
+                JsonNode price = root
+                    .path("chart")
+                    .path("result")
+                    .path(0)
+                    .path("meta")
+                    .path("regularMarketPrice");
+                if (!price.isMissingNode() && price.isNumber()) {
+                    double vix = price.asDouble();
+                    if (vix > 0.0) {
+                        return Optional.of(vix);
+                    }
                 }
             }
         } catch (Exception e) {

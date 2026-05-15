@@ -43,6 +43,20 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+
+    - name: Validate required secrets
+      run: |
+        missing=""
+        [ -z "${{ secrets.RENDER_SERVICE_ID }}" ] && missing="$missing RENDER_SERVICE_ID"
+        [ -z "${{ secrets.RENDER_API_KEY }}"    ] && missing="$missing RENDER_API_KEY"
+        if [ -n "$missing" ]; then
+          echo "ERROR: Missing required GitHub secrets:$missing"
+          echo "Go to: Settings → Secrets and variables → Actions → New repository secret"
+          echo "  RENDER_SERVICE_ID = srv-d7ika967r5hc73bjihgg"
+          echo "  RENDER_API_KEY    = (your Render API key)"
+          echo "  RENDER_SERVICE_URL = https://riskpilot-2026.onrender.com  (optional, used for health check)"
+          exit 1
+        fi
     
     - name: Deploy to Render
       uses: johnnymanz/github-render-deploy@v1.0.0
@@ -51,8 +65,23 @@ jobs:
         api-key: ${{ secrets.RENDER_API_KEY }}
         
     - name: Wait for deployment
-      run: sleep 60
+      # Render free tier can take 3-5 min to build and boot the Docker image
+      run: sleep 120
       
     - name: Verify deployment
       run: |
-        curl -f ${{ secrets.RENDER_SERVICE_URL }}/actuator/health || exit 1
+        SERVICE_URL="${{ secrets.RENDER_SERVICE_URL }}"
+        # Fall back to the known Render URL if the secret is not configured
+        SERVICE_URL="${SERVICE_URL:-https://riskpilot-2026.onrender.com}"
+        echo "Checking health at: $SERVICE_URL/actuator/health"
+        # Retry up to 8 times with 30s delay (Render free tier cold starts can take ~4min)
+        for i in 1 2 3 4 5 6 7 8; do
+          if curl -sf --max-time 30 "$SERVICE_URL/actuator/health"; then
+            echo "Health check passed"
+            exit 0
+          fi
+          echo "Attempt $i failed, retrying in 30s..."
+          sleep 30
+        done
+        echo "Health check failed after 8 attempts"
+        exit 1
