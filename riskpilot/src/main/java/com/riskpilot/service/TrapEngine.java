@@ -17,7 +17,9 @@ import java.util.List;
 public class TrapEngine {
     private final double minVix;
     private final double maxVix;
-    
+    private final double accountCapital;
+    private final double riskPerTradePct;
+
     // BUG-019: ATR-relative constants (instead of hardcoded points)
     private static final double BREAKOUT_DEPTH_ATR_MULTIPLIER = 0.20;  // ~20% of ATR
     private static final double MAX_RISK_ATR_MULTIPLIER = 1.25;       // Max 1.25×ATR for SL distance
@@ -25,10 +27,14 @@ public class TrapEngine {
 
     public TrapEngine(
         @Value("${TRAP_MIN_VIX:12}") double minVix,
-        @Value("${TRAP_MAX_VIX:25}") double maxVix
+        @Value("${TRAP_MAX_VIX:25}") double maxVix,
+        @Value("${TRAP_ACCOUNT_CAPITAL:100000}") double accountCapital,
+        @Value("${TRAP_RISK_PCT:0.01}") double riskPerTradePct
     ) {
         this.minVix = minVix;
         this.maxVix = maxVix;
+        this.accountCapital = accountCapital > 0 ? accountCapital : 100000;
+        this.riskPerTradePct = (riskPerTradePct > 0 && riskPerTradePct <= 0.05) ? riskPerTradePct : 0.01;
     }
     
     /**
@@ -149,7 +155,7 @@ public class TrapEngine {
         s.setStopLoss(sl);
         s.setTarget(target);
         
-        double riskCapital = 100000 * 0.01; // 1% risk per trade
+        double riskCapital = accountCapital * riskPerTradePct; // Configurable: default 1% of ₹1L
         int qty = (int) (riskCapital / distanceToSL);
         if (qty < 2) qty = 2;
         if (qty % 2 != 0) qty++; // Round to even lot-like sizing

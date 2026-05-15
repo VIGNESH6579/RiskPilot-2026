@@ -546,7 +546,11 @@ public class ShadowExecutionEngine {
     private TradeExit exitAtPrice(ActiveTradeExecution trade, double price, String reason) {
         // Handle both BUY/SELL and LONG/SHORT naming conventions
         boolean isLong = trade.direction().equalsIgnoreCase("BUY") || trade.direction().equalsIgnoreCase("LONG");
-        double pnl = isLong ? (price - trade.entryPrice()) : (trade.entryPrice() - price);
+        // BUG-FIX: Include remainingSize in PnL so it matches checkStopLoss() output.
+        // Previously this returned raw points with no size multiplier, causing balanceChange
+        // to be severely understated for forced exits (TIME_CUTOFF, VOLATILITY_COLLAPSE).
+        double exitSize = trade.remainingSize() > 0 ? trade.remainingSize() : trade.positionSize();
+        double pnl = (isLong ? (price - trade.entryPrice()) : (trade.entryPrice() - price)) * exitSize;
         return new TradeExit(true, pnl, reason, price);
     }
 

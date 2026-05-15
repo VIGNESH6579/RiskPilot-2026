@@ -44,6 +44,12 @@ services:
       - key: RISKPILOT_ENABLE_NTFY
         value: "true"
 
+      # TrapEngine sizing — configurable without code changes
+      - key: TRAP_ACCOUNT_CAPITAL
+        value: "100000"
+      - key: TRAP_RISK_PCT
+        value: "0.01"
+
       # ---- SECRETS: set these in Render Dashboard → Environment tab ----
       # Never commit values here.
 
@@ -53,17 +59,20 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
 
-      # PostgreSQL — REQUIRED in prod.
-      # SETUP: In Render Dashboard → your web service → Environment → Link your PostgreSQL database.
-      # If using "Link database" in the dashboard, DATABASE_URL is injected automatically.
-      # The internal DATABASE_URL format is: postgres://user:pass@dpg-xxx-a:5432/dbname
-      # ⚠️  DATABASE_URL must be set or the app will refuse to start in prod mode.
+      # PostgreSQL — linked from the database below via fromDatabase.
+      # Render injects DATABASE_URL automatically when fromDatabase is used.
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: riskpilot-db
+          property: connectionString
       - key: DATABASE_USERNAME
-        sync: false
+        fromDatabase:
+          name: riskpilot-db
+          property: user
       - key: DATABASE_PASSWORD
-        sync: false
+        fromDatabase:
+          name: riskpilot-db
+          property: password
 
       # Angel One broker credentials
       - key: ANGEL_API_KEY
@@ -84,3 +93,14 @@ services:
       # Optional: ntfy.sh access token for private ntfy topics
       - key: RISKPILOT_NTFY_AUTH_TOKEN
         sync: false
+
+databases:
+  - name: riskpilot-db
+    plan: free
+    # ⚠️  If your existing PostgreSQL (dpg-d7s4463t6lks73c50eog-a) was created manually
+    # in the Render Dashboard, do NOT add it here — that would create a second DB.
+    # Instead, go to Dashboard → riskpilot-2026 web service → Environment → Link Database
+    # and select your existing database. The fromDatabase references above will then work.
+    # Uncomment the lines below ONLY if deploying fresh with no existing DB.
+    # databaseName: riskpilot
+    # user: riskpilot
