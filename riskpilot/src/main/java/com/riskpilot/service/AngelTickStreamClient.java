@@ -34,7 +34,7 @@ public class AngelTickStreamClient {
     private final MarketSessionService marketSessionService;
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final CentralizedMarketDataService centralizedMarketDataService;
-    private final RealTimeTickAggregator realTimeTickAggregator;
+
     private final VixService vixService;
     
     @Autowired private MarketDataStateService marketDataStateService;
@@ -75,7 +75,7 @@ public class AngelTickStreamClient {
         MarketSessionService marketSessionService,
         AngelOneMarketDataService angelOneMarketDataService,
         CentralizedMarketDataService centralizedMarketDataService,
-        RealTimeTickAggregator realTimeTickAggregator,
+
         VixService vixService
     ) {
         this.candleAggregator = candleAggregator;
@@ -85,7 +85,7 @@ public class AngelTickStreamClient {
         this.marketSessionService = marketSessionService;
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.centralizedMarketDataService = centralizedMarketDataService;
-        this.realTimeTickAggregator = realTimeTickAggregator;
+
         this.vixService = vixService;
     }
 
@@ -197,7 +197,6 @@ public class AngelTickStreamClient {
 
             long seq = sequenceCounter.incrementAndGet();
             candleAggregator.processTick(now, spot, 1L, seq, now);
-            realTimeTickAggregator.processAngelTick("NIFTY", spot, 1L);
 
             shadowExecutionEngine.evaluateTick(spot);
             if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {

@@ -206,6 +206,15 @@ public class CandleAggregator {
         outOfOrderTickCount = 0;
         afterHoursBuffer.clear();
     }
+
+    /**
+     * Force a refresh of the current candle building process with a synthetic tick.
+     * Uses volume=0 to indicate synthetic data.
+     */
+    public synchronized void forceRefresh(double price) {
+        log.info("🔄 Forcing candle refresh at price: {}", price);
+        processTick(LocalDateTime.now(), price, 0L, -1L, LocalDateTime.now());
+    }
     
     /**
      * Get out-of-order tick statistics (for monitoring).

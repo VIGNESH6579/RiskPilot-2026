@@ -63,8 +63,21 @@ public class EngineController {
 
     @GetMapping("/candle-history")
     public Map<String, Object> getCandleHistory() {
+        List<com.riskpilot.model.Candle> history = candleAggregator.getValidHistory();
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("candleHistorySize", candleAggregator.getValidHistory().size());
+        response.put("candles", history.stream()
+            .map(c -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("timestamp", c.timestamp().toString());
+                m.put("open", c.open);
+                m.put("high", c.high);
+                m.put("low", c.low);
+                m.put("close", c.close);
+                m.put("volume", c.volume());
+                return m;
+            })
+            .collect(java.util.stream.Collectors.toList()));
+        response.put("count", history.size());
         response.put("timestamp", LocalDateTime.now().toString());
         return response;
     }
@@ -74,11 +87,29 @@ public class EngineController {
         try {
             logger.info("🔄 Resetting session...");
             candleAggregator.clearHistory();
+            shadowExecutionEngine.restart();
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "RESET_COMPLETE");
             return response;
         } catch (Exception e) {
-            return errorResponse("Reset failed");
+            return errorResponse("Reset failed: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/force-refresh")
+    public Map<String, Object> forceRefresh() {
+        try {
+            double ltp = centralizedMarketDataService.getNiftyLtp();
+            if (ltp <= 0) {
+                return errorResponse("No live LTP available for refresh");
+            }
+            candleAggregator.forceRefresh(ltp);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "SUCCESS");
+            response.put("ltp", ltp);
+            return response;
+        } catch (Exception e) {
+            return errorResponse("Force refresh failed: " + e.getMessage());
         }
     }
 

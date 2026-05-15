@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RiskPilot Live Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
   <style>
     :root {
       --bg: #09111f;
@@ -73,6 +77,14 @@
       border-radius: 8px;
       overflow-x: auto;
     }
+    .chart-container {
+      margin-top: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      height: 400px;
+    }
     table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
     thead { background: var(--panel-2); }
     th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -114,6 +126,11 @@
       <div class="card"><div class="label">Session</div><div id="session" class="value small">--</div></div>
       <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">₹--</div></div>
       <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value">0</div></div>
+    </section>
+
+    <section class="chart-container">
+      <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
+      <canvas id="candleChart"></canvas>
     </section>
 
     <section class="table-wrap">
@@ -160,8 +177,80 @@
       session: document.getElementById('session'),
       paperBalance: document.getElementById('paperBalance'),
       tradesTaken: document.getElementById('tradesTaken'),
-      rows: document.getElementById('rows')
+      rows: document.getElementById('rows'),
+      candleChart: document.getElementById('candleChart')
     };
+
+    let candleChart = null;
+    function initChart() {
+      const ctx = els.candleChart.getContext('2d');
+      candleChart = new Chart(ctx, {
+        type: 'candlestick',
+        data: {
+          datasets: [{
+            label: 'NIFTY 5m',
+            data: [],
+            color: {
+              up: '#26d07c',
+              down: '#ff6b6b',
+              unchanged: '#93a4b8',
+            }
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+              grid: { color: '#263653' },
+              ticks: { color: '#93a4b8' }
+            },
+            y: {
+              grid: { color: '#263653' },
+              ticks: { color: '#93a4b8' }
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const p = ctx.raw;
+                  return [
+                    `O: ${p.o}`,
+                    `H: ${p.h}`,
+                    `L: ${p.l}`,
+                    `C: ${p.c}`
+                  ];
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    async function updateCandleChart() {
+      try {
+        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
+        const data = await resp.json();
+        if (data.candles && candleChart) {
+          const chartData = data.candles.map(c => ({
+            x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
+            o: c.open,
+            h: c.high,
+            l: c.low,
+            c: c.close
+          }));
+          candleChart.data.datasets[0].data = chartData;
+          candleChart.update('none');
+        }
+      } catch (e) {
+        console.error('Failed to update candle chart', e);
+      }
+    }
 
     function istTime() {
       return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
@@ -327,10 +416,13 @@
     }
 
     tickClock();
+    initChart();
     refreshLiveData();
+    updateCandleChart();
     connectSocket();
     setInterval(tickClock, 1000);
     setInterval(refreshLiveData, 1000);
+    setInterval(updateCandleChart, 5000);
   </script>
 </body>
 </html>

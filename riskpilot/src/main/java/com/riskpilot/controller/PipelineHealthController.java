@@ -26,7 +26,7 @@ import java.util.Map;
 public class PipelineHealthController {
 
     private final AngelTickStreamClient tickStreamClient;
-    private final RealTimeTickAggregator realTimeTickAggregator;
+    private final CandleAggregator candleAggregator;
     private final VixService vixService;
     private final OptionChainService optionChainService;
 
@@ -34,15 +34,15 @@ public class PipelineHealthController {
     public ResponseEntity<Map<String, Object>> pipeline() {
         Map<String, Object> tickSection = new LinkedHashMap<>();
         boolean streamActive = tickStreamClient.isStreamActive();
-        boolean feedStable  = realTimeTickAggregator.isFeedStable();
-        Map<String, Object> aggStats = realTimeTickAggregator.getStats();
+        boolean feedStable  = !candleAggregator.isFeedUnstable();
+        List<com.riskpilot.model.Candle> history = candleAggregator.getValidHistory();
 
         tickSection.put("streamActive",   streamActive);
         tickSection.put("feedStable",     feedStable);
-        tickSection.put("totalCandles",   aggStats.get("totalCandles"));
-        tickSection.put("activeBuilders", aggStats.get("activeBuilders"));
-        tickSection.put("lastTickTime",   aggStats.get("lastTickTime"));
-        tickSection.put("lastCandleTime", aggStats.get("lastCandleTime"));
+        tickSection.put("totalCandles",   history.size());
+        tickSection.put("activeBuilders", 1);
+        tickSection.put("lastTickTime",   LocalDateTime.now().toString());
+        tickSection.put("lastCandleTime", history.isEmpty() ? "none" : history.get(history.size()-1).timestamp().toString());
 
         Map<String, Object> vixSection = new LinkedHashMap<>();
         double vix = vixService.getIndiaVix();

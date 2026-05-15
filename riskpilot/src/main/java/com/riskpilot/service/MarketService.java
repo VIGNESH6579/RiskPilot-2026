@@ -16,18 +16,18 @@ package com.riskpilot.service;
       private final AngelOneMarketDataService angelOneMarketDataService;
       private final CentralizedMarketDataService centralizedMarketDataService;
       private final OptionChainService optionChainService;
-      private final RealTimeTickAggregator realTimeTickAggregator;
+    private final CandleAggregator candleAggregator;
 
-      public MarketService(
-              AngelOneMarketDataService angelOneMarketDataService,
-              CentralizedMarketDataService centralizedMarketDataService,
-              OptionChainService optionChainService,
-              RealTimeTickAggregator realTimeTickAggregator) {
-          this.angelOneMarketDataService = angelOneMarketDataService;
-          this.centralizedMarketDataService = centralizedMarketDataService;
-          this.optionChainService = optionChainService;
-          this.realTimeTickAggregator = realTimeTickAggregator;
-      }
+    public MarketService(
+            AngelOneMarketDataService angelOneMarketDataService,
+            CentralizedMarketDataService centralizedMarketDataService,
+            OptionChainService optionChainService,
+            CandleAggregator candleAggregator) {
+        this.angelOneMarketDataService = angelOneMarketDataService;
+        this.centralizedMarketDataService = centralizedMarketDataService;
+        this.optionChainService = optionChainService;
+        this.candleAggregator = candleAggregator;
+    }
 
       /**
        * Real-time spot price from Angel One. Throws if unavailable — no silent fallbacks.
@@ -85,18 +85,18 @@ package com.riskpilot.service;
        * RSI calculated from real candle history provided by the live tick aggregator.
        * Requires at least 15 closed candles; throws if insufficient data.
        */
-      public double getRsi(String symbol) {
-          List<CandleEntity> history = realTimeTickAggregator.getCandleHistory(20);
-          List<Double> prices = history.stream()
-              .map(c -> c.getClosePrice().doubleValue())
-              .collect(Collectors.toList());
+    public double getRsi(String symbol) {
+        List<com.riskpilot.model.Candle> history = candleAggregator.getValidHistory();
+        List<Double> prices = history.stream()
+            .map(c -> c.close)
+            .collect(Collectors.toList());
 
-          if (prices.size() < 15) {
-              throw new MarketDataException(
-                  "RSI_UNAVAILABLE: insufficient real-time candle history for " + symbol +
-                  " (have " + prices.size() + ", need 15)");
-          }
-          return RsiCalculator.calculateRSI(prices, 14);
-      }
+        if (prices.size() < 15) {
+            throw new MarketDataException(
+                "RSI_UNAVAILABLE: insufficient real-time candle history for " + symbol +
+                " (have " + prices.size() + ", need 15)");
+        }
+        return RsiCalculator.calculateRSI(prices, 14);
+    }
   }
   
