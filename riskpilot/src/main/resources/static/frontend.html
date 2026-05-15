@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RiskPilot Live Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
+  <style>
+    :root {
+      --bg: #09111f;
+      --panel: #111a2d;
+      --panel-2: #17223a;
+      --text: #e6edf6;
+      --muted: #93a4b8;
+      --line: #263653;
+      --good: #26d07c;
+      --warn: #f4b740;
+      --bad: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+    }
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 20px; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    .sub { color: var(--muted); margin-top: 4px; font-size: 13px; }
+    .clock { text-align: right; font-size: 18px; font-weight: 700; }
+    .status {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--warn);
+    }
+    .status.ok { color: var(--good); }
+    .status.bad { color: var(--bad); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .card {
+      min-height: 82px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { margin-top: 6px; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+    .small { font-size: 13px; line-height: 1.35; }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .table-wrap {
+      margin-top: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    .chart-container {
+      margin-top: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      height: 400px;
+    }
+    table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
+    thead { background: var(--panel-2); }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; }
+    .empty { padding: 26px; text-align: center; color: var(--muted); }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { flex-direction: column; }
+      .clock { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="topbar">
+      <div>
+        <h1>RiskPilot Live Monitor</h1>
+        <div class="sub">Angel One live NIFTY feed, expiry, risk gates, and shadow trades</div>
+      </div>
+      <div>
+        <div id="clock" class="clock">--:--:--</div>
+        <div id="socketStatus" class="status">Socket connecting</div>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">--</div></div>
+      <div class="card"><div class="label">India VIX</div><div id="vix" class="value">--</div></div>
+      <div class="card"><div class="label">Weekly Expiry</div><div id="expiry" class="value small">--</div></div>
+      <div class="card"><div class="label">Source</div><div id="source" class="value small">--</div></div>
+      <div class="card"><div class="label">Freshness</div><div id="freshness" class="value small">--</div></div>
+      <div class="card"><div class="label">Feed Health</div><div id="feedHealth" class="value small">--</div></div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
+      <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
+      <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
+      <div class="card"><div class="label">Session</div><div id="session" class="value small">--</div></div>
+      <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">₹--</div></div>
+      <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value">0</div></div>
+    </section>
+
+    <section class="chart-container">
+      <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
+      <canvas id="candleChart"></canvas>
+    </section>
+
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Signal Time</th>
+            <th>Direction</th>
+            <th>Expected</th>
+            <th>Actual</th>
+            <th>Latency</th>
+            <th>Slippage</th>
+            <th>MFE</th>
+            <th>MAE</th>
+            <th>TP1</th>
+            <th>Runner</th>
+            <th>R</th>
+            <th>Exit Reason</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="12" class="empty">Awaiting trades...</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const MAX_ROWS = 50;
+    const rows = [];
+    let ws = null;
+    let reconnectTimer = null;
+
+    const els = {
+      clock: document.getElementById('clock'),
+      socketStatus: document.getElementById('socketStatus'),
+      spot: document.getElementById('spot'),
+      vix: document.getElementById('vix'),
+      expiry: document.getElementById('expiry'),
+      source: document.getElementById('source'),
+      freshness: document.getElementById('freshness'),
+      feedHealth: document.getElementById('feedHealth'),
+      range: document.getElementById('range'),
+      orRange: document.getElementById('orRange'),
+      regime: document.getElementById('regime'),
+      session: document.getElementById('session'),
+      paperBalance: document.getElementById('paperBalance'),
+      tradesTaken: document.getElementById('tradesTaken'),
+      rows: document.getElementById('rows'),
+      candleChart: document.getElementById('candleChart')
+    };
+
+    let candleChart = null;
+    function initChart() {
+      const ctx = els.candleChart.getContext('2d');
+      candleChart = new Chart(ctx, {
+        type: 'candlestick',
+        data: {
+          datasets: [{
+            label: 'NIFTY 5m',
+            data: [],
+            color: {
+              up: '#26d07c',
+              down: '#ff6b6b',
+              unchanged: '#93a4b8',
+            }
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+              grid: { color: '#263653' },
+              ticks: { color: '#93a4b8' }
+            },
+            y: {
+              grid: { color: '#263653' },
+              ticks: { color: '#93a4b8' }
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const p = ctx.raw;
+                  return [
+                    `O: ${p.o}`,
+                    `H: ${p.h}`,
+                    `L: ${p.l}`,
+                    `C: ${p.c}`
+                  ];
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    async function updateCandleChart() {
+      try {
+        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
+        const data = await resp.json();
+        if (data.candles && candleChart) {
+          const chartData = data.candles.map(c => ({
+            x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
+            o: c.open,
+            h: c.high,
+            l: c.low,
+            c: c.close
+          }));
+          candleChart.data.datasets[0].data = chartData;
+          candleChart.update('none');
+        }
+      } catch (e) {
+        console.error('Failed to update candle chart', e);
+      }
+    }
+
+    function istTime() {
+      return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+    }
+
+    function tickClock() {
+      els.clock.textContent = `IST ${istTime()}`;
+    }
+
+    function fmt(v, digits = 2) {
+      return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '--';
+    }
+
+    function fmtCurrency(v) {
+      return typeof v === 'number' && Number.isFinite(v) ? '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '₹--';
+    }
+
+    function setClass(el, cls) {
+      el.classList.remove('good', 'warn', 'bad', 'muted');
+      if (cls) el.classList.add(cls);
+    }
+
+    async function refreshLiveData() {
+      try {
+        const [health, state] = await Promise.all([
+          fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
+          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
+        ]);
+
+        const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
+        const live = health.marketDataStatus === 'LIVE'
+          && health.optionChainSource === 'ANGELONE_LTP'
+          && health.spot > 0;
+        const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
+        const freshnessText = live
+          ? `${ageSeconds}s old`
+          : (marketClosed
+            ? (ageSeconds === null ? 'market closed' : `closed, last quote ${ageSeconds}s old`)
+            : 'no live tick');
+
+        els.spot.textContent = health.spot > 0 ? fmt(health.spot) : '--';
+        els.vix.textContent = fmt(health.vix);
+        els.expiry.textContent = health.expiry || '--';
+        els.source.textContent = health.optionChainSource || 'UNKNOWN';
+        els.freshness.textContent = freshnessText;
+        els.feedHealth.textContent = live ? 'Live Angel One' : (marketClosed ? 'Market closed' : 'No live Angel tick');
+        els.range.textContent = health.spot > 0
+          ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
+          : '-- / --';
+        els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+        // Regime: translate UNKNOWN → friendly label based on market state
+        const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
+          ? (marketClosed ? 'Market Closed' : 'Assessing…')
+          : state.regime;
+        els.regime.textContent = regimeLabel;
+        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        // Session: show "Market Closed" when inactive due to closed market, not a fault
+        const sessionLabel = state.sessionActive
+          ? 'Active'
+          : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
+        els.session.textContent = sessionLabel;
+        setClass(els.session, state.sessionActive ? 'good' : (marketClosed ? 'muted' : 'bad'));
+        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
+        els.tradesTaken.textContent = state.tradesTaken ?? 0;
+
+        setClass(els.source, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
+        setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
+        setClass(els.feedHealth, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
+      } catch (error) {
+        els.feedHealth.textContent = 'Market API down';
+        setClass(els.feedHealth, 'bad');
+      }
+    }
+
+    let pingTimer = null;
+
+    function connectSocket() {
+      const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${protocol}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        els.socketStatus.textContent = 'Socket connected';
+        els.socketStatus.className = 'status ok';
+        // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+        }, 25000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          const type = message.eventType;
+          const payload = message.payload || message;
+
+          if (type === 'session_state') {
+            // Real-time session state update
+            updateUIFromState(payload);
+          } else if (type === 'trade' || (!type && payload.id)) {
+            // Real-time trade update
+            rows.unshift(payload);
+            if (rows.length > MAX_ROWS) rows.pop();
+            renderRows();
+          }
+        } catch (ignored) {}
+      };
+
+      function updateUIFromState(state) {
+        if (state.spot > 0) {
+          els.spot.textContent = fmt(state.spot);
+        }
+        if (state.vix > 0) {
+          els.vix.textContent = fmt(state.vix);
+        }
+        if (state.support && state.resistance) {
+          els.range.textContent = `${state.support} / ${state.resistance}`;
+        }
+        els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+        // Regime: translate UNKNOWN → friendly label
+        const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
+          ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
+          : state.regime;
+        els.regime.textContent = wsRegimeLabel;
+        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        // Session: show context-aware label
+        const wsSessionLabel = state.sessionActive
+          ? 'Active'
+          : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
+        els.session.textContent = wsSessionLabel;
+        setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
+        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
+        els.tradesTaken.textContent = state.tradesTaken ?? 0;
+      }
+
+      ws.onerror = () => {
+        els.socketStatus.textContent = 'Socket error';
+        els.socketStatus.className = 'status bad';
+      };
+
+      ws.onclose = () => {
+        els.socketStatus.textContent = 'Socket reconnecting';
+        els.socketStatus.className = 'status bad';
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectSocket, 3000);
+      };
+    }
+
+    function renderRows() {
+      if (rows.length === 0) {
+        els.rows.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades...</td></tr>';
+        return;
+      }
+      els.rows.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.signalTime || '--'}</td>
+          <td>${r.direction || '--'}</td>
+          <td>${fmt(r.expectedEntry)}</td>
+          <td>${fmt(r.actualEntry)}</td>
+          <td class="${(r.latencySec || 0) > 2 ? 'bad' : 'muted'}">${fmt(r.latencySec)}</td>
+          <td class="${Math.abs(r.slippage || 0) > 1 ? 'bad' : 'good'}">${fmt(r.slippage)}</td>
+          <td>${fmt(r.mfe)}</td>
+          <td>${fmt(r.mae)}</td>
+          <td>${r.tp1Hit ? 'yes' : 'no'}</td>
+          <td>${r.runnerCaptured ? 'yes' : 'no'}</td>
+          <td class="${(r.realizedR || 0) >= 0 ? 'good' : 'bad'}">${fmt(r.realizedR)}R</td>
+          <td>${r.exitReason || '--'}</td>
+        </tr>
+      `).join('');
+    }
+
+    tickClock();
+    initChart();
+    refreshLiveData();
+    updateCandleChart();
+    connectSocket();
+    setInterval(tickClock, 1000);
+    setInterval(refreshLiveData, 1000);
+    setInterval(updateCandleChart, 5000);
+  </script>
+</body>
+</html>

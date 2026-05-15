@@ -81,7 +81,8 @@ public class SecurityConfig {
                 ).permitAll()
                 // Static dashboard — read-only UI
                 .requestMatchers(HttpMethod.GET,
-                    "/", "/index.html", "/frontend.html"
+                    "/", "/index.html", "/frontend.html", "/favicon.ico",
+                    "/static/**"
                 ).permitAll()
                 // Read-only data endpoints — safe to expose
                 .requestMatchers(HttpMethod.GET,
@@ -123,11 +124,11 @@ public class SecurityConfig {
                 .contentSecurityPolicy(csp ->
                     csp.policyDirectives(
                         "default-src 'self'; " +
-                        "script-src 'self' 'unsafe-inline'; " +
-                        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+                        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+                        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; " +
                         "font-src 'self' https://fonts.gstatic.com; " +
-                        "connect-src 'self' wss: ws:; " +
-                        "img-src 'self' data:; " +
+                        "connect-src 'self' wss://riskpilot-2026.onrender.com ws://riskpilot-2026.onrender.com wss: ws:; " +
+                        "img-src 'self' data: https://cdn.jsdelivr.net; " +
                         "frame-ancestors 'none'"
                     )
                 )
