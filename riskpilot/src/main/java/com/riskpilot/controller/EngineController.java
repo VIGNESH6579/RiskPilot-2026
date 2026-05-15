@@ -1,9 +1,11 @@
 package com.riskpilot.controller;
 
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.service.CentralizedMarketDataService;
 import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.SessionStateManager;
-import com.riskpilot.service.CandleAggregator;
+import com.riskpilot.service.ShadowExecutionEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.slf4j.Logger;
@@ -11,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -26,6 +29,12 @@ public class EngineController {
 
     @Autowired
     private CandleAggregator candleAggregator;
+
+    @Autowired
+    private ShadowExecutionEngine shadowExecutionEngine;
+
+    @Autowired
+    private CentralizedMarketDataService centralizedMarketDataService;
 
     @GetMapping("/health")
     public Map<String, Object> getHealth() {
