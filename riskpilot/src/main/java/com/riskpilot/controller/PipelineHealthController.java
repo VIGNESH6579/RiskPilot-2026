@@ -1,8 +1,9 @@
 package com.riskpilot.controller;
 
+import com.riskpilot.model.Candle;
 import com.riskpilot.service.AngelTickStreamClient;
+import com.riskpilot.service.CandleAggregator;
 import com.riskpilot.service.OptionChainService;
-import com.riskpilot.service.RealTimeTickAggregator;
 import com.riskpilot.service.VixService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -11,7 +12,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,7 +38,7 @@ public class PipelineHealthController {
         Map<String, Object> tickSection = new LinkedHashMap<>();
         boolean streamActive = tickStreamClient.isStreamActive();
         boolean feedStable  = !candleAggregator.isFeedUnstable();
-        List<com.riskpilot.model.Candle> history = candleAggregator.getValidHistory();
+        List<Candle> history = candleAggregator.getValidHistory();
 
         tickSection.put("streamActive",   streamActive);
         tickSection.put("feedStable",     feedStable);
