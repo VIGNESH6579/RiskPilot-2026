@@ -19,6 +19,9 @@ public class TradingSafetyManager {
     private final AtomicBoolean emergency = new AtomicBoolean(false);
     private final CopyOnWriteArrayList<String> violations = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> reason = new AtomicReference<>(null);
+    // BUG-FIX: Rate-limit warn logs — these checks fire every second per tick, causing log floods
+    private volatile long lastNiftyWarnMs = 0L;
+    private volatile long lastVixWarnMs   = 0L;
 
     public TradingSafetyManager() { instance = this; }
     public static TradingSafetyManager getInstance() { return instance; }
@@ -64,7 +67,7 @@ public class TradingSafetyManager {
     /** Check before EVERY trade - returns false if unsafe */
     public boolean isSafeToTrade() {
         if (emergency.get()) {
-            log.warn("🚫 TRADE_BLOCKED: Emergency stop active");
+            log.warn("🚫 TRADE_BLOCKED: Emergency stop active — reason={}", reason.get());
             return false;
         }
         if (!enabled.get()) return false;
@@ -74,8 +77,25 @@ public class TradingSafetyManager {
             FeedHealthMonitor      fh   = ApplicationContextProvider.getBean(FeedHealthMonitor.class);
             AngelSessionManager    sess = ApplicationContextProvider.getBean(AngelSessionManager.class);
 
-            if (md != null && !md.isNiftyAvailable())  { violate("NIFTY_LTP_UNAVAILABLE");        return false; }
-            if (md != null && !md.isVixValid())         { violate("VIX_INVALID_OR_STALE");         return false; }
+            if (md != null && !md.isNiftyAvailable()) {
+                // BUG-FIX: Rate-limit this log — it was firing every second causing log flood
+                long now = System.currentTimeMillis();
+                if (now - lastNiftyWarnMs > 30_000L) {
+                    log.warn("🚫 TRADE_BLOCKED: NIFTY LTP unavailable (no Angel One ticks yet; check credentials)");
+                    lastNiftyWarnMs = now;
+                }
+                violate("NIFTY_LTP_UNAVAILABLE");
+                return false;
+            }
+            if (md != null && !md.isVixValid()) {
+                long now = System.currentTimeMillis();
+                if (now - lastVixWarnMs > 30_000L) {
+                    log.warn("🚫 TRADE_BLOCKED: VIX invalid or stale (check ANGEL_INDIA_VIX_TOKEN or Yahoo fallback)");
+                    lastVixWarnMs = now;
+                }
+                violate("VIX_INVALID_OR_STALE");
+                return false;
+            }
             if (fh != null && !fh.isSafe())             { violate("FEED_UNSAFE:" + fh.getState()); return false; }
             if (sess != null && !sess.isSessionValid()) { violate("SESSION_INVALID");              return false; }
         } catch (Exception e) {

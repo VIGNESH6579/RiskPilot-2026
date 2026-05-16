@@ -19,6 +19,7 @@ public class TrapEngine {
     private final double maxVix;
     private final double accountCapital;
     private final double riskPerTradePct;
+    private final String tradingSymbol;
 
     // BUG-019: ATR-relative constants (instead of hardcoded points)
     private static final double BREAKOUT_DEPTH_ATR_MULTIPLIER = 0.20;  // ~20% of ATR
@@ -29,12 +30,15 @@ public class TrapEngine {
         @Value("${TRAP_MIN_VIX:12}") double minVix,
         @Value("${TRAP_MAX_VIX:25}") double maxVix,
         @Value("${TRAP_ACCOUNT_CAPITAL:100000}") double accountCapital,
-        @Value("${TRAP_RISK_PCT:0.01}") double riskPerTradePct
+        @Value("${TRAP_RISK_PCT:0.01}") double riskPerTradePct,
+        // BUG-FIX: Was hardcoded "NIFTY" — now uses the same env var as the rest of the app
+        @Value("${TRADING_SYMBOL:NIFTY}") String tradingSymbol
     ) {
         this.minVix = minVix;
         this.maxVix = maxVix;
         this.accountCapital = accountCapital > 0 ? accountCapital : 100000;
         this.riskPerTradePct = (riskPerTradePct > 0 && riskPerTradePct <= 0.05) ? riskPerTradePct : 0.01;
+        this.tradingSymbol = (tradingSymbol != null && !tradingSymbol.isBlank()) ? tradingSymbol.trim().toUpperCase() : "NIFTY";
     }
     
     /**
@@ -149,7 +153,7 @@ public class TrapEngine {
         }
 
         Signal s = new Signal();
-        s.setSymbol("NIFTY");
+        s.setSymbol(tradingSymbol); // BUG-FIX: was hardcoded "NIFTY"
         s.setDirection(direction);
         s.setEntry(entry);
         s.setStopLoss(sl);

@@ -15,8 +15,10 @@ import com.riskpilot.model.GateDecision;
 import com.riskpilot.model.Regime;
 import com.riskpilot.model.Signal;
 import com.riskpilot.model.TimePhase;
+import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -26,6 +28,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -57,6 +60,8 @@ public class ShadowExecutionEngine {
     private final TransactionTemplate transactionTemplate;
     private final MarketSessionService marketSessionService;
     private final TradingSafetyManager tradingSafetyManager;
+    // BUG-FIX: ShadowExecutionEngine never persisted trades to DB — history was always empty
+    private final TradeRepository tradeRepository;
 
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
@@ -385,7 +390,26 @@ public class ShadowExecutionEngine {
         }
 
         // FIX: Use evaluateEntry with proper parameters instead of evaluate(snapshot, signal)
-        double orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        // BUG-FIX: orHigh = -Inf, orLow = +Inf until first pre-09:45 candle is processed.
+        // Math.max(0.0, -Inf - +Inf) = 0.0, making earlySessionBypass always false.
+        // If OR is not yet built from the snapshot, compute it directly from candle history.
+        double orRange;
+        if (Double.isFinite(state.orHigh()) && Double.isFinite(state.orLow())) {
+            orRange = Math.max(0.0, state.orHigh() - state.orLow());
+        } else {
+            // OR not yet in snapshot: compute on-the-fly from pre-09:45 candles
+            double computedHigh = Double.NEGATIVE_INFINITY;
+            double computedLow  = Double.POSITIVE_INFINITY;
+            for (Candle c : history) {
+                if (c.timestamp().toLocalTime().isBefore(java.time.LocalTime.of(9, 45))) {
+                    computedHigh = Math.max(computedHigh, c.high);
+                    computedLow  = Math.min(computedLow,  c.low);
+                }
+            }
+            orRange = (Double.isFinite(computedHigh) && Double.isFinite(computedLow))
+                ? Math.max(0.0, computedHigh - computedLow)
+                : 0.0;
+        }
         double entrySlippage = calculateEntrySlippage(signal, candle);  // Calculate from market conditions
         long latencyMs = calculateLatency(activeSignalTime);  // Calculate from signal timing
         
@@ -533,6 +557,44 @@ public class ShadowExecutionEngine {
                 entrySlippage, runnerSlippage, sessionFeatures);
         } catch (Exception e) {
             log.warn("Failed to update AdaptiveRegimeEngine with trade result: {}", e.getMessage());
+        }
+
+        // BUG-FIX: Persist shadow trade to DB so trade history and performance metrics work.
+        // Without this, every trade was lost on restart and the dashboard showed 0 trades.
+        try {
+            final ActiveTradeExecution finalTrade = trade;
+            final TradeExit finalExit = exit;
+            final double finalRealizedR = realizedR;
+            final LocalDateTime finalSignalTime = signalTime;
+            transactionTemplate.execute(status -> {
+                Trade dbTrade = Trade.builder()
+                    .symbol(config.getTrading() != null ? "NIFTY" : "NIFTY")
+                    .direction(finalTrade.direction())
+                    .entryPrice(BigDecimal.valueOf(finalTrade.entryPrice()))
+                    .stopLoss(BigDecimal.valueOf(finalTrade.stopLoss()))
+                    .targetPrice(BigDecimal.valueOf(finalTrade.tp1Level()))
+                    .positionSize(BigDecimal.valueOf(finalTrade.positionSize()))
+                    .remainingSize(BigDecimal.valueOf(finalTrade.remainingSize()))
+                    .realizedPnL(BigDecimal.valueOf(finalExit.pnl()))
+                    .unrealizedPnL(BigDecimal.ZERO)
+                    .maxFavorableExcursion(BigDecimal.valueOf(finalTrade.mfe()))
+                    .maxAdverseExcursion(BigDecimal.valueOf(finalTrade.mae()))
+                    .tp1Hit(finalTrade.tp1Hit())
+                    .runnerActive(finalTrade.runnerActive())
+                    .tailHalfLocked(false)
+                    .trailingStopLoss(BigDecimal.valueOf(finalTrade.trailingSL()))
+                    .status("CLOSED")
+                    .exitReason(finalExit.exitReason() != null ? finalExit.exitReason() : "UNKNOWN")
+                    .entryTime(finalSignalTime != null ? finalSignalTime : LocalDateTime.now())
+                    .exitTime(LocalDateTime.now())
+                    .build();
+                tradeRepository.save(dbTrade);
+                log.info("✅ Shadow trade persisted to DB: direction={}, pnl={}, R={}",
+                    finalTrade.direction(), finalExit.pnl(), finalRealizedR);
+                return null;
+            });
+        } catch (Exception e) {
+            log.warn("⚠️ Failed to persist shadow trade to DB (non-fatal): {}", e.getMessage());
         }
 
         return new ClosedTradeBroadcast(
@@ -743,18 +805,37 @@ public class ShadowExecutionEngine {
         ));
     }
 
+    /**
+     * BUG-CRITICAL-FIX: Support/Resistance MUST exclude the two most recent candles
+     * (t0 = current/latest, t1 = breakout candle) from the lookback.
+     *
+     * Root cause of NO_TRADES: TrapEngine checks:
+     *   SHORT: t1.high > localResistance (t1 broke above resistance)
+     *   LONG:  t1.low  < localSupport    (t1 broke below support)
+     *
+     * When t1 is included in the lookback that computes localResistance = highestHigh,
+     * t1.high IS the highestHigh, so t1.high > highestHigh is always FALSE.
+     * Same logic for LONG: if t1 IS the lowestLow, t1.low < lowestLow is always FALSE.
+     * Result: trap conditions could never fire → zero trades.
+     *
+     * Fix: compute S/R from candles PRIOR to t1 (i.e. exclude last 2 from lookback).
+     */
     private double[] calculateSupportResistance(List<Candle> history) {
-        if (history.isEmpty()) {
+        // Need at least 3 candles: [... historical ..., t1, t0]
+        if (history.size() < 3) {
             return new double[]{0.0, 0.0};
         }
 
-        int lookbackPeriod = Math.min(20, history.size());
-        int startIdx = history.size() - lookbackPeriod;
+        // Exclude t0 (index size-1) and t1 (index size-2) from support/resistance calculation.
+        // S/R must be derived from the candles BEFORE the breakout candle (t1).
+        int endIdx = history.size() - 2; // exclusive: up to but not including t1
+        int lookbackPeriod = Math.min(20, endIdx);
+        int startIdx = endIdx - lookbackPeriod;
 
         double highestHigh = Double.NEGATIVE_INFINITY;
         double lowestLow = Double.POSITIVE_INFINITY;
 
-        for (int i = startIdx; i < history.size(); i++) {
+        for (int i = startIdx; i < endIdx; i++) {
             Candle candle = history.get(i);
             highestHigh = Math.max(highestHigh, candle.high);
             lowestLow = Math.min(lowestLow, candle.low);
