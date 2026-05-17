@@ -568,7 +568,7 @@ public class ShadowExecutionEngine {
             final LocalDateTime finalSignalTime = signalTime;
             transactionTemplate.execute(status -> {
                 Trade dbTrade = Trade.builder()
-                    .symbol(config.getTrading() != null ? "NIFTY" : "NIFTY")
+                    .symbol("NIFTY")
                     .direction(finalTrade.direction())
                     .entryPrice(BigDecimal.valueOf(finalTrade.entryPrice()))
                     .stopLoss(BigDecimal.valueOf(finalTrade.stopLoss()))
