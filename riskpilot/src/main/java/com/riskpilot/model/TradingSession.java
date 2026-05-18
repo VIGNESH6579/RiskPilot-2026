@@ -58,7 +58,7 @@ public class TradingSession {
     @Column(nullable = false)
     private Integer tradesRejected;
     
-    @Column(nullable = false, precision = 12, scale = 2)
+    @Column(name = "total_pn_l", nullable = false, precision = 12, scale = 2)
     private BigDecimal totalPnL;
     
     @Column(nullable = false, precision = 12, scale = 2)

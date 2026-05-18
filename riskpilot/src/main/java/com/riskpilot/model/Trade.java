@@ -42,10 +42,10 @@ public class Trade {
     @Column(nullable = false, precision = 5, scale = 2)
     private BigDecimal remainingSize;
     
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "realized_pn_l", nullable = false, precision = 10, scale = 2)
     private BigDecimal realizedPnL;
     
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "unrealized_pn_l", nullable = false, precision = 10, scale = 2)
     private BigDecimal unrealizedPnL;
     
     @Column(nullable = false, precision = 10, scale = 2)
