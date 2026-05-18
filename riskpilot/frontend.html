@@ -84,6 +84,22 @@
       border-radius: 8px;
       padding: 16px;
       height: 400px;
+      position: relative;
+    }
+    .chart-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chart-error {
+      color: var(--bad);
+      font-weight: 600;
     }
     table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
     thead { background: var(--panel-2); }
@@ -130,7 +146,10 @@
 
     <section class="chart-container">
       <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
-      <canvas id="candleChart"></canvas>
+      <canvas id="candleChart" style="display: none;"></canvas>
+      <div id="chartPlaceholder" class="chart-placeholder">
+        <span>Loading chart libraries...</span>
+      </div>
     </section>
 
     <section class="table-wrap">
@@ -157,6 +176,23 @@
   </main>
 
   <script>
+    // ============================================================
+    // Enhanced Logging System
+    // ============================================================
+    const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+    const CURRENT_LOG_LEVEL = LOG_LEVELS.DEBUG;
+
+    function log(level, message, data = null) {
+      if (level < CURRENT_LOG_LEVEL) return;
+      const timestamp = new Date().toISOString();
+      const prefix = `[${timestamp}] [${Object.keys(LOG_LEVELS).find(k => LOG_LEVELS[k] === level)}]`;
+      if (data) {
+        console.log(`${prefix} ${message}`, data);
+      } else {
+        console.log(`${prefix} ${message}`);
+      }
+    }
+
     const MAX_ROWS = 50;
     const rows = [];
     let ws = null;
@@ -178,77 +214,161 @@
       paperBalance: document.getElementById('paperBalance'),
       tradesTaken: document.getElementById('tradesTaken'),
       rows: document.getElementById('rows'),
-      candleChart: document.getElementById('candleChart')
+      candleChart: document.getElementById('candleChart'),
+      chartPlaceholder: document.getElementById('chartPlaceholder')
     };
 
     let candleChart = null;
+    let chartInitialized = false;
+
+    // ============================================================
+    // Chart Initialization with Dependency Checking
+    // ============================================================
     function initChart() {
-      const ctx = els.candleChart.getContext('2d');
-      candleChart = new Chart(ctx, {
-        type: 'candlestick',
-        data: {
-          datasets: [{
-            label: 'NIFTY 5m',
-            data: [],
-            color: {
-              up: '#26d07c',
-              down: '#ff6b6b',
-              unchanged: '#93a4b8',
-            }
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            x: {
-              type: 'time',
-              time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
-              grid: { color: '#263653' },
-              ticks: { color: '#93a4b8' }
-            },
-            y: {
-              grid: { color: '#263653' },
-              ticks: { color: '#93a4b8' }
-            }
+      try {
+        // Verify all required libraries are loaded
+        if (typeof Chart === 'undefined') {
+          throw new Error('Chart.js library not loaded from CDN');
+        }
+        if (typeof luxon === 'undefined') {
+          throw new Error('Luxon library not loaded from CDN');
+        }
+        if (typeof ChartFinancial === 'undefined') {
+          throw new Error('chartjs-chart-financial library not loaded from CDN');
+        }
+
+        log(LOG_LEVELS.INFO, 'All chart libraries verified, initializing chart...');
+
+        const ctx = els.candleChart.getContext('2d');
+        if (!ctx) {
+          throw new Error('Failed to get 2D context from canvas element');
+        }
+
+        candleChart = new Chart(ctx, {
+          type: 'candlestick',
+          data: {
+            datasets: [{
+              label: 'NIFTY 5m',
+              data: [],
+              color: {
+                up: '#26d07c',
+                down: '#ff6b6b',
+                unchanged: '#93a4b8',
+              }
+            }]
           },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => {
-                  const p = ctx.raw;
-                  return [
-                    `O: ${p.o}`,
-                    `H: ${p.h}`,
-                    `L: ${p.l}`,
-                    `C: ${p.c}`
-                  ];
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                type: 'time',
+                time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+                grid: { color: '#263653' },
+                ticks: { color: '#93a4b8' }
+              },
+              y: {
+                grid: { color: '#263653' },
+                ticks: { color: '#93a4b8' }
+              }
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const p = ctx.raw;
+                    return [
+                      `O: ${p.o}`,
+                      `H: ${p.h}`,
+                      `L: ${p.l}`,
+                      `C: ${p.c}`
+                    ];
+                  }
                 }
               }
             }
           }
-        }
-      });
+        });
+
+        chartInitialized = true;
+        els.candleChart.style.display = 'block';
+        els.chartPlaceholder.style.display = 'none';
+        log(LOG_LEVELS.INFO, 'Chart initialized successfully');
+        return true;
+      } catch (error) {
+        log(LOG_LEVELS.ERROR, 'Chart initialization failed', error);
+        chartInitialized = false;
+        els.chartPlaceholder.innerHTML = `
+          <span class="chart-error">⚠️ Chart unavailable</span>
+          <span style="font-size: 12px; color: var(--muted);">${error.message}</span>
+          <span style="font-size: 11px; color: var(--muted);">Check browser console for details</span>
+        `;
+        els.chartPlaceholder.style.display = 'flex';
+        return false;
+      }
     }
 
+    // ============================================================
+    // Candle Chart Update with Enhanced Error Handling
+    // ============================================================
     async function updateCandleChart() {
       try {
-        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
-        const data = await resp.json();
-        if (data.candles && candleChart) {
-          const chartData = data.candles.map(c => ({
-            x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
-            o: c.open,
-            h: c.high,
-            l: c.low,
-            c: c.close
-          }));
-          candleChart.data.datasets[0].data = chartData;
-          candleChart.update('none');
+        if (!chartInitialized) {
+          log(LOG_LEVELS.DEBUG, 'Chart not initialized, skipping update');
+          return;
         }
-      } catch (e) {
-        console.error('Failed to update candle chart', e);
+
+        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, {
+          cache: 'no-store'
+        });
+
+        if (!resp.ok) {
+          throw new Error(`API returned status ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        log(LOG_LEVELS.DEBUG, 'Candle history fetched', { count: data.candles?.length || 0 });
+
+        if (!data.candles || data.candles.length === 0) {
+          log(LOG_LEVELS.WARN, 'No candles available yet');
+          if (candleChart) {
+            candleChart.data.datasets[0].data = [];
+            candleChart.update('none');
+          }
+          return;
+        }
+
+        if (!candleChart) {
+          log(LOG_LEVELS.WARN, 'Chart object not available');
+          return;
+        }
+
+        const chartData = data.candles.map(c => {
+          try {
+            return {
+              x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
+              o: c.open,
+              h: c.high,
+              l: c.low,
+              c: c.close
+            };
+          } catch (e) {
+            log(LOG_LEVELS.WARN, 'Failed to parse candle timestamp', { timestamp: c.timestamp, error: e.message });
+            return null;
+          }
+        }).filter(c => c !== null);
+
+        if (chartData.length === 0) {
+          log(LOG_LEVELS.WARN, 'No valid candles after parsing');
+          return;
+        }
+
+        candleChart.data.datasets[0].data = chartData;
+        candleChart.update('none');
+        log(LOG_LEVELS.DEBUG, 'Chart updated with candles', { count: chartData.length });
+      } catch (error) {
+        log(LOG_LEVELS.ERROR, 'Failed to update candle chart', error);
       }
     }
 
@@ -301,12 +421,14 @@
           ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
           : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+        
         // Regime: translate UNKNOWN → friendly label based on market state
         const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
           ? (marketClosed ? 'Market Closed' : 'Assessing…')
           : state.regime;
         els.regime.textContent = regimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        
         // Session: show "Market Closed" when inactive due to closed market, not a fault
         const sessionLabel = state.sessionActive
           ? 'Active'
@@ -320,6 +442,7 @@
         setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
         setClass(els.feedHealth, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
       } catch (error) {
+        log(LOG_LEVELS.ERROR, 'Failed to refresh live data', error);
         els.feedHealth.textContent = 'Market API down';
         setClass(els.feedHealth, 'bad');
       }
@@ -328,76 +451,95 @@
     let pingTimer = null;
 
     function connectSocket() {
-      const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${protocol}://${location.host}/ws`);
+      try {
+        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${protocol}://${location.host}/ws`;
+        log(LOG_LEVELS.INFO, 'Connecting to WebSocket', { url: wsUrl });
+        
+        ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => {
-        els.socketStatus.textContent = 'Socket connected';
-        els.socketStatus.className = 'status ok';
-        // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
-        if (pingTimer) clearInterval(pingTimer);
-        pingTimer = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
-        }, 25000);
-      };
+        ws.onopen = () => {
+          log(LOG_LEVELS.INFO, 'WebSocket connected');
+          els.socketStatus.textContent = 'Socket connected';
+          els.socketStatus.className = 'status ok';
+          
+          // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
+          if (pingTimer) clearInterval(pingTimer);
+          pingTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send('ping');
+            }
+          }, 25000);
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          const type = message.eventType;
-          const payload = message.payload || message;
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            const type = message.eventType;
+            const payload = message.payload || message;
 
-          if (type === 'session_state') {
-            // Real-time session state update
-            updateUIFromState(payload);
-          } else if (type === 'trade' || (!type && payload.id)) {
-            // Real-time trade update
-            rows.unshift(payload);
-            if (rows.length > MAX_ROWS) rows.pop();
-            renderRows();
+            if (type === 'session_state') {
+              // Real-time session state update
+              updateUIFromState(payload);
+            } else if (type === 'trade' || (!type && payload.id)) {
+              // Real-time trade update
+              rows.unshift(payload);
+              if (rows.length > MAX_ROWS) rows.pop();
+              renderRows();
+            }
+          } catch (e) {
+            log(LOG_LEVELS.DEBUG, 'Failed to parse WebSocket message', e);
           }
-        } catch (ignored) {}
-      };
+        };
 
-      function updateUIFromState(state) {
-        if (state.spot > 0) {
-          els.spot.textContent = fmt(state.spot);
+        function updateUIFromState(state) {
+          if (state.spot > 0) {
+            els.spot.textContent = fmt(state.spot);
+          }
+          if (state.vix > 0) {
+            els.vix.textContent = fmt(state.vix);
+          }
+          if (state.support && state.resistance) {
+            els.range.textContent = `${state.support} / ${state.resistance}`;
+          }
+          els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+          
+          // Regime: translate UNKNOWN → friendly label
+          const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
+            ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
+            : state.regime;
+          els.regime.textContent = wsRegimeLabel;
+          setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+          
+          // Session: show context-aware label
+          const wsSessionLabel = state.sessionActive
+            ? 'Active'
+            : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
+          els.session.textContent = wsSessionLabel;
+          setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
+          els.paperBalance.textContent = fmtCurrency(state.paperBalance);
+          els.tradesTaken.textContent = state.tradesTaken ?? 0;
         }
-        if (state.vix > 0) {
-          els.vix.textContent = fmt(state.vix);
-        }
-        if (state.support && state.resistance) {
-          els.range.textContent = `${state.support} / ${state.resistance}`;
-        }
-        els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        // Regime: translate UNKNOWN → friendly label
-        const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
-          ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
-          : state.regime;
-        els.regime.textContent = wsRegimeLabel;
-        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-        // Session: show context-aware label
-        const wsSessionLabel = state.sessionActive
-          ? 'Active'
-          : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
-        els.session.textContent = wsSessionLabel;
-        setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
-        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
-        els.tradesTaken.textContent = state.tradesTaken ?? 0;
+
+        ws.onerror = (error) => {
+          log(LOG_LEVELS.ERROR, 'WebSocket error', error);
+          els.socketStatus.textContent = 'Socket error';
+          els.socketStatus.className = 'status bad';
+        };
+
+        ws.onclose = () => {
+          log(LOG_LEVELS.WARN, 'WebSocket closed, reconnecting in 3s...');
+          els.socketStatus.textContent = 'Socket reconnecting';
+          els.socketStatus.className = 'status bad';
+          if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connectSocket, 3000);
+        };
+      } catch (error) {
+        log(LOG_LEVELS.ERROR, 'Failed to connect WebSocket', error);
+        els.socketStatus.textContent = 'Socket failed';
+        els.socketStatus.className = 'status bad';
       }
-
-      ws.onerror = () => {
-        els.socketStatus.textContent = 'Socket error';
-        els.socketStatus.className = 'status bad';
-      };
-
-      ws.onclose = () => {
-        els.socketStatus.textContent = 'Socket reconnecting';
-        els.socketStatus.className = 'status bad';
-        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSocket, 3000);
-      };
     }
 
     function renderRows() {
@@ -423,15 +565,31 @@
       `).join('');
     }
 
+    // ============================================================
+    // Initialization Sequence
+    // ============================================================
+    log(LOG_LEVELS.INFO, 'RiskPilot Frontend initializing...');
+    
     tickClock();
-    // Guard: chart init may fail if CDN is slow; WebSocket must always connect regardless
-    try { initChart(); } catch(e) { console.warn('Chart init failed (CDN issue?), continuing without chart:', e.message); }
-    refreshLiveData();
-    updateCandleChart();
+    
+    // Initialize chart with proper error handling
+    if (!initChart()) {
+      log(LOG_LEVELS.WARN, 'Chart initialization failed, UI will continue without chart');
+    }
+    
+    // Fetch initial data
+    refreshLiveData().catch(e => log(LOG_LEVELS.ERROR, 'Initial data fetch failed', e));
+    updateCandleChart().catch(e => log(LOG_LEVELS.ERROR, 'Initial candle fetch failed', e));
+    
+    // Connect WebSocket
     connectSocket();
+    
+    // Setup intervals
     setInterval(tickClock, 1000);
     setInterval(refreshLiveData, 1000);
     setInterval(updateCandleChart, 5000);
+    
+    log(LOG_LEVELS.INFO, 'Frontend initialization complete');
   </script>
 </body>
 </html>
