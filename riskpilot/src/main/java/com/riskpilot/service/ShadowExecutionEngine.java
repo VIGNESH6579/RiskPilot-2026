@@ -18,6 +18,8 @@ import com.riskpilot.model.TimePhase;
 import com.riskpilot.model.Trade;
 import com.riskpilot.model.TradeExit;
 import com.riskpilot.model.TradingSessionSnapshot;
+import com.riskpilot.model.CandleEntity;
+import com.riskpilot.repository.CandleRepository;
 import com.riskpilot.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +31,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -62,6 +65,8 @@ public class ShadowExecutionEngine {
     private final TradingSafetyManager tradingSafetyManager;
     // BUG-FIX: ShadowExecutionEngine never persisted trades to DB — history was always empty
     private final TradeRepository tradeRepository;
+    // BUG-FIX: Restore today's candles from DB on startup so engine isn't blind after restart
+    private final CandleRepository candleRepository;
 
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
@@ -633,8 +638,28 @@ public class ShadowExecutionEngine {
 
     @EventListener(ApplicationReadyEvent.class)
     public void restoreSessionCandles() {
-        log.info("Session candle restore ready; existing in-memory history size={}",
-            candleAggregator.getValidHistory().size());
+        try {
+            LocalDate today = LocalDate.now();
+            // Try the configured trading symbol first, then fallback to the other
+            String[] symbolsToTry = {"NIFTY", "BANKNIFTY"};
+            java.util.List<com.riskpilot.model.CandleEntity> todayCandles = java.util.Collections.emptyList();
+            for (String sym : symbolsToTry) {
+                todayCandles = candleRepository.findBySymbolAndDateOrderByTimestampAsc(sym, today);
+                if (!todayCandles.isEmpty()) break;
+            }
+
+            if (todayCandles.isEmpty()) {
+                log.info("No persisted candles found for today ({}) — engine will build from live ticks", today);
+                return;
+            }
+
+            for (com.riskpilot.model.CandleEntity entity : todayCandles) {
+                candleAggregator.addCandle(entity.toCandle());
+            }
+            log.info("✅ Restored {} candles for {} from DB — engine ready immediately", todayCandles.size(), today);
+        } catch (Exception e) {
+            log.warn("⚠️ Failed to restore session candles from DB (non-fatal): {}", e.getMessage());
+        }
     }
 
     private void logReject(TradingSessionSnapshot state, String reason) {
