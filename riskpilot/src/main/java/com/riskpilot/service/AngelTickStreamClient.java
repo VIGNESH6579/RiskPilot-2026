@@ -57,6 +57,12 @@ public class AngelTickStreamClient {
     private final AtomicLong reconnectCounter = new AtomicLong(0);
     private final AtomicLong consecutiveTickErrors = new AtomicLong(0);
     
+    // Fix 1 & 2: Stale check improvements
+    private final AtomicLong lastTickTime = new AtomicLong(0);
+    private final AtomicLong connectedAt = new AtomicLong(0);
+    private static final long POST_CONNECT_GRACE_MS = 20_000L; // 20s grace period
+    private static final long STALE_THRESHOLD_MS = 45_000L;
+
     // Backoff settings
     private static final long[] BACKOFF_SCHEDULE = {1000, 2000, 5000, 10000, 30000, 60000};
     private static final long MIN_RECONNECT_COOLDOWN_MS = 10000; // 10s minimum between attempts
@@ -125,6 +131,10 @@ public class AngelTickStreamClient {
         try {
             stopPoller();
             
+            // Fix 1: Reset stale clock and track connect time
+            lastTickTime.set(System.currentTimeMillis());
+            connectedAt.set(System.currentTimeMillis());
+            
             // Start polling
             pollerFuture = scheduler.scheduleAtFixedRate(this::pollSpotAsTick, 0, 1, TimeUnit.SECONDS);
             
@@ -139,7 +149,8 @@ public class AngelTickStreamClient {
     }
 
     private void stopPoller() {
-        if (pollerFuture != null) {
+        // Fix 3: Cancel old poller before starting new one
+        if (pollerFuture != null && !pollerFuture.isCancelled()) {
             pollerFuture.cancel(false);
             pollerFuture = null;
         }
@@ -166,12 +177,14 @@ public class AngelTickStreamClient {
                 return;
             }
 
-            // Watchdog: Check for stale data
-            long age = marketDataStateService.getLastTickAgeMs();
-            if (age != Long.MAX_VALUE && age > 45000) {
-                log.warn("⚠️ Feed stale ({}ms) - triggering recovery", age);
-                handleFailure();
-                return;
+            // Fix 2: Enhanced stale check with grace period
+            if (System.currentTimeMillis() - connectedAt.get() >= POST_CONNECT_GRACE_MS) {
+                long staleMs = System.currentTimeMillis() - lastTickTime.get();
+                if (staleMs > STALE_THRESHOLD_MS) {
+                    log.warn("⚠️ Feed stale ({}ms) - triggering recovery", staleMs);
+                    handleFailure();
+                    return;
+                }
             }
 
             // BUG-FIX: Use getTradingSymbolLtp() so BANKNIFTY is fetched from cache
@@ -200,6 +213,8 @@ public class AngelTickStreamClient {
             }
 
             // Process valid tick
+            // Fix 4: Update lastTickTime on successful tick
+            lastTickTime.set(System.currentTimeMillis());
             marketDataStateService.updateNiftyFromWebSocket(spot, 0, 0);
             
             // BUG-FIX: Ensure VIX state is updated during tick polling

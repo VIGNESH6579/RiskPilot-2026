@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RiskPilot Live Monitor</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <!-- Updated CDN links with fallbacks and better versioning -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
@@ -84,6 +85,19 @@
       border-radius: 8px;
       padding: 16px;
       height: 400px;
+      position: relative;
+    }
+    .chart-placeholder {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17, 26, 45, 0.8);
+      color: var(--muted);
+      font-size: 14px;
+      z-index: 10;
+      border-radius: 8px;
     }
     table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
     thead { background: var(--panel-2); }
@@ -130,6 +144,7 @@
 
     <section class="chart-container">
       <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
+      <div id="chartPlaceholder" class="chart-placeholder">Loading chart libraries...</div>
       <canvas id="candleChart"></canvas>
     </section>
 
@@ -178,11 +193,22 @@
       paperBalance: document.getElementById('paperBalance'),
       tradesTaken: document.getElementById('tradesTaken'),
       rows: document.getElementById('rows'),
-      candleChart: document.getElementById('candleChart')
+      candleChart: document.getElementById('candleChart'),
+      chartPlaceholder: document.getElementById('chartPlaceholder')
     };
 
     let candleChart = null;
     function initChart() {
+      if (typeof Chart === 'undefined') {
+        throw new Error('Chart.js library not loaded from CDN');
+      }
+      if (typeof luxon === 'undefined') {
+        throw new Error('Luxon library not loaded from CDN');
+      }
+      if (typeof Chart.FinancialController === 'undefined') {
+        throw new Error('chartjs-chart-financial library not loaded from CDN');
+      }
+
       const ctx = els.candleChart.getContext('2d');
       candleChart = new Chart(ctx, {
         type: 'candlestick',
@@ -230,10 +256,12 @@
           }
         }
       });
+      els.chartPlaceholder.style.display = 'none';
     }
 
     async function updateCandleChart() {
       try {
+        if (!candleChart) return;
         const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
         const data = await resp.json();
         if (data.candles && candleChart) {
@@ -301,13 +329,13 @@
           ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
           : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        // Regime: translate UNKNOWN → friendly label based on market state
+        
         const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
           ? (marketClosed ? 'Market Closed' : 'Assessing…')
           : state.regime;
         els.regime.textContent = regimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-        // Session: show "Market Closed" when inactive due to closed market, not a fault
+        
         const sessionLabel = state.sessionActive
           ? 'Active'
           : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
@@ -334,7 +362,6 @@
       ws.onopen = () => {
         els.socketStatus.textContent = 'Socket connected';
         els.socketStatus.className = 'status ok';
-        // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
         if (pingTimer) clearInterval(pingTimer);
         pingTimer = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
@@ -348,10 +375,8 @@
           const payload = message.payload || message;
 
           if (type === 'session_state') {
-            // Real-time session state update
             updateUIFromState(payload);
           } else if (type === 'trade' || (!type && payload.id)) {
-            // Real-time trade update
             rows.unshift(payload);
             if (rows.length > MAX_ROWS) rows.pop();
             renderRows();
@@ -360,23 +385,15 @@
       };
 
       function updateUIFromState(state) {
-        if (state.spot > 0) {
-          els.spot.textContent = fmt(state.spot);
-        }
-        if (state.vix > 0) {
-          els.vix.textContent = fmt(state.vix);
-        }
-        if (state.support && state.resistance) {
-          els.range.textContent = `${state.support} / ${state.resistance}`;
-        }
+        if (state.spot > 0) els.spot.textContent = fmt(state.spot);
+        if (state.vix > 0) els.vix.textContent = fmt(state.vix);
+        if (state.support && state.resistance) els.range.textContent = `${state.support} / ${state.resistance}`;
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        // Regime: translate UNKNOWN → friendly label
         const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
           ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
           : state.regime;
         els.regime.textContent = wsRegimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-        // Session: show context-aware label
         const wsSessionLabel = state.sessionActive
           ? 'Active'
           : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
@@ -424,8 +441,13 @@
     }
 
     tickClock();
-    // Guard: chart init may fail if CDN is slow; WebSocket must always connect regardless
-    try { initChart(); } catch(e) { console.warn('Chart init failed (CDN issue?), continuing without chart:', e.message); }
+    try { 
+      initChart(); 
+    } catch(e) { 
+      console.error('Chart init failed:', e.message);
+      els.chartPlaceholder.innerHTML = `⚠️ Chart unavailable<br>${e.message}<br>Check browser console for details`;
+      els.chartPlaceholder.style.color = '#ff6b6b';
+    }
     refreshLiveData();
     updateCandleChart();
     connectSocket();
