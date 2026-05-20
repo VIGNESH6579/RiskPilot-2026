@@ -8,7 +8,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
+  <!-- Using a more reliable CDN for the financial plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
   <style>
     :root {
       --bg: #09111f;
@@ -98,22 +99,26 @@
       font-size: 14px;
       z-index: 10;
       border-radius: 8px;
+      text-align: center;
+      line-height: 1.6;
     }
-    table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
-    thead { background: var(--panel-2); }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-    th { color: var(--muted); font-weight: 600; }
-    .empty { padding: 26px; text-align: center; color: var(--muted); }
-    @media (max-width: 980px) {
-      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    table { width: 100%; border-collapse: collapse; min-width: 1000px; font-size: 13px; }
+    th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); background: var(--panel-2); font-weight: 600; }
+    .empty { text-align: center; color: var(--muted); padding: 40px; }
+    @media (max-width: 1024px) {
+      .grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 768px) {
       .topbar { flex-direction: column; }
       .clock { text-align: left; }
+      .grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <header class="topbar">
+  <div class="wrap">
+    <div class="topbar">
       <div>
         <h1>RiskPilot Live Monitor</h1>
         <div class="sub">Angel One live NIFTY feed, expiry, risk gates, and shadow trades</div>
@@ -122,82 +127,99 @@
         <div id="clock" class="clock">--:--:--</div>
         <div id="socketStatus" class="status">Socket connecting</div>
       </div>
-    </header>
+    </div>
 
-    <section class="grid">
+    <div class="grid">
       <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">--</div></div>
       <div class="card"><div class="label">India VIX</div><div id="vix" class="value">--</div></div>
-      <div class="card"><div class="label">Weekly Expiry</div><div id="expiry" class="value small">--</div></div>
-      <div class="card"><div class="label">Source</div><div id="source" class="value small">--</div></div>
-      <div class="card"><div class="label">Freshness</div><div id="freshness" class="value small">--</div></div>
-      <div class="card"><div class="label">Feed Health</div><div id="feedHealth" class="value small">--</div></div>
-    </section>
-
-    <section class="grid">
+      <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">--</div></div>
+      <div class="card"><div class="label">Source / Freshness</div><div id="freshness" class="value small">--</div></div>
       <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
       <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
       <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
-      <div class="card"><div class="label">Session</div><div id="session" class="value small">--</div></div>
-      <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">₹--</div></div>
-      <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value">0</div></div>
-    </section>
+      <div class="card"><div class="label">Session Status</div><div id="session" class="value small">--</div></div>
+      <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value small">--</div></div>
+      <div class="card"><div class="label">Feed Health</div><div id="feedHealth" class="value small">--</div></div>
+      <div class="card"><div class="label">Expiry</div><div id="expiry" class="value small">--</div></div>
+      <div class="card"><div class="label">Source</div><div id="source" class="value small">--</div></div>
+    </div>
 
-    <section class="chart-container">
-      <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
-      <div id="chartPlaceholder" class="chart-placeholder">Loading chart libraries...</div>
+    <div class="chart-container">
+      <div id="chartPlaceholder" class="chart-placeholder">Awaiting candle data...</div>
       <canvas id="candleChart"></canvas>
-    </section>
+    </div>
 
-    <section class="table-wrap">
+    <div class="table-wrap">
       <table>
         <thead>
           <tr>
             <th>Signal Time</th>
-            <th>Direction</th>
-            <th>Expected</th>
-            <th>Actual</th>
-            <th>Latency</th>
-            <th>Slippage</th>
+            <th>Dir</th>
+            <th>Exp Entry</th>
+            <th>Act Entry</th>
+            <th>Lat (s)</th>
+            <th>Slip</th>
             <th>MFE</th>
             <th>MAE</th>
             <th>TP1</th>
-            <th>Runner</th>
-            <th>R</th>
+            <th>Run</th>
+            <th>Realized R</th>
             <th>Exit Reason</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="12" class="empty">Awaiting trades...</td></tr></tbody>
+        <tbody id="rows">
+          <tr><td colspan="12" class="empty">Awaiting trades...</td></tr>
+        </tbody>
       </table>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <script>
-    const MAX_ROWS = 50;
-    const rows = [];
-    let ws = null;
-    let reconnectTimer = null;
-
     const els = {
       clock: document.getElementById('clock'),
       socketStatus: document.getElementById('socketStatus'),
       spot: document.getElementById('spot'),
       vix: document.getElementById('vix'),
-      expiry: document.getElementById('expiry'),
-      source: document.getElementById('source'),
+      paperBalance: document.getElementById('paperBalance'),
       freshness: document.getElementById('freshness'),
-      feedHealth: document.getElementById('feedHealth'),
       range: document.getElementById('range'),
       orRange: document.getElementById('orRange'),
       regime: document.getElementById('regime'),
       session: document.getElementById('session'),
-      paperBalance: document.getElementById('paperBalance'),
       tradesTaken: document.getElementById('tradesTaken'),
+      feedHealth: document.getElementById('feedHealth'),
+      expiry: document.getElementById('expiry'),
+      source: document.getElementById('source'),
       rows: document.getElementById('rows'),
       candleChart: document.getElementById('candleChart'),
       chartPlaceholder: document.getElementById('chartPlaceholder')
     };
 
+    let ws = null;
+    let reconnectTimer = null;
     let candleChart = null;
+    let rows = [];
+    const MAX_ROWS = 50;
+
+    function fmt(v, d = 2) {
+      if (v === null || v === undefined || isNaN(v)) return '--';
+      return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+    }
+
+    function fmtCurrency(v) {
+      if (v === null || v === undefined || isNaN(v)) return '--';
+      return '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    }
+
+    function setClass(el, cls) {
+      el.className = 'value small ' + cls;
+    }
+
+    function tickClock() {
+      const now = new Date();
+      els.clock.textContent = now.toLocaleTimeString('en-GB', { hour12: false });
+    }
+
     function initChart() {
       if (typeof Chart === 'undefined') {
         throw new Error('Chart.js library not loaded from CDN');
@@ -206,6 +228,8 @@
         throw new Error('Luxon library not loaded from CDN');
       }
       if (typeof Chart.FinancialController === 'undefined') {
+        // Fallback: try to load it dynamically if it failed initially
+        console.warn('chartjs-chart-financial not found, chart may not render correctly');
         throw new Error('chartjs-chart-financial library not loaded from CDN');
       }
 
@@ -256,78 +280,56 @@
           }
         }
       });
-      els.chartPlaceholder.style.display = 'none';
     }
 
     async function updateCandleChart() {
+      if (!candleChart) return;
       try {
-        if (!candleChart) return;
-        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
-        const data = await resp.json();
-        if (data.candles && candleChart) {
-          const chartData = data.candles.map(c => ({
-            x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
+        const res = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`);
+        const data = await res.json();
+        if (data && data.candles && data.candles.length > 0) {
+          els.chartPlaceholder.style.display = 'none';
+          const formatted = data.candles.map(c => ({
+            x: new Date(c.timestamp).getTime(),
             o: c.open,
             h: c.high,
             l: c.low,
             c: c.close
           }));
-          candleChart.data.datasets[0].data = chartData;
+          candleChart.data.datasets[0].data = formatted;
           candleChart.update('none');
+        } else {
+          els.chartPlaceholder.style.display = 'flex';
+          els.chartPlaceholder.textContent = 'Awaiting candle data...';
         }
       } catch (e) {
-        console.error('Failed to update candle chart', e);
+        console.error('Failed to update chart:', e);
       }
-    }
-
-    function istTime() {
-      return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-    }
-
-    function tickClock() {
-      els.clock.textContent = `IST ${istTime()}`;
-    }
-
-    function fmt(v, digits = 2) {
-      return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '--';
-    }
-
-    function fmtCurrency(v) {
-      return typeof v === 'number' && Number.isFinite(v) ? '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '₹--';
-    }
-
-    function setClass(el, cls) {
-      el.classList.remove('good', 'warn', 'bad', 'muted');
-      if (cls) el.classList.add(cls);
     }
 
     async function refreshLiveData() {
       try {
         const [health, state] = await Promise.all([
-          fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
+          fetch(`/api/v1/data/health?ts=${Date.now()}`).then(r => r.json()),
+          fetch(`/api/v1/engine/state?ts=${Date.now()}`).then(r => r.json())
         ]);
 
         const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
-        const live = health.marketDataStatus === 'LIVE'
-          && health.optionChainSource === 'ANGELONE_LTP'
-          && health.spot > 0;
+        const live = health.marketDataStatus === 'LIVE' && health.optionChainSource === 'ANGELONE_LTP' && health.spot > 0;
         const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
-        const freshnessText = live
-          ? `${ageSeconds}s old`
-          : (marketClosed
-            ? (ageSeconds === null ? 'market closed' : `closed, last quote ${ageSeconds}s old`)
-            : 'no live tick');
 
         els.spot.textContent = health.spot > 0 ? fmt(health.spot) : '--';
         els.vix.textContent = fmt(health.vix);
         els.expiry.textContent = health.expiry || '--';
-        els.source.textContent = health.optionChainSource || 'UNKNOWN';
-        els.freshness.textContent = freshnessText;
-        els.feedHealth.textContent = live ? 'Live Angel One' : (marketClosed ? 'Market closed' : 'No live Angel tick');
-        els.range.textContent = health.spot > 0
-          ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
-          : '-- / --';
+        els.source.textContent = health.optionChainSource || '--';
+        els.feedHealth.textContent = health.marketDataStatus || '--';
+        
+        const freshnessLabel = live 
+          ? `age ${ageSeconds}s` 
+          : (marketClosed ? 'market closed' : 'no live tick');
+        els.freshness.textContent = freshnessLabel;
+
+        els.range.textContent = health.spot > 0 ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
         
         const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
@@ -335,12 +337,13 @@
           : state.regime;
         els.regime.textContent = regimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-        
+
         const sessionLabel = state.sessionActive
           ? 'Active'
           : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
         els.session.textContent = sessionLabel;
         setClass(els.session, state.sessionActive ? 'good' : (marketClosed ? 'muted' : 'bad'));
+
         els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
 
@@ -354,11 +357,9 @@
     }
 
     let pingTimer = null;
-
     function connectSocket() {
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${protocol}://${location.host}/ws`);
-
       ws.onopen = () => {
         els.socketStatus.textContent = 'Socket connected';
         els.socketStatus.className = 'status ok';
@@ -367,13 +368,11 @@
           if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
         }, 25000);
       };
-
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
           const type = message.eventType;
           const payload = message.payload || message;
-
           if (type === 'session_state') {
             updateUIFromState(payload);
           } else if (type === 'trade' || (!type && payload.id)) {
@@ -389,16 +388,19 @@
         if (state.vix > 0) els.vix.textContent = fmt(state.vix);
         if (state.support && state.resistance) els.range.textContent = `${state.support} / ${state.resistance}`;
         els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+        
         const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
           ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
           : state.regime;
         els.regime.textContent = wsRegimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+
         const wsSessionLabel = state.sessionActive
           ? 'Active'
           : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
         els.session.textContent = wsSessionLabel;
         setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
+
         els.paperBalance.textContent = fmtCurrency(state.paperBalance);
         els.tradesTaken.textContent = state.tradesTaken ?? 0;
       }
@@ -407,7 +409,6 @@
         els.socketStatus.textContent = 'Socket error';
         els.socketStatus.className = 'status bad';
       };
-
       ws.onclose = () => {
         els.socketStatus.textContent = 'Socket reconnecting';
         els.socketStatus.className = 'status bad';
