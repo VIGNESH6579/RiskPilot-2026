@@ -16,8 +16,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
+// FIX: Removed @CrossOrigin(origins="*") — wildcard overrides SecurityConfig whitelist.
+// The / and /api/initial-data endpoints are already marked .permitAll() in SecurityConfig.
 @RestController
-@CrossOrigin(origins = "*")
 public class FrontendController {
 
     private static final Path EXTERNAL_FRONTEND = Path.of("frontend.html");

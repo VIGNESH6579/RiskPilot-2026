@@ -82,6 +82,9 @@ public class ShadowExecutionEngine {
     private LocalDateTime activeSignalTime;
     private double activeExpectedEntry;
     private boolean dayBlockedByFirstTradeFailure;
+    // FIX: Cache last live price so the 10-second scheduler broadcast
+    // doesn't send spot=0 and blank the frontend price card.
+    private volatile double lastKnownSpot = 0.0;
 
     private static record ClosedTradeBroadcast(
         LocalDateTime signalTime,
@@ -100,6 +103,8 @@ public class ShadowExecutionEngine {
 
     public synchronized void evaluateTick(double currentPrice) {
         log.debug("Processing tick: {}", currentPrice);
+        // FIX: persist last known live price for use by the scheduler broadcast
+        if (currentPrice > 0) lastKnownSpot = currentPrice;
 
         if (killSwitchEngine.isKillSwitchTriggered()) {
             log.error("KILL_SWITCH_ACTIVE - ignoring tick processing");
@@ -745,7 +750,9 @@ public class ShadowExecutionEngine {
     }
 
     private void broadcastCurrentSessionState() {
-        broadcastCurrentSessionState(0.0);
+        // FIX: use lastKnownSpot so the 10-second scheduler broadcast doesn't
+        // send spot=0.0, which was blanking the NIFTY price card on the frontend.
+        broadcastCurrentSessionState(lastKnownSpot);
     }
 
     private void broadcastCurrentSessionState(double currentPrice) {

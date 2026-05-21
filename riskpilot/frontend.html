@@ -4,10 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RiskPilot Live Monitor</title>
+  <!-- FIX: Removed chartjs-chart-financial (incompatible with Chart.js 4.x, CDN load fails).
+       Candlesticks are now drawn with a pure Chart.js 4 custom plugin — zero extra deps. -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
   <style>
     :root {
       --bg: #09111f;
@@ -48,7 +47,7 @@
       font-size: 12px;
       color: var(--warn);
     }
-    .status.ok { color: var(--good); }
+    .status.ok  { color: var(--good); }
     .status.bad { color: var(--bad); }
     .grid {
       display: grid;
@@ -66,9 +65,9 @@
     .label { color: var(--muted); font-size: 12px; }
     .value { margin-top: 6px; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
     .small { font-size: 13px; line-height: 1.35; }
-    .good { color: var(--good); }
-    .warn { color: var(--warn); }
-    .bad { color: var(--bad); }
+    .good  { color: var(--good); }
+    .warn  { color: var(--warn); }
+    .bad   { color: var(--bad); }
     .muted { color: var(--muted); }
     .table-wrap {
       margin-top: 12px;
@@ -97,10 +96,6 @@
       flex-direction: column;
       gap: 8px;
     }
-    .chart-error {
-      color: var(--bad);
-      font-weight: 600;
-    }
     table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
     thead { background: var(--panel-2); }
     th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -118,7 +113,7 @@
     <header class="topbar">
       <div>
         <h1>RiskPilot Live Monitor</h1>
-        <div class="sub">Angel One live NIFTY feed, expiry, risk gates, and shadow trades</div>
+        <div class="sub">Angel One live NIFTY feed · expiry · risk gates · shadow trades</div>
       </div>
       <div>
         <div id="clock" class="clock">--:--:--</div>
@@ -145,10 +140,10 @@
     </section>
 
     <section class="chart-container">
-      <h3 style="margin: 0 0 12px 0; font-size: 16px;">5-Minute Candles (Last 50)</h3>
-      <canvas id="candleChart" style="display: none;"></canvas>
-      <div id="chartPlaceholder" class="chart-placeholder">
-        <span>Loading chart libraries...</span>
+      <h3 style="margin:0 0 12px 0;font-size:16px;">5-Minute Candles — Last 50</h3>
+      <canvas id="candleChart"></canvas>
+      <div id="chartPlaceholder" class="chart-placeholder" style="display:none;">
+        <span style="color:var(--muted);">Waiting for candle data…</span>
       </div>
     </section>
 
@@ -156,440 +151,447 @@
       <table>
         <thead>
           <tr>
-            <th>Signal Time</th>
-            <th>Direction</th>
-            <th>Expected</th>
-            <th>Actual</th>
-            <th>Latency</th>
-            <th>Slippage</th>
-            <th>MFE</th>
-            <th>MAE</th>
-            <th>TP1</th>
-            <th>Runner</th>
-            <th>R</th>
-            <th>Exit Reason</th>
+            <th>Signal Time</th><th>Direction</th><th>Expected</th><th>Actual</th>
+            <th>Latency</th><th>Slippage</th><th>MFE</th><th>MAE</th>
+            <th>TP1</th><th>Runner</th><th>R</th><th>Exit Reason</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="12" class="empty">Awaiting trades...</td></tr></tbody>
+        <tbody id="tradeRows"><tr><td colspan="12" class="empty">Awaiting trades…</td></tr></tbody>
       </table>
     </section>
   </main>
 
   <script>
-    // ============================================================
-    // Enhanced Logging System
-    // ============================================================
-    const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
-    const CURRENT_LOG_LEVEL = LOG_LEVELS.DEBUG;
+  // ─────────────────────────────────────────────────────────────
+  // CANDLESTICK PLUGIN — pure Chart.js 4, zero extra dependencies
+  // FIX: chartjs-chart-financial@0.2.0 only supports Chart.js 2.x
+  //      and fails to load from CDN with Chart.js 4. Replaced with
+  //      a custom plugin that draws OHLC wicks+bodies on a bar chart.
+  // ─────────────────────────────────────────────────────────────
+  const candlestickPlugin = {
+    id: 'candlestick',
+    beforeDatasetsDraw(chart) {
+      const { ctx, data, scales } = chart;
+      const dataset = data.datasets[0];
+      if (!dataset || !dataset.ohlcData) return;
 
-    function log(level, message, data = null) {
-      if (level < CURRENT_LOG_LEVEL) return;
-      const timestamp = new Date().toISOString();
-      const prefix = `[${timestamp}] [${Object.keys(LOG_LEVELS).find(k => LOG_LEVELS[k] === level)}]`;
-      if (data) {
-        console.log(`${prefix} ${message}`, data);
-      } else {
-        console.log(`${prefix} ${message}`);
-      }
+      const xScale = scales.x;
+      const yScale = scales.y;
+      const ohlc   = dataset.ohlcData;
+      const n      = ohlc.length;
+      if (n === 0) return;
+
+      // Candle width: fill ~70 % of the slot between adjacent candles
+      const slotW = n > 1
+        ? Math.abs(xScale.getPixelForValue(1) - xScale.getPixelForValue(0))
+        : 12;
+      const bodyW = Math.max(4, slotW * 0.65);
+
+      ctx.save();
+      ohlc.forEach((c, i) => {
+        const xMid  = xScale.getPixelForValue(i);
+        const yOpen  = yScale.getPixelForValue(c.o);
+        const yClose = yScale.getPixelForValue(c.c);
+        const yHigh  = yScale.getPixelForValue(c.h);
+        const yLow   = yScale.getPixelForValue(c.l);
+
+        const bullish = c.c >= c.o;
+        const color   = bullish ? '#26d07c' : '#ff6b6b';
+        ctx.strokeStyle = color;
+        ctx.fillStyle   = bullish ? 'rgba(38,208,124,0.18)' : 'rgba(255,107,107,0.18)';
+        ctx.lineWidth   = 1.5;
+
+        // Wick
+        ctx.beginPath();
+        ctx.moveTo(xMid, yHigh);
+        ctx.lineTo(xMid, yLow);
+        ctx.stroke();
+
+        // Body
+        const bodyTop = Math.min(yOpen, yClose);
+        const bodyH   = Math.max(2, Math.abs(yClose - yOpen));
+        ctx.fillRect(xMid - bodyW / 2, bodyTop, bodyW, bodyH);
+        ctx.strokeRect(xMid - bodyW / 2, bodyTop, bodyW, bodyH);
+      });
+      ctx.restore();
     }
+  };
 
-    const MAX_ROWS = 50;
-    const rows = [];
-    let ws = null;
-    let reconnectTimer = null;
+  Chart.register(candlestickPlugin);
 
-    const els = {
-      clock: document.getElementById('clock'),
-      socketStatus: document.getElementById('socketStatus'),
-      spot: document.getElementById('spot'),
-      vix: document.getElementById('vix'),
-      expiry: document.getElementById('expiry'),
-      source: document.getElementById('source'),
-      freshness: document.getElementById('freshness'),
-      feedHealth: document.getElementById('feedHealth'),
-      range: document.getElementById('range'),
-      orRange: document.getElementById('orRange'),
-      regime: document.getElementById('regime'),
-      session: document.getElementById('session'),
-      paperBalance: document.getElementById('paperBalance'),
-      tradesTaken: document.getElementById('tradesTaken'),
-      rows: document.getElementById('rows'),
-      candleChart: document.getElementById('candleChart'),
-      chartPlaceholder: document.getElementById('chartPlaceholder')
-    };
+  // ─────────────────────────────────────────────────────────────
+  // State
+  // ─────────────────────────────────────────────────────────────
+  const MAX_ROWS  = 50;
+  const tradeRows = [];
+  let ws           = null;
+  let pingTimer    = null;
+  let reconnTimer  = null;
+  let candleChart  = null;
+  // FIX: track last known spot so WebSocket session_state updates that
+  //      omit spot (sent as 0 from refreshSessionStatePeriodically) don't
+  //      blank out the live price card.
+  let lastKnownSpot = 0;
 
-    let candleChart = null;
-    let chartInitialized = false;
+  const els = {
+    clock:         document.getElementById('clock'),
+    socketStatus:  document.getElementById('socketStatus'),
+    spot:          document.getElementById('spot'),
+    vix:           document.getElementById('vix'),
+    expiry:        document.getElementById('expiry'),
+    source:        document.getElementById('source'),
+    freshness:     document.getElementById('freshness'),
+    feedHealth:    document.getElementById('feedHealth'),
+    range:         document.getElementById('range'),
+    orRange:       document.getElementById('orRange'),
+    regime:        document.getElementById('regime'),
+    session:       document.getElementById('session'),
+    paperBalance:  document.getElementById('paperBalance'),
+    tradesTaken:   document.getElementById('tradesTaken'),
+    tradeRows:     document.getElementById('tradeRows'),
+    candleChart:   document.getElementById('candleChart'),
+    chartPlaceholder: document.getElementById('chartPlaceholder'),
+  };
 
-    // ============================================================
-    // Chart Initialization with Dependency Checking
-    // ============================================================
-    function initChart() {
-      try {
-        // Verify all required libraries are loaded
-        if (typeof Chart === 'undefined') {
-          throw new Error('Chart.js library not loaded from CDN');
-        }
-        if (typeof luxon === 'undefined') {
-          throw new Error('Luxon library not loaded from CDN');
-        }
-        if (typeof ChartFinancial === 'undefined') {
-          throw new Error('chartjs-chart-financial library not loaded from CDN');
-        }
-
-        log(LOG_LEVELS.INFO, 'All chart libraries verified, initializing chart...');
-
-        const ctx = els.candleChart.getContext('2d');
-        if (!ctx) {
-          throw new Error('Failed to get 2D context from canvas element');
-        }
-
-        candleChart = new Chart(ctx, {
-          type: 'candlestick',
-          data: {
-            datasets: [{
-              label: 'NIFTY 5m',
-              data: [],
-              color: {
-                up: '#26d07c',
-                down: '#ff6b6b',
-                unchanged: '#93a4b8',
-              }
-            }]
+  // ─────────────────────────────────────────────────────────────
+  // Chart init — pure Chart.js 4 bar type with custom plugin
+  // ─────────────────────────────────────────────────────────────
+  function initChart() {
+    const ctx = els.candleChart.getContext('2d');
+    candleChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          data: [],        // bar heights (dummy — plugin draws everything)
+          ohlcData: [],    // real OHLC data consumed by plugin
+          backgroundColor: 'transparent',
+          borderColor:     'transparent',
+          borderWidth: 0,
+        }]
+      },
+      options: {
+        responsive:          true,
+        maintainAspectRatio: false,
+        animation:           false,
+        scales: {
+          x: {
+            grid:  { color: '#263653' },
+            ticks: { color: '#93a4b8', font: { size: 11 }, maxRotation: 0 }
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: {
-                type: 'time',
-                time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
-                grid: { color: '#263653' },
-                ticks: { color: '#93a4b8' }
-              },
-              y: {
-                grid: { color: '#263653' },
-                ticks: { color: '#93a4b8' }
-              }
-            },
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  label: (ctx) => {
-                    const p = ctx.raw;
-                    return [
-                      `O: ${p.o}`,
-                      `H: ${p.h}`,
-                      `L: ${p.l}`,
-                      `C: ${p.c}`
-                    ];
-                  }
-                }
+          y: {
+            grid:  { color: '#263653' },
+            ticks: { color: '#93a4b8', font: { size: 11 } }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label(ctx) {
+                const c = ctx.dataset.ohlcData[ctx.dataIndex];
+                if (!c) return '';
+                return [`O: ${c.o}`, `H: ${c.h}`, `L: ${c.l}`, `C: ${c.c}`];
               }
             }
           }
-        });
+        }
+      }
+    });
+  }
 
-        chartInitialized = true;
-        els.candleChart.style.display = 'block';
-        els.chartPlaceholder.style.display = 'none';
-        log(LOG_LEVELS.INFO, 'Chart initialized successfully');
-        return true;
-      } catch (error) {
-        log(LOG_LEVELS.ERROR, 'Chart initialization failed', error);
-        chartInitialized = false;
-        els.chartPlaceholder.innerHTML = `
-          <span class="chart-error">⚠️ Chart unavailable</span>
-          <span style="font-size: 12px; color: var(--muted);">${error.message}</span>
-          <span style="font-size: 11px; color: var(--muted);">Check browser console for details</span>
-        `;
+  // ─────────────────────────────────────────────────────────────
+  // Fetch candles from /api/v1/engine/candle-history and update chart
+  // ─────────────────────────────────────────────────────────────
+  async function updateCandleChart() {
+    try {
+      const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache: 'no-store' });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const raw  = data.candles;
+
+      if (!raw || raw.length === 0) {
         els.chartPlaceholder.style.display = 'flex';
-        return false;
-      }
-    }
-
-    // ============================================================
-    // Candle Chart Update with Enhanced Error Handling
-    // ============================================================
-    async function updateCandleChart() {
-      try {
-        if (!chartInitialized) {
-          log(LOG_LEVELS.DEBUG, 'Chart not initialized, skipping update');
-          return;
-        }
-
-        const resp = await fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, {
-          cache: 'no-store'
-        });
-
-        if (!resp.ok) {
-          throw new Error(`API returned status ${resp.status}`);
-        }
-
-        const data = await resp.json();
-        log(LOG_LEVELS.DEBUG, 'Candle history fetched', { count: data.candles?.length || 0 });
-
-        if (!data.candles || data.candles.length === 0) {
-          log(LOG_LEVELS.WARN, 'No candles available yet');
-          if (candleChart) {
-            candleChart.data.datasets[0].data = [];
-            candleChart.update('none');
-          }
-          return;
-        }
-
-        if (!candleChart) {
-          log(LOG_LEVELS.WARN, 'Chart object not available');
-          return;
-        }
-
-        const chartData = data.candles.map(c => {
-          try {
-            return {
-              x: luxon.DateTime.fromISO(c.timestamp).toMillis(),
-              o: c.open,
-              h: c.high,
-              l: c.low,
-              c: c.close
-            };
-          } catch (e) {
-            log(LOG_LEVELS.WARN, 'Failed to parse candle timestamp', { timestamp: c.timestamp, error: e.message });
-            return null;
-          }
-        }).filter(c => c !== null);
-
-        if (chartData.length === 0) {
-          log(LOG_LEVELS.WARN, 'No valid candles after parsing');
-          return;
-        }
-
-        candleChart.data.datasets[0].data = chartData;
-        candleChart.update('none');
-        log(LOG_LEVELS.DEBUG, 'Chart updated with candles', { count: chartData.length });
-      } catch (error) {
-        log(LOG_LEVELS.ERROR, 'Failed to update candle chart', error);
-      }
-    }
-
-    function istTime() {
-      return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-    }
-
-    function tickClock() {
-      els.clock.textContent = `IST ${istTime()}`;
-    }
-
-    function fmt(v, digits = 2) {
-      return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '--';
-    }
-
-    function fmtCurrency(v) {
-      return typeof v === 'number' && Number.isFinite(v) ? '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '₹--';
-    }
-
-    function setClass(el, cls) {
-      el.classList.remove('good', 'warn', 'bad', 'muted');
-      if (cls) el.classList.add(cls);
-    }
-
-    async function refreshLiveData() {
-      try {
-        const [health, state] = await Promise.all([
-          fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json())
-        ]);
-
-        const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
-        const live = health.marketDataStatus === 'LIVE'
-          && health.optionChainSource === 'ANGELONE_LTP'
-          && health.spot > 0;
-        const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
-        const freshnessText = live
-          ? `${ageSeconds}s old`
-          : (marketClosed
-            ? (ageSeconds === null ? 'market closed' : `closed, last quote ${ageSeconds}s old`)
-            : 'no live tick');
-
-        els.spot.textContent = health.spot > 0 ? fmt(health.spot) : '--';
-        els.vix.textContent = fmt(health.vix);
-        els.expiry.textContent = health.expiry || '--';
-        els.source.textContent = health.optionChainSource || 'UNKNOWN';
-        els.freshness.textContent = freshnessText;
-        els.feedHealth.textContent = live ? 'Live Angel One' : (marketClosed ? 'Market closed' : 'No live Angel tick');
-        els.range.textContent = health.spot > 0
-          ? `${health.support ?? '--'} / ${health.resistance ?? '--'}`
-          : '-- / --';
-        els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-        
-        // Regime: translate UNKNOWN → friendly label based on market state
-        const regimeLabel = (!state.regime || state.regime === 'UNKNOWN')
-          ? (marketClosed ? 'Market Closed' : 'Assessing…')
-          : state.regime;
-        els.regime.textContent = regimeLabel;
-        setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-        
-        // Session: show "Market Closed" when inactive due to closed market, not a fault
-        const sessionLabel = state.sessionActive
-          ? 'Active'
-          : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
-        els.session.textContent = sessionLabel;
-        setClass(els.session, state.sessionActive ? 'good' : (marketClosed ? 'muted' : 'bad'));
-        els.paperBalance.textContent = fmtCurrency(state.paperBalance);
-        els.tradesTaken.textContent = state.tradesTaken ?? 0;
-
-        setClass(els.source, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
-        setClass(els.freshness, live && ageSeconds !== null && ageSeconds <= 3 ? 'good' : (marketClosed ? 'warn' : 'bad'));
-        setClass(els.feedHealth, live ? 'good' : (marketClosed ? 'warn' : 'bad'));
-      } catch (error) {
-        log(LOG_LEVELS.ERROR, 'Failed to refresh live data', error);
-        els.feedHealth.textContent = 'Market API down';
-        setClass(els.feedHealth, 'bad');
-      }
-    }
-
-    let pingTimer = null;
-
-    function connectSocket() {
-      try {
-        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsUrl = `${protocol}://${location.host}/ws`;
-        log(LOG_LEVELS.INFO, 'Connecting to WebSocket', { url: wsUrl });
-        
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          log(LOG_LEVELS.INFO, 'WebSocket connected');
-          els.socketStatus.textContent = 'Socket connected';
-          els.socketStatus.className = 'status ok';
-          
-          // Keep-alive: Render proxy closes idle WS after ~60s — ping every 25s
-          if (pingTimer) clearInterval(pingTimer);
-          pingTimer = setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send('ping');
-            }
-          }, 25000);
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            const type = message.eventType;
-            const payload = message.payload || message;
-
-            if (type === 'session_state') {
-              // Real-time session state update
-              updateUIFromState(payload);
-            } else if (type === 'trade' || (!type && payload.id)) {
-              // Real-time trade update
-              rows.unshift(payload);
-              if (rows.length > MAX_ROWS) rows.pop();
-              renderRows();
-            }
-          } catch (e) {
-            log(LOG_LEVELS.DEBUG, 'Failed to parse WebSocket message', e);
-          }
-        };
-
-        function updateUIFromState(state) {
-          if (state.spot > 0) {
-            els.spot.textContent = fmt(state.spot);
-          }
-          if (state.vix > 0) {
-            els.vix.textContent = fmt(state.vix);
-          }
-          if (state.support && state.resistance) {
-            els.range.textContent = `${state.support} / ${state.resistance}`;
-          }
-          els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-          
-          // Regime: translate UNKNOWN → friendly label
-          const wsRegimeLabel = (!state.regime || state.regime === 'UNKNOWN')
-            ? (state.marketOpen === false ? 'Market Closed' : 'Assessing…')
-            : state.regime;
-          els.regime.textContent = wsRegimeLabel;
-          setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-          
-          // Session: show context-aware label
-          const wsSessionLabel = state.sessionActive
-            ? 'Active'
-            : (state.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
-          els.session.textContent = wsSessionLabel;
-          setClass(els.session, state.sessionActive ? 'good' : (state.marketOpen === false ? 'muted' : 'bad'));
-          els.paperBalance.textContent = fmtCurrency(state.paperBalance);
-          els.tradesTaken.textContent = state.tradesTaken ?? 0;
-        }
-
-        ws.onerror = (error) => {
-          log(LOG_LEVELS.ERROR, 'WebSocket error', error);
-          els.socketStatus.textContent = 'Socket error';
-          els.socketStatus.className = 'status bad';
-        };
-
-        ws.onclose = () => {
-          log(LOG_LEVELS.WARN, 'WebSocket closed, reconnecting in 3s...');
-          els.socketStatus.textContent = 'Socket reconnecting';
-          els.socketStatus.className = 'status bad';
-          if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connectSocket, 3000);
-        };
-      } catch (error) {
-        log(LOG_LEVELS.ERROR, 'Failed to connect WebSocket', error);
-        els.socketStatus.textContent = 'Socket failed';
-        els.socketStatus.className = 'status bad';
-      }
-    }
-
-    function renderRows() {
-      if (rows.length === 0) {
-        els.rows.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades...</td></tr>';
+        els.candleChart.style.display      = 'none';
         return;
       }
-      els.rows.innerHTML = rows.map(r => `
-        <tr>
-          <td>${r.signalTime || '--'}</td>
-          <td>${r.direction || '--'}</td>
-          <td>${fmt(r.expectedEntry)}</td>
-          <td>${fmt(r.actualEntry)}</td>
-          <td class="${(r.latencySec || 0) > 2 ? 'bad' : 'muted'}">${fmt(r.latencySec)}</td>
-          <td class="${Math.abs(r.slippage || 0) > 1 ? 'bad' : 'good'}">${fmt(r.slippage)}</td>
-          <td>${fmt(r.mfe)}</td>
-          <td>${fmt(r.mae)}</td>
-          <td>${r.tp1Hit ? 'yes' : 'no'}</td>
-          <td>${r.runnerCaptured ? 'yes' : 'no'}</td>
-          <td class="${(r.realizedR || 0) >= 0 ? 'good' : 'bad'}">${fmt(r.realizedR)}R</td>
-          <td>${r.exitReason || '--'}</td>
-        </tr>
-      `).join('');
-    }
 
-    // ============================================================
-    // Initialization Sequence
-    // ============================================================
-    log(LOG_LEVELS.INFO, 'RiskPilot Frontend initializing...');
-    
-    tickClock();
-    
-    // Initialize chart with proper error handling
-    if (!initChart()) {
-      log(LOG_LEVELS.WARN, 'Chart initialization failed, UI will continue without chart');
+      els.chartPlaceholder.style.display = 'none';
+      els.candleChart.style.display      = 'block';
+
+      // Build parallel arrays: labels (x-axis) + ohlcData (plugin)
+      const labels   = raw.map(c => {
+        // timestamp arrives as "2025-05-21T09:15:00" — extract HH:mm
+        const ts = c.timestamp || '';
+        return ts.length >= 16 ? ts.substring(11, 16) : ts;
+      });
+      const ohlcData = raw.map(c => ({
+        o: c.open, h: c.high, l: c.low, c: c.close
+      }));
+
+      // Dummy bar heights span the full y-range so Chart.js scales correctly
+      const allPrices = ohlcData.flatMap(c => [c.h, c.l]);
+      const yMin = Math.min(...allPrices);
+      const yMax = Math.max(...allPrices);
+
+      candleChart.data.labels                  = labels;
+      candleChart.data.datasets[0].data        = ohlcData.map(() => yMax - yMin);
+      candleChart.data.datasets[0].ohlcData    = ohlcData;
+      candleChart.options.scales.y.min         = yMin - (yMax - yMin) * 0.05;
+      candleChart.options.scales.y.max         = yMax + (yMax - yMin) * 0.05;
+      // FIX: bar chart base must be at yMin so bars don't render visibly
+      candleChart.options.scales.y.beginAtZero = false;
+      candleChart.data.datasets[0].base        = yMin;
+
+      candleChart.update('none');
+    } catch (e) {
+      console.error('[candle] fetch error', e);
     }
-    
-    // Fetch initial data
-    refreshLiveData().catch(e => log(LOG_LEVELS.ERROR, 'Initial data fetch failed', e));
-    updateCandleChart().catch(e => log(LOG_LEVELS.ERROR, 'Initial candle fetch failed', e));
-    
-    // Connect WebSocket
-    connectSocket();
-    
-    // Setup intervals
-    setInterval(tickClock, 1000);
-    setInterval(refreshLiveData, 1000);
-    setInterval(updateCandleChart, 5000);
-    
-    log(LOG_LEVELS.INFO, 'Frontend initialization complete');
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────
+  function istTime() {
+    return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+  }
+  function fmt(v, d = 2) {
+    return typeof v === 'number' && isFinite(v) ? v.toFixed(d) : '--';
+  }
+  function fmtCcy(v) {
+    return typeof v === 'number' && isFinite(v)
+      ? '₹' + v.toLocaleString('en-IN', { maximumFractionDigits: 0 })
+      : '₹--';
+  }
+  function cls(el, c) {
+    el.classList.remove('good', 'warn', 'bad', 'muted');
+    if (c) el.classList.add(c);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // REST poll — /api/v1/data/health + /api/v1/engine/state
+  // ─────────────────────────────────────────────────────────────
+  async function refreshLiveData() {
+    try {
+      const [health, state] = await Promise.all([
+        fetch(`/api/v1/data/health?ts=${Date.now()}`,  { cache: 'no-store' }).then(r => r.json()),
+        fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()),
+      ]);
+
+      const ageMs      = typeof health.ageMs === 'number' ? health.ageMs : null;
+      const ageSec     = ageMs != null ? Math.max(0, Math.round(ageMs / 1000)) : null;
+      const live       = health.marketDataStatus === 'LIVE'
+                         && health.optionChainSource === 'ANGELONE_LTP'
+                         && health.spot > 0;
+      const mktClosed  = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
+
+      // FIX: only update spot from REST when we have a real non-zero price
+      if (health.spot > 0) {
+        lastKnownSpot = health.spot;
+        els.spot.textContent = fmt(health.spot);
+      }
+      els.vix.textContent     = fmt(health.vix);
+      els.expiry.textContent  = health.expiry || '--';
+      els.source.textContent  = health.optionChainSource || 'UNKNOWN';
+      els.freshness.textContent = live
+        ? `${ageSec}s old`
+        : mktClosed ? (ageSec == null ? 'market closed' : `closed, last ${ageSec}s`)
+        : 'no live tick';
+      els.feedHealth.textContent = live ? 'Live Angel One'
+        : mktClosed ? 'Market closed' : 'No live Angel tick';
+
+      els.range.textContent = health.spot > 0
+        ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
+      els.orRange.textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
+
+      const regLabel = (!state.regime || state.regime === 'UNKNOWN')
+        ? (mktClosed ? 'Market Closed' : 'Assessing…') : state.regime;
+      els.regime.textContent = regLabel;
+      cls(els.regime, state.regime === 'TREND' ? 'good' : state.regime === 'BLOCKED' ? 'bad' : 'warn');
+
+      const sesLabel = state.sessionActive ? 'Active'
+        : mktClosed ? 'Market Closed' : 'Inactive – Feed Down';
+      els.session.textContent = sesLabel;
+      cls(els.session, state.sessionActive ? 'good' : mktClosed ? 'muted' : 'bad');
+
+      els.paperBalance.textContent = fmtCcy(state.paperBalance);
+      els.tradesTaken.textContent  = state.tradesTaken ?? 0;
+
+      cls(els.source,    live ? 'good' : mktClosed ? 'warn' : 'bad');
+      cls(els.freshness, live && ageSec != null && ageSec <= 3 ? 'good' : mktClosed ? 'warn' : 'bad');
+      cls(els.feedHealth,live ? 'good' : mktClosed ? 'warn' : 'bad');
+    } catch (e) {
+      console.error('[live] poll error', e);
+      els.feedHealth.textContent = 'API error';
+      cls(els.feedHealth, 'bad');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // REST poll — trade history from DB  (/api/v1/trading/trades/history)
+  // FIX: DataController.tradeHistory() reads from CSV file only — DB trades
+  //      (persisted after our Bug 2 fix) were never shown. Switched to the
+  //      TradingController endpoint which reads from the DB.
+  // ─────────────────────────────────────────────────────────────
+  async function refreshTradeHistory() {
+    try {
+      const today = new Date();
+      const start = new Date(today); start.setHours(0,0,0,0);
+      const end   = new Date(today); end.setHours(23,59,59,999);
+      const symbol = 'NIFTY'; // matches TRADING_SYMBOL default
+
+      const url = `/api/v1/trading/trades/history?symbol=${symbol}`
+        + `&startDate=${start.toISOString()}&endDate=${end.toISOString()}`;
+
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) return;
+      const dbTrades = await resp.json();
+      if (!Array.isArray(dbTrades) || dbTrades.length === 0) return;
+
+      // Map DB Trade fields to the row format the table expects
+      const mapped = dbTrades.map(t => ({
+        signalTime:      t.entryTime || '--',
+        direction:       t.direction || '--',
+        expectedEntry:   t.entryPrice,
+        actualEntry:     t.entryPrice,  // shadow mode: no slippage tracking at DB level
+        latencySec:      null,
+        slippage:        0,
+        mfe:             t.maxFavorableExcursion,
+        mae:             t.maxAdverseExcursion,
+        tp1Hit:          t.tp1Hit,
+        runnerCaptured:  t.runnerActive,
+        realizedR:       t.realizedPnL,
+        exitReason:      t.exitReason || '--',
+      }));
+
+      // Merge with WS-delivered rows (WS rows have richer slippage data)
+      // Keep WS rows at front; append DB rows not already present
+      const wsKeys = new Set(tradeRows.map(r => r.signalTime));
+      mapped.reverse().forEach(r => {
+        if (!wsKeys.has(r.signalTime)) tradeRows.push(r);
+      });
+      if (tradeRows.length > MAX_ROWS) tradeRows.length = MAX_ROWS;
+      renderTradeRows();
+    } catch (e) {
+      console.error('[trades] fetch error', e);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Trade table render
+  // ─────────────────────────────────────────────────────────────
+  function renderTradeRows() {
+    if (tradeRows.length === 0) {
+      els.tradeRows.innerHTML = '<tr><td colspan="12" class="empty">Awaiting trades…</td></tr>';
+      return;
+    }
+    els.tradeRows.innerHTML = tradeRows.map(r => `
+      <tr>
+        <td>${r.signalTime || '--'}</td>
+        <td>${r.direction  || '--'}</td>
+        <td>${fmt(r.expectedEntry)}</td>
+        <td>${fmt(r.actualEntry)}</td>
+        <td class="${(r.latencySec || 0) > 2 ? 'bad' : 'muted'}">${r.latencySec != null ? fmt(r.latencySec) : '--'}</td>
+        <td class="${Math.abs(r.slippage || 0) > 1 ? 'bad' : 'good'}">${fmt(r.slippage)}</td>
+        <td>${fmt(r.mfe)}</td>
+        <td>${fmt(r.mae)}</td>
+        <td>${r.tp1Hit       ? '<span class="good">✓</span>' : '<span class="muted">–</span>'}</td>
+        <td>${r.runnerCaptured ? '<span class="good">✓</span>' : '<span class="muted">–</span>'}</td>
+        <td class="${(r.realizedR || 0) >= 0 ? 'good' : 'bad'}">${fmt(r.realizedR)}R</td>
+        <td>${r.exitReason || '--'}</td>
+      </tr>
+    `).join('');
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WebSocket
+  // ─────────────────────────────────────────────────────────────
+  function connectSocket() {
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${protocol}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      els.socketStatus.textContent  = 'Socket connected';
+      els.socketStatus.className    = 'status ok';
+      // Keep-alive: Render proxy closes idle WS after ~60 s — ping every 25 s
+      if (pingTimer) clearInterval(pingTimer);
+      pingTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+      }, 25000);
+    };
+
+    ws.onmessage = ({ data }) => {
+      try {
+        const msg  = JSON.parse(data);
+        const type = msg.eventType;
+        const pl   = msg.payload || msg;
+
+        if (type === 'session_state') {
+          // FIX: only overwrite spot when the WS message carries a real value.
+          // broadcastCurrentSessionState() is also called from the 10-second
+          // scheduler (no live price available) and sends spot=0, which was
+          // blanking the display between REST polls.
+          if (pl.spot > 0) {
+            lastKnownSpot = pl.spot;
+            els.spot.textContent = fmt(pl.spot);
+          }
+          if (pl.vix > 0) els.vix.textContent = fmt(pl.vix);
+          if (pl.support && pl.resistance) {
+            els.range.textContent = `${pl.support} / ${pl.resistance}`;
+          }
+          els.orRange.textContent = `${fmt(pl.orHigh, 0)} / ${fmt(pl.orLow, 0)}`;
+
+          const wsReg = (!pl.regime || pl.regime === 'UNKNOWN')
+            ? (pl.marketOpen === false ? 'Market Closed' : 'Assessing…') : pl.regime;
+          els.regime.textContent = wsReg;
+          cls(els.regime, pl.regime === 'TREND' ? 'good' : pl.regime === 'BLOCKED' ? 'bad' : 'warn');
+
+          const wsSes = pl.sessionActive ? 'Active'
+            : pl.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down';
+          els.session.textContent = wsSes;
+          cls(els.session, pl.sessionActive ? 'good' : pl.marketOpen === false ? 'muted' : 'bad');
+
+          els.paperBalance.textContent = fmtCcy(pl.paperBalance);
+          els.tradesTaken.textContent  = pl.tradesTaken ?? 0;
+
+        } else if (type === 'trade') {
+          tradeRows.unshift(pl);
+          if (tradeRows.length > MAX_ROWS) tradeRows.pop();
+          renderTradeRows();
+        }
+      } catch (e) { /* ignore non-JSON ping/pong */ }
+    };
+
+    ws.onerror = () => {
+      els.socketStatus.textContent = 'Socket error';
+      els.socketStatus.className   = 'status bad';
+    };
+
+    ws.onclose = () => {
+      els.socketStatus.textContent = 'Socket reconnecting…';
+      els.socketStatus.className   = 'status bad';
+      if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+      if (reconnTimer) clearTimeout(reconnTimer);
+      reconnTimer = setTimeout(connectSocket, 3000);
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Boot
+  // ─────────────────────────────────────────────────────────────
+  setInterval(() => { els.clock.textContent = `IST ${istTime()}`; }, 1000);
+  els.clock.textContent = `IST ${istTime()}`;
+
+  initChart();                  // pure Chart.js 4 — no plugin CDN needed
+  connectSocket();
+
+  refreshLiveData();
+  updateCandleChart();
+  refreshTradeHistory();
+
+  setInterval(refreshLiveData,    1000);   // spot / vix / session every 1 s
+  setInterval(updateCandleChart,  5000);   // candles every 5 s
+  setInterval(refreshTradeHistory, 15000); // DB trade history every 15 s
   </script>
 </body>
 </html>

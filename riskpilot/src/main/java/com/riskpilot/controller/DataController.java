@@ -3,7 +3,6 @@ package com.riskpilot.controller;
 import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.VixService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,9 +21,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+// FIX: Removed @CrossOrigin — it overrides the strict origin whitelist in SecurityConfig.
 @RestController
 @RequestMapping("/api/v1/data")
-@CrossOrigin
 @RequiredArgsConstructor
 public class DataController {
 
