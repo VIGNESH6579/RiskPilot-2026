@@ -223,9 +223,30 @@ public class RiskGateEngine {
         // -------------------------
         // 🔴 REGIME GATE
         // -------------------------
-        if (!"TREND".equalsIgnoreCase(s.getRegime())) {
-            log.warn("🚫 NON-TREND REGIME: {}", s.getRegime());
-            return reject("NON_TREND");
+        String requiredRegime = config.getFilters().getRegimeRequired();
+
+        if ("TREND_ONLY".equalsIgnoreCase(requiredRegime)) {
+            if (!"TREND".equalsIgnoreCase(s.getRegime())) {
+                log.warn("🚫 NON-TREND REGIME: {} (Required: TREND_ONLY)", s.getRegime());
+                return reject("NON_TREND");
+            }
+        } else if ("CHOP_ALLOWED".equalsIgnoreCase(requiredRegime)) {
+            if ("BLOCKED".equalsIgnoreCase(s.getRegime())) {
+                log.warn("🚫 BLOCKED REGIME: {} (Configured: CHOP_ALLOWED)", s.getRegime());
+                return reject("BLOCKED_REGIME");
+            } else if ("CHOP".equalsIgnoreCase(s.getRegime()) || "UNKNOWN".equalsIgnoreCase(s.getRegime())) {
+                log.info("✅ CHOP/UNKNOWN REGIME ALLOWED: {} (Configured: CHOP_ALLOWED)", s.getRegime());
+            }
+        } else if ("ANY".equalsIgnoreCase(requiredRegime)) {
+            if ("BLOCKED".equalsIgnoreCase(s.getRegime())) {
+                log.warn("🚫 BLOCKED REGIME: {} (Configured: ANY)", s.getRegime());
+                return reject("BLOCKED_REGIME");
+            } else {
+                log.info("✅ ANY REGIME ALLOWED: {} (Configured: ANY)", s.getRegime());
+            }
+        } else {
+            log.warn("🚫 INVALID REGIME_REQUIRED CONFIGURATION: {}", requiredRegime);
+            return reject("INVALID_REGIME_CONFIG");
         }
 
         // -------------------------

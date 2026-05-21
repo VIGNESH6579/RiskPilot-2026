@@ -27,7 +27,7 @@ public class RiskPilotProperties {
 
     @Data
     public static class Filters {
-        private String regimeRequired = "TREND_ONLY";
+        private String regimeRequired = "TREND_ONLY"; // TREND_ONLY | ANY | CHOP_ALLOWED
         private double minOrRange = 120;
         private double maxSpread = 2.0;
     }

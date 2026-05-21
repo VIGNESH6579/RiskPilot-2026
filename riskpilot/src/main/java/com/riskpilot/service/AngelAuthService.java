@@ -32,16 +32,16 @@ public class AngelAuthService {
     private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
     private static final long AUTH_RETRY_GUARD_MS = 30000L; // Increase guard to 30s to reduce log noise
 
-    @Value("${ANGEL_API_KEY:${angelapi.key:}}")
+    @Value("${ANGELONE_API_KEY:${angelapi.key:}}")
     private String apiKey;
 
-    @Value("${ANGEL_CLIENT_ID:${angelapi.clientcode:}}")
+    @Value("${ANGELONE_CLIENT_ID:${angelapi.clientcode:}}")
     private String clientCode;
 
-    @Value("${ANGEL_PIN:${angelapi.pin:}}")
+    @Value("${ANGELONE_PIN:${angelapi.pin:}}")
     private String pin;
 
-    @Value("${ANGEL_TOTP_SECRET:${angelapi.totp.secret:}}")
+    @Value("${ANGELONE_TOTP_SECRET:${angelapi.totp.secret:}}")
     private String totpSecret;
 
     @Value("${ANGEL_CLIENT_LOCAL_IP:}")
