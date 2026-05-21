@@ -68,6 +68,9 @@ public class ShadowExecutionEngine {
     // BUG-FIX: Restore today's candles from DB on startup so engine isn't blind after restart
     private final CandleRepository candleRepository;
 
+    @org.springframework.beans.factory.annotation.Value("${TRADING_SYMBOL:NIFTY}")
+    private String tradingSymbol;
+
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
 
@@ -572,8 +575,11 @@ public class ShadowExecutionEngine {
             final double finalRealizedR = realizedR;
             final LocalDateTime finalSignalTime = signalTime;
             transactionTemplate.execute(status -> {
+                // FIX: Was hardcoded "NIFTY" — now uses the configured trading symbol
+                String symbol = (tradingSymbol != null && !tradingSymbol.isBlank())
+                    ? tradingSymbol.trim().toUpperCase() : "NIFTY";
                 Trade dbTrade = Trade.builder()
-                    .symbol("NIFTY")
+                    .symbol(symbol)
                     .direction(finalTrade.direction())
                     .entryPrice(BigDecimal.valueOf(finalTrade.entryPrice()))
                     .stopLoss(BigDecimal.valueOf(finalTrade.stopLoss()))

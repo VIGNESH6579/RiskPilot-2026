@@ -39,10 +39,18 @@ public class TradingSessionService {
 
     @Transactional
     public TradingSession createNewSession(String symbol) {
+        // FIX: Supply defaults for all NOT NULL columns that have no @PrePersist default.
+        // dailyOpen, orHigh, orLow, orExpansion, regime are NOT NULL in the DB schema
+        // but were not set here, causing a ConstraintViolationException on save().
         TradingSession session = TradingSession.builder()
                 .sessionDate(LocalDate.now())
                 .symbol(symbol)
                 .sessionStart(LocalDateTime.now())
+                .dailyOpen(BigDecimal.ZERO)
+                .orHigh(BigDecimal.ZERO)
+                .orLow(BigDecimal.ZERO)
+                .orExpansion(BigDecimal.ZERO)
+                .regime("UNKNOWN")
                 .build();
         
         session = sessionRepository.save(session);
