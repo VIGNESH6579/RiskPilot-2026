@@ -20,7 +20,11 @@ public interface TradingSessionRepository extends JpaRepository<TradingSession, 
     
     Optional<TradingSession> findFirstBySymbolOrderBySessionDateDesc(String symbol);
     
-    @Query("SELECT s FROM TradingSession s WHERE s.symbol = :symbol AND s.sessionActive = true")
+    // FIX: Added sessionDate = CURRENT_DATE filter.
+    // Without it, a session from a previous day with sessionActive=true (e.g. never explicitly
+    // closed because the container was killed mid-session) would be returned as "active" today,
+    // blocking creation of a new session and causing the engine to operate on stale OR data.
+    @Query("SELECT s FROM TradingSession s WHERE s.symbol = :symbol AND s.sessionActive = true AND s.sessionDate = CURRENT_DATE")
     Optional<TradingSession> findActiveSession(@Param("symbol") String symbol);
     
     @Query("SELECT COUNT(s) FROM TradingSession s WHERE s.symbol = :symbol AND s.sessionDate >= :startDate")

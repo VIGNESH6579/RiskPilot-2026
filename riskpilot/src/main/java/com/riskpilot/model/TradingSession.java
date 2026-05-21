@@ -11,7 +11,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "trading_sessions")
+@Table(name = "trading_sessions",
+    uniqueConstraints = @jakarta.persistence.UniqueConstraint(
+        name = "uq_sessions_symbol_date",
+        columnNames = {"symbol", "session_date"}
+    ))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -22,7 +26,7 @@ public class TradingSession {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     
-    @Column(nullable = false, unique = true)
+    @Column(name = "session_date", nullable = false)
     private LocalDate sessionDate;
     
     @Column(nullable = false, length = 20)
