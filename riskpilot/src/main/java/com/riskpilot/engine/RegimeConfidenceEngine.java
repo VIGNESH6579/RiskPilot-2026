@@ -154,17 +154,21 @@ public class RegimeConfidenceEngine {
 
         if (orHigh == 0.0 || orLow == Double.MAX_VALUE) return 0;
 
-        // Count candles closing beyond OR boundaries
+        // BUG-FIX: denominator must be only candles that ATTEMPTED a breakout (price crossed OR),
+        // not all post-OR candles. Using all post-OR candles dilutes the follow-rate on
+        // strong trending days (many candles inside OR), making legitimate breakouts look weak.
         long totalBreakouts = candles.stream()
                 .filter(c -> c.timestamp.toLocalTime().isAfter(OPENING_RANGE_END))
+                .filter(c -> c.high > orHigh || c.low < orLow)
                 .count();
 
         long followThrough = candles.stream()
                 .filter(c -> c.timestamp.toLocalTime().isAfter(OPENING_RANGE_END))
+                .filter(c -> c.high > orHigh || c.low < orLow)
                 .filter(c -> c.close > orHigh || c.close < orLow)
                 .count();
 
-        if (totalBreakouts == 0) return 0;
+        if (totalBreakouts == 0) return 8; // No breakout attempts yet = neutral/early session
 
         double followRate = (double) followThrough / totalBreakouts;
         
@@ -317,13 +321,12 @@ public class RegimeConfidenceEngine {
             totalRange += Math.max(highLow, Math.max(highClose, lowClose));
         }
 
-        // Add the first candle's range to avoid zero ATR if only 1 TR was calculated
-        if (candles.size() > 0) {
-            totalRange += (candles.get(0).high - candles.get(0).low);
-            return totalRange / candles.size();
-        }
-
-        return 0.0;
+        // BUG-FIX: The loop already starts at i=1 and uses prev close for TR, so
+        // adding the first candle's H-L again would double-count it.
+        // Divide by (candles.size() - 1) since we computed (n-1) true ranges.
+        int trCount = candles.size() - 1;
+        if (trCount <= 0) return 0.0;
+        return totalRange / trCount;
     }
 
     /**

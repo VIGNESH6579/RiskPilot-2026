@@ -7,11 +7,13 @@ import java.util.List;
 @Service
 public class IndicatorService {
 
-    // Simplified ATR calculation
+    // ATR calculation: divides by the actual number of true ranges computed,
+    // not a hardcoded period, so it works correctly with any data length.
     public double calculateATR(List<Double> highs, List<Double> lows, List<Double> closes) {
+        if (highs == null || highs.size() < 2) return 0.0;
 
-        int period = 14;
-        double atr = 0;
+        double totalTR = 0.0;
+        int count = 0;
 
         for (int i = 1; i < highs.size(); i++) {
             double tr = Math.max(
@@ -21,9 +23,12 @@ public class IndicatorService {
                             Math.abs(lows.get(i) - closes.get(i - 1))
                     )
             );
-            atr += tr;
+            totalTR += tr;
+            count++;
         }
 
-        return atr / period;
+        // BUG-FIX: was dividing by hardcoded 14 even when only N<14 candles were available,
+        // producing an inflated ATR value. Divide by actual count instead.
+        return count > 0 ? totalTR / count : 0.0;
     }
 }

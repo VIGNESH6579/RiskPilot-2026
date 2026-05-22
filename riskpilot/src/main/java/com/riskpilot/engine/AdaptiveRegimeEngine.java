@@ -1,14 +1,12 @@
 package com.riskpilot.engine;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -18,12 +16,13 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class AdaptiveRegimeEngine {
 
-    private static final String CONFIG_FILE = "adaptive_regime.json";
+    // BUG-FIX: was "adaptive_regime.json" in working dir - wiped on every Render deploy.
+    // Replaced with DB persistence via adaptive_regime_config table (V11 migration).
     private static final int WINDOW_SIZE = 10;
     private static final int MIN_TRADES_FOR_ADAPTATION = 6;
     private static final double ALPHA = 0.3; // Smoothing factor
 
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    private final JdbcTemplate jdbcTemplate;
     private final AtomicReference<AdaptiveConfig> currentConfig = new AtomicReference<>();
     private final List<TradeResult> tradeWindow = new ArrayList<>();
     private volatile boolean freezeAdaptation = false;
@@ -100,20 +99,26 @@ public class AdaptiveRegimeEngine {
      */
     public void initialize() {
         try {
-            File configFile = new File(CONFIG_FILE);
-            if (configFile.exists()) {
-                AdaptiveConfig loaded = objectMapper.readValue(configFile, AdaptiveConfig.class);
-                currentConfig.set(loaded);
-                log.info("📊 Loaded adaptive config from file: {}", loaded);
-            } else {
-                AdaptiveConfig defaults = new AdaptiveConfig();
-                currentConfig.set(defaults);
-                persistConfig(defaults);
-                log.info("📊 Created default adaptive config: {}", defaults);
-            }
+            // BUG-FIX: load from DB (row id=1) instead of an ephemeral local file.
+            AdaptiveConfig loaded = jdbcTemplate.queryForObject(
+                "SELECT min_regime_score, min_or_range, min_atr_ratio, min_efficiency, min_breakout_hold_rate "
+                + "FROM adaptive_regime_config WHERE id = 1",
+                (rs, rowNum) -> {
+                    AdaptiveConfig cfg = new AdaptiveConfig();
+                    cfg.setMinRegimeScore(rs.getInt("min_regime_score"));
+                    cfg.setMinORRange(rs.getDouble("min_or_range"));
+                    cfg.setMinATRRatio(rs.getDouble("min_atr_ratio"));
+                    cfg.setMinEfficiency(rs.getDouble("min_efficiency"));
+                    cfg.setMinBreakoutHoldRate(rs.getDouble("min_breakout_hold_rate"));
+                    return cfg;
+                });
+            currentConfig.set(loaded);
+            log.info("📊 Loaded adaptive config from DB: {}", loaded);
         } catch (Exception e) {
-            log.error("Failed to initialize adaptive config, using defaults", e);
-            currentConfig.set(new AdaptiveConfig());
+            log.warn("Failed to load adaptive config from DB, using defaults: {}", e.getMessage());
+            AdaptiveConfig defaults = new AdaptiveConfig();
+            currentConfig.set(defaults);
+            persistConfig(defaults);
         }
     }
 
@@ -325,10 +330,26 @@ public class AdaptiveRegimeEngine {
      */
     private void persistConfig(AdaptiveConfig config) {
         try {
-            objectMapper.writeValue(new File(CONFIG_FILE), config);
-            log.debug("💾 Persisted adaptive config to file");
-        } catch (Exception e) {
-            log.error("Failed to persist adaptive config", e);
+            // BUG-FIX: persist to DB (upsert row id=1) instead of ephemeral local file.
+            jdbcTemplate.update(
+                "INSERT INTO adaptive_regime_config "
+                + "(id, min_regime_score, min_or_range, min_atr_ratio, min_efficiency, min_breakout_hold_rate, last_updated, notes) "
+                + "VALUES (1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'auto-adapted') "
+                + "ON CONFLICT (id) DO UPDATE SET "
+                + "min_regime_score = EXCLUDED.min_regime_score, "
+                + "min_or_range = EXCLUDED.min_or_range, "
+                + "min_atr_ratio = EXCLUDED.min_atr_ratio, "
+                + "min_efficiency = EXCLUDED.min_efficiency, "
+                + "min_breakout_hold_rate = EXCLUDED.min_breakout_hold_rate, "
+                + "last_updated = CURRENT_TIMESTAMP",
+                config.getMinRegimeScore(),
+                config.getMinORRange(),
+                config.getMinATRRatio(),
+                config.getMinEfficiency(),
+                config.getMinBreakoutHoldRate());
+            log.debug("💾 Persisted adaptive config to DB");
+        } catch (DataAccessException e) {
+            log.error("Failed to persist adaptive config to DB", e);
         }
     }
 

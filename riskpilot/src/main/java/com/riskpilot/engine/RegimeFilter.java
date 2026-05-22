@@ -107,12 +107,23 @@ public class RegimeFilter {
             candleHistory.poll();
         }
 
-        // Set opening range (first candle of the day)
+        // BUG-FIX: OR range must span the FULL opening period (9:15-9:45), not just the last candle.
+        // Accumulate the highest-high and lowest-low across all pre-9:45 candles.
         if (timestamp.toLocalTime().isBefore(OPENING_RANGE_END)) {
-            double dayRange = high - low;
-            openingRange.set(dayRange);
+            double currentOrHigh = candleHistory.stream()
+                    .filter(c -> c.getTimestamp().toLocalTime().isBefore(OPENING_RANGE_END))
+                    .mapToDouble(CandleData::getHigh)
+                    .max()
+                    .orElse(high);
+            double currentOrLow = candleHistory.stream()
+                    .filter(c -> c.getTimestamp().toLocalTime().isBefore(OPENING_RANGE_END))
+                    .mapToDouble(CandleData::getLow)
+                    .min()
+                    .orElse(low);
+            double dayRange = currentOrHigh - currentOrLow;
+            openingRange.set(Math.max(0.0, dayRange));
             openingATR.set(atr);
-            log.info("🌅 Opening Range set: {}, ATR: {}", dayRange, atr);
+            log.info("🌅 Opening Range updated: high={}, low={}, range={}, ATR: {}", currentOrHigh, currentOrLow, dayRange, atr);
         }
 
         // Detect breakouts
