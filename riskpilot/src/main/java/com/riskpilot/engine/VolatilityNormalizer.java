@@ -44,12 +44,14 @@ public class VolatilityNormalizer {
     /**
      * Update opening range and recalculate TP1
      */
-    public synchronized void updateOpeningRange(double high, double low, LocalDateTime timestamp) {
+    // BUG-FIX: OR range must use cumulative high/low across the full 9:15-9:45 window,
+    // not just the last candle passed in. Callers must pass accumulatedHigh and accumulatedLow.
+    public synchronized void updateOpeningRange(double accumulatedHigh, double accumulatedLow, LocalDateTime timestamp) {
         if (timestamp.toLocalTime().isBefore(OPENING_RANGE_END)) {
-            double dayRange = high - low;
+            double dayRange = Math.max(0.0, accumulatedHigh - accumulatedLow);
             openingRange.set(dayRange);
             recalculateTP1();
-            log.info("🌅 Opening Range updated: {} → TP1: {}", dayRange, currentTP1.get());
+            log.info("🌅 Opening Range updated: accH={}, accL={}, range={} → TP1: {}", accumulatedHigh, accumulatedLow, dayRange, currentTP1.get());
         }
     }
 

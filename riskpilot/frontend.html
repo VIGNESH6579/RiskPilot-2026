@@ -134,6 +134,7 @@
       <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
       <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
       <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
+      <div class="card" style="grid-column:span 2"><div class="label">Regime Detail (Score / ATR / Efficiency / Hold / Blocking)</div><div id="regimeDetail" class="value small" style="font-size:0.75rem">--</div></div>
       <div class="card"><div class="label">Session</div><div id="session" class="value small">--</div></div>
       <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">₹--</div></div>
       <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value">0</div></div>
@@ -245,6 +246,7 @@
     range:         document.getElementById('range'),
     orRange:       document.getElementById('orRange'),
     regime:        document.getElementById('regime'),
+    regimeDetail:  document.getElementById('regimeDetail'),
     session:       document.getElementById('session'),
     paperBalance:  document.getElementById('paperBalance'),
     tradesTaken:   document.getElementById('tradesTaken'),
@@ -408,6 +410,11 @@
         ? (mktClosed ? 'Market Closed' : 'Assessing…') : state.regime;
       els.regime.textContent = regLabel;
       cls(els.regime, state.regime === 'TREND' ? 'good' : state.regime === 'BLOCKED' ? 'bad' : 'warn');
+      if (state.regimeScore !== undefined) {
+        const bl = state.blockingReasons ? ` | 🚫 ${state.blockingReasons}` : '';
+        els.regimeDetail.textContent = `Score ${state.regimeScore}/6  ATR ${state.atrRatio??'--'}x  Eff ${state.trendEfficiency??'--'}  Hold ${state.breakoutHoldRate??'--'}${bl}`;
+        cls(els.regimeDetail, state.regimeTrading ? 'good' : 'bad');
+      } else { els.regimeDetail.textContent = '--'; }
 
       const sesLabel = state.sessionActive ? 'Active'
         : mktClosed ? 'Market Closed' : 'Inactive – Feed Down';
@@ -545,6 +552,11 @@
             ? (pl.marketOpen === false ? 'Market Closed' : 'Assessing…') : pl.regime;
           els.regime.textContent = wsReg;
           cls(els.regime, pl.regime === 'TREND' ? 'good' : pl.regime === 'BLOCKED' ? 'bad' : 'warn');
+          if (pl.regimeScore !== undefined) {
+            const wsBl = pl.blockingReasons ? ` | 🚫 ${pl.blockingReasons}` : '';
+            els.regimeDetail.textContent = `Score ${pl.regimeScore}/6  ATR ${pl.atrRatio??'--'}x  Eff ${pl.trendEfficiency??'--'}  Hold ${pl.breakoutHoldRate??'--'}${wsBl}`;
+            cls(els.regimeDetail, pl.regimeTrading ? 'good' : 'bad');
+          } else { els.regimeDetail.textContent = '--'; }
 
           const wsSes = pl.sessionActive ? 'Active'
             : pl.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down';

@@ -137,6 +137,7 @@
       <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
       <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
       <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
+      <div class="card" style="grid-column:span 2"><div class="label">Regime Detail (Score / ATR / Efficiency / Hold / Blocking)</div><div id="regimeDetail" class="value small" style="font-size:0.75rem;letter-spacing:0.02em">--</div></div>
       <div class="card"><div class="label">Session Status</div><div id="session" class="value small">--</div></div>
       <div class="card"><div class="label">Trades Today</div><div id="tradesTaken" class="value small">--</div></div>
       <div class="card"><div class="label">Feed Health</div><div id="feedHealth" class="value small">--</div></div>
@@ -185,6 +186,7 @@
       range: document.getElementById('range'),
       orRange: document.getElementById('orRange'),
       regime: document.getElementById('regime'),
+      regimeDetail: document.getElementById('regimeDetail'),
       session: document.getElementById('session'),
       tradesTaken: document.getElementById('tradesTaken'),
       feedHealth: document.getElementById('feedHealth'),
@@ -337,6 +339,14 @@
           : state.regime;
         els.regime.textContent = regimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        // Show detailed regime breakdown so you can see WHY trading is blocked
+        if (state.regimeScore !== undefined) {
+          const blocking = state.blockingReasons ? ` | 🚫 ${state.blockingReasons}` : '';
+          els.regimeDetail.textContent = `Score ${state.regimeScore}/6  ATR ${state.atrRatio ?? '--'}x  Eff ${state.trendEfficiency ?? '--'}  Hold ${state.breakoutHoldRate ?? '--'}${blocking}`;
+          setClass(els.regimeDetail, state.regimeTrading ? 'good' : 'bad');
+        } else {
+          els.regimeDetail.textContent = '--';
+        }
 
         const sessionLabel = state.sessionActive
           ? 'Active'
@@ -394,6 +404,13 @@
           : state.regime;
         els.regime.textContent = wsRegimeLabel;
         setClass(els.regime, state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
+        if (state.regimeScore !== undefined) {
+          const wsBlocking = state.blockingReasons ? ` | 🚫 ${state.blockingReasons}` : '';
+          els.regimeDetail.textContent = `Score ${state.regimeScore}/6  ATR ${state.atrRatio ?? '--'}x  Eff ${state.trendEfficiency ?? '--'}  Hold ${state.breakoutHoldRate ?? '--'}${wsBlocking}`;
+          setClass(els.regimeDetail, state.regimeTrading ? 'good' : 'bad');
+        } else {
+          els.regimeDetail.textContent = '--';
+        }
 
         const wsSessionLabel = state.sessionActive
           ? 'Active'

@@ -261,12 +261,30 @@ public class ShadowExecutionEngine {
 
         storeCandleData(candle);
         updateRegimeFilter(candle);
-        volatilityNormalizer.updateOpeningRange(candle.high, candle.low, candle.timestamp());
+
+        // BUG-FIX: VolatilityNormalizer must receive accumulated OR high/low (full 9:15-9:45 span),
+        // not a single candle's H/L. Compute from candle history before passing in.
+        if (candle.timestamp().toLocalTime().isBefore(java.time.LocalTime.of(9, 45))) {
+            java.time.LocalTime orEnd = java.time.LocalTime.of(9, 45);
+            List<Candle> history = candleAggregator.getValidHistory();
+            double accHigh = history.stream()
+                .filter(c -> c.timestamp().toLocalTime().isBefore(orEnd))
+                .mapToDouble(c -> c.high)
+                .max().orElse(candle.high);
+            double accLow = history.stream()
+                .filter(c -> c.timestamp().toLocalTime().isBefore(orEnd))
+                .mapToDouble(c -> c.low)
+                .min().orElse(candle.low);
+            volatilityNormalizer.updateOpeningRange(accHigh, accLow, candle.timestamp());
+        }
         lastStoredCandleTime = candle.time;
     }
 
     private void updateRegimeFilter(Candle candle) {
-        double atr = Math.abs(candle.high - candle.low);
+        // BUG-FIX: was passing (high - low) as ATR - that is just candle range, not ATR.
+        // Compute a proper 14-period ATR from candle history instead.
+        double atr = calculateSimpleAtr(candleAggregator.getValidHistory(), 14);
+        if (atr <= 0.0) atr = Math.abs(candle.high - candle.low); // fallback for first candle
         regimeFilter.processCandle(
             candle.open, candle.high, candle.low, candle.close,
             candle.volume(), candle.timestamp(), atr
@@ -787,6 +805,17 @@ public class ShadowExecutionEngine {
             if (resistance == support) resistance += 50;
             payload.put("support", support);
             payload.put("resistance", resistance);
+        }
+
+        // Add detailed regime metrics so the frontend can show WHY trading is blocked
+        RegimeFilter.RegimeMetrics regimeMetrics = regimeFilter.getCurrentRegime();
+        if (regimeMetrics != null) {
+            payload.put("regimeScore", regimeMetrics.getRegimeScore());
+            payload.put("regimeTrading", regimeMetrics.isTradingAllowed());
+            payload.put("atrRatio", Math.round(regimeMetrics.getAtrRatio() * 100.0) / 100.0);
+            payload.put("trendEfficiency", Math.round(regimeMetrics.getTrendEfficiency() * 100.0) / 100.0);
+            payload.put("breakoutHoldRate", Math.round(regimeMetrics.getBreakoutHoldRate() * 100.0) / 100.0);
+            payload.put("blockingReasons", String.join(", ", regimeMetrics.getBlockingReasons()));
         }
 
         webSocketService.sendSessionState(payload);
