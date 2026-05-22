@@ -317,7 +317,13 @@ public class RegimeConfidenceEngine {
             totalRange += Math.max(highLow, Math.max(highClose, lowClose));
         }
 
-        return totalRange / (candles.size() - 1);
+        // Add the first candle's range to avoid zero ATR if only 1 TR was calculated
+        if (candles.size() > 0) {
+            totalRange += (candles.get(0).high - candles.get(0).low);
+            return totalRange / candles.size();
+        }
+
+        return 0.0;
     }
 
     /**

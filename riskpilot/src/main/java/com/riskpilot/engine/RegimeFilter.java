@@ -135,31 +135,35 @@ public class RegimeFilter {
         if (orRange == 0) return; // No opening range yet
 
         // Simple breakout detection from the latest candles.
+        // We need to compare the current candle (t0) against the range of PRIOR candles.
         List<CandleData> allCandles = new ArrayList<>(candleHistory);
-        int size = allCandles.size();
-        List<CandleData> last3 = allCandles.subList(Math.max(0, size - 3), size);
+        if (allCandles.size() < 2) return;
 
-        double highBreakout = last3.stream()
-                .mapToDouble(CandleData::getHigh)
-                .max()
-                .orElse(candle.getHigh());
+        // Get the high/low of the candles BEFORE the current one
+        List<CandleData> priorCandles = allCandles.subList(0, allCandles.size() - 1);
+        int lookback = Math.min(priorCandles.size(), 5);
+        List<CandleData> recentPrior = priorCandles.subList(priorCandles.size() - lookback, priorCandles.size());
 
-        double lowBreakout = last3.stream()
-                .mapToDouble(CandleData::getLow)
-                .min()
-                .orElse(candle.getLow());
+        double priorHigh = recentPrior.stream().mapToDouble(CandleData::getHigh).max().orElse(Double.MAX_VALUE);
+        double priorLow = recentPrior.stream().mapToDouble(CandleData::getLow).min().orElse(0.0);
 
-        // Check if breakout held (simplified)
-        boolean highHeld = candle.getClose() > highBreakout;
-        boolean lowHeld = candle.getClose() < lowBreakout;
+        // A breakout occurs if the current candle's high/low exceeds the prior range
+        boolean isHighBreakout = candle.getHigh() > priorHigh;
+        boolean isLowBreakout = candle.getLow() < priorLow;
 
-        if (highBreakout > 0 || lowBreakout > 0) {
-            BreakoutData breakout = new BreakoutData(highBreakout, highHeld || lowHeld, candle.getTimestamp());
+        if (isHighBreakout || isLowBreakout) {
+            // A breakout "holds" if the close is also beyond the prior level
+            boolean held = (isHighBreakout && candle.getClose() > priorHigh) ||
+                          (isLowBreakout && candle.getClose() < priorLow);
+            
+            BreakoutData breakout = new BreakoutData(isHighBreakout ? priorHigh : priorLow, held, candle.getTimestamp());
             breakoutHistory.offer(breakout);
             if (breakoutHistory.size() > 10) {
                 breakoutHistory.poll();
             }
         }
+
+
     }
 
     /**

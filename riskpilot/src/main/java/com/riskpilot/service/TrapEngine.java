@@ -63,9 +63,13 @@ public class TrapEngine {
             totalRange += trueRange;
         }
         
-        return (history.size() - start - 1) > 0 
-            ? totalRange / (history.size() - start - 1) 
-            : 50.0;
+        // Include the first candle's range in the average
+        if (history.size() > start) {
+            totalRange += (history.get(start).high - history.get(start).low);
+            return totalRange / (history.size() - start);
+        }
+        
+        return 50.0;
     }
 
     /**
