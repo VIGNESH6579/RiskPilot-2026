@@ -51,10 +51,10 @@ riskpilot:
     
   # Angel One API Configuration
   angelone:
-    api-key: ${ANGELONE_API_KEY:}
-    client-code: ${ANGELONE_CLIENT_CODE:}
-    password: ${ANGELONE_PASSWORD:}
-    totp-secret: ${ANGELONE_TOTP_SECRET:}
+    api-key: ${ANGEL_API_KEY:${ANGELONE_API_KEY:}}
+    client-code: ${ANGEL_CLIENT_ID:${ANGELONE_CLIENT_ID:${ANGELONE_CLIENT_CODE:}}}
+    password: ${ANGEL_PIN:${ANGELONE_PIN:${ANGELONE_PASSWORD:}}}
+    totp-secret: ${ANGEL_TOTP_SECRET:${ANGELONE_TOTP_SECRET:}}
     base-url: ${ANGELONE_BASE_URL:https://apiconnect.angelbroking.com}
     
   # Observer Configuration

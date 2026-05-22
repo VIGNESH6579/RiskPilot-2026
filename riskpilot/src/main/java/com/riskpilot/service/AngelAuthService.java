@@ -32,16 +32,17 @@ public class AngelAuthService {
     private static final String AUTH_URL = "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword";
     private static final long AUTH_RETRY_GUARD_MS = 30000L; // Increase guard to 30s to reduce log noise
 
-    @Value("${ANGELONE_API_KEY:${angelapi.key:}}")
+    // Render env vars use ANGEL_* naming; legacy fallbacks for ANGELONE_* and property-style names
+    @Value("${ANGEL_API_KEY:${ANGELONE_API_KEY:${angelapi.key:}}}")
     private String apiKey;
 
-    @Value("${ANGELONE_CLIENT_ID:${angelapi.clientcode:}}")
+    @Value("${ANGEL_CLIENT_ID:${ANGELONE_CLIENT_ID:${angelapi.clientcode:}}}")
     private String clientCode;
 
-    @Value("${ANGELONE_PIN:${angelapi.pin:}}")
+    @Value("${ANGEL_PIN:${ANGELONE_PIN:${angelapi.pin:}}}")
     private String pin;
 
-    @Value("${ANGELONE_TOTP_SECRET:${angelapi.totp.secret:}}")
+    @Value("${ANGEL_TOTP_SECRET:${ANGELONE_TOTP_SECRET:${angelapi.totp.secret:}}}")
     private String totpSecret;
 
     @Value("${ANGEL_CLIENT_LOCAL_IP:}")
@@ -179,7 +180,8 @@ public class AngelAuthService {
             if (isProd) {
                 throw new IllegalStateException(
                     "Angel One credentials are not configured. " +
-                    "Set ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PIN, ANGEL_TOTP_SECRET.");
+                    "Set env vars: ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PIN, ANGEL_TOTP_SECRET " +
+                    "(check Render Dashboard → Environment tab).");
             } else {
                 log.warn("Angel One credentials not set — running in credential-less dev mode. " +
                          "Live market data will be unavailable.");
