@@ -106,11 +106,14 @@ public class ActiveTradeExecution {
     }
     
     /**
-     * BUG-011: TP1 lot scaling with minimum threshold.
-     * For position sizes 1-4 lots: ensures at least 1 lot exits at TP1 (100%).
-     * For position sizes 5+ lots: scales 20% at TP1, runner for remaining 80%.
-     * 
-     * @param trade Current trade execution
+     * TP1 lot scaling with minimum threshold.
+     * For position sizes 1-4 lots: exit the FULL position at TP1 (no runner).
+     *   Keeping a 1–3 lot runner after TP1 is too small to matter and adds needless
+     *   complexity; full exit books profit cleanly.
+     * For position sizes 5+ lots: scale 20% out at TP1, keep remaining 80% as runner.
+     *   This matches the 1:1 / trailing-runner doctrine.
+     *
+     * @param trade        Current trade execution
      * @param currentPrice Current market price
      * @return Updated trade execution with TP1 applied if triggered
      */
@@ -123,11 +126,18 @@ public class ActiveTradeExecution {
 
         if (tp1Reached) {
             double tp1ExitPrice = currentPrice;
-            
-            double tp1Size = Math.min(
-                trade.positionSize(),
-                Math.max(1.0, Math.floor(trade.positionSize() * 0.20))
-            );
+
+            // FIX BUG-G: small positions (< 5 units) exit 100% at TP1.
+            // Old code: tp1Size = max(1, floor(posSize * 0.20)) which for posSize=4 gives
+            //   tp1Size=1, remaining=3 — only 25% exits, which contradicts the doctrine.
+            // New code: if positionSize < 5, exit all; otherwise exit 20% and run 80%.
+            double tp1Size;
+            if (trade.positionSize() < 5.0) {
+                tp1Size = trade.positionSize(); // full exit for small lots
+            } else {
+                tp1Size = Math.max(1.0, Math.floor(trade.positionSize() * 0.20));
+            }
+
             double remaining = trade.positionSize() - tp1Size;
             boolean runnerActive = remaining > 0.0;
             double pnl = trade.isShort()
@@ -222,12 +232,21 @@ public class ActiveTradeExecution {
      * Check if stop loss is hit and calculate P&L.
      * BUG-007: P&L calculated using futures formula (point × size).
      * For options, this would need delta adjustment.
-     * 
-     * @param trade Current trade execution
+     *
+     * Note: after a full TP1 exit (remainingSize == 0), there is nothing left to stop
+     * out — the trade should have been closed by the caller immediately.  This guard
+     * prevents a ghost SL trigger from booking spurious 0-lot P&L.
+     *
+     * @param trade        Current trade execution
      * @param currentPrice Current market price
      * @return TradeExit with triggered flag and P&L
      */
     public static TradeExit checkStopLoss(ActiveTradeExecution trade, double currentPrice) {
+        // Guard: if TP1 was hit and nothing remains, no SL to check.
+        if (trade.tp1Hit() && trade.remainingSize() <= 0.0) {
+            return TradeExit.noExit();
+        }
+
         double effectiveSL = trade.tp1Hit() 
             ? trade.trailingSL() 
             : trade.stopLoss();

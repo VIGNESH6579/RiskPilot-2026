@@ -121,6 +121,16 @@ public class ShadowExecutionEngine {
         ActiveTradeExecution trade = ActiveTradeExecution.updateExcursions(state.activeTradeReference(), currentPrice);
         trade = ActiveTradeExecution.fromTickTP1(trade, currentPrice);
 
+        // FIX BUG-H: when TP1 is hit and the entire position was exited (small lots < 5),
+        // remainingSize == 0.  There is no runner to trail and checkStopLoss returns noExit()
+        // (guarded above).  We must close the trade here with exit.pnl() == 0 (runner pnl)
+        // so that the TP1 pnl already in trade.realizedPnL() gets booked to the balance.
+        if (trade.tp1Hit() && trade.remainingSize() <= 0.0) {
+            TradeExit fullTp1Exit = new TradeExit(true, 0.0, "TP1_FULL_EXIT", currentPrice);
+            closeTrade(trade, fullTp1Exit);
+            return;
+        }
+
         TradeExit exit = ActiveTradeExecution.checkStopLoss(trade, currentPrice);
         if (exit.triggered()) {
             closeTrade(trade, exit);
@@ -528,10 +538,19 @@ public class ShadowExecutionEngine {
         double expectedEntry = activeExpectedEntry;
         double expectedExit = trade.tp1Hit() ? trade.trailingSL() : trade.stopLoss();
         double riskPts = Math.max(0.0001, trade.initialRiskPoints());
-        // BUG-FIX: Use exit.pnl() which returns pnlPoints (points * size)
-        // realizedR should be based on points per unit risk, so we divide by (riskPts * totalSize)
         double totalSize = trade.positionSize();
-        double realizedR = exit.pnl() / (riskPts * totalSize);
+
+        // FIX BUG-A: totalPnlPoints must include BOTH the TP1 portion (already booked
+        // in trade.realizedPnL()) AND the runner/exit portion (exit.pnl()).
+        // Previously only exit.pnl() was used, causing TP1 profit to be invisible to
+        // the balance, realizedR, and cumulativeDailyLossR calculations.
+        double totalPnlPoints = trade.realizedPnL() + exit.pnl();
+
+        // FIX BUG-B: realizedR uses totalPnlPoints, not just exit.pnl().
+        // Formula: R = totalPnlPoints / (riskPts * totalSize)
+        // riskPts = |entry - sl| in index points; totalSize = lots/units at entry.
+        // riskPts * totalSize = total rupee-risk in point-units (before ₹50 multiplier).
+        double realizedR = totalPnlPoints / (riskPts * totalSize);
         
         double entrySlippage = Math.abs(trade.entryPrice() - expectedEntry);
         double runnerSlippage = trade.runnerActive() ? Math.abs(exit.exitPrice() - expectedExit) : 0.0;
@@ -553,9 +572,10 @@ public class ShadowExecutionEngine {
 
         int newConsecutiveLosses = realizedR < 0.0 ? state.consecutiveLosses() + 1 : 0;
 
-        // Calculate paper balance change
-        // BUG-FIX: exit.pnl() already includes size. Multiply by 50 for NIFTY point value.
-        double balanceChange = exit.pnl() * 50;
+        // FIX BUG-C: balanceChange uses totalPnlPoints (TP1 + runner).
+        // Each index point = ₹50 for NIFTY futures.  totalPnlPoints already includes
+        // lot-size (positionSize/remainingSize), so: ₹change = totalPnlPoints × 50.
+        double balanceChange = totalPnlPoints * 50;
         
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),
@@ -596,6 +616,7 @@ public class ShadowExecutionEngine {
             final ActiveTradeExecution finalTrade = trade;
             final TradeExit finalExit = exit;
             final double finalRealizedR = realizedR;
+            final double finalTotalPnlPoints = totalPnlPoints;
             final LocalDateTime finalSignalTime = signalTime;
             transactionTemplate.execute(status -> {
                 // FIX: Was hardcoded "NIFTY" — now uses the configured trading symbol
@@ -609,7 +630,10 @@ public class ShadowExecutionEngine {
                     .targetPrice(BigDecimal.valueOf(finalTrade.tp1Level()))
                     .positionSize(BigDecimal.valueOf(finalTrade.positionSize()))
                     .remainingSize(BigDecimal.valueOf(finalTrade.remainingSize()))
-                    .realizedPnL(BigDecimal.valueOf(finalExit.pnl()))
+                    // FIX BUG-D: store TOTAL PnL (TP1 + runner), not just the exit leg.
+                    // trade.realizedPnL() holds the TP1 partial profit; exit.pnl() holds
+                    // the runner/SL exit profit.  Sum = true closed-trade P&L in points.
+                    .realizedPnL(BigDecimal.valueOf(finalTotalPnlPoints))
                     .unrealizedPnL(BigDecimal.ZERO)
                     .maxFavorableExcursion(BigDecimal.valueOf(finalTrade.mfe()))
                     .maxAdverseExcursion(BigDecimal.valueOf(finalTrade.mae()))
@@ -617,14 +641,18 @@ public class ShadowExecutionEngine {
                     .runnerActive(finalTrade.runnerActive())
                     .tailHalfLocked(false)
                     .trailingStopLoss(BigDecimal.valueOf(finalTrade.trailingSL()))
+                    // FIX BUG-E: persist initialRiskPoints and realizedR so the frontend
+                    // can display accurate R-multiples from DB-loaded history rows.
+                    .initialRiskPoints(BigDecimal.valueOf(finalTrade.initialRiskPoints() * finalTrade.positionSize()))
+                    .realizedR(BigDecimal.valueOf(finalRealizedR))
                     .status("CLOSED")
                     .exitReason(finalExit.exitReason() != null ? finalExit.exitReason() : "UNKNOWN")
                     .entryTime(finalSignalTime != null ? finalSignalTime : LocalDateTime.now())
                     .exitTime(LocalDateTime.now())
                     .build();
                 tradeRepository.save(dbTrade);
-                log.info("✅ Shadow trade persisted to DB: direction={}, pnl={}, R={}",
-                    finalTrade.direction(), finalExit.pnl(), finalRealizedR);
+                log.info("✅ Shadow trade persisted to DB: direction={}, totalPnl={}, R={}",
+                    finalTrade.direction(), finalTotalPnlPoints, finalRealizedR);
                 return null;
             });
         } catch (Exception e) {

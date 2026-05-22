@@ -467,7 +467,10 @@
         mae:             t.maxAdverseExcursion,
         tp1Hit:          t.tp1Hit,
         runnerCaptured:  t.runnerActive,
-        realizedR:       t.realizedPnL,
+        // FIX BUG-F: use t.realizedR (stored R-multiple) instead of t.realizedPnL (raw
+        // points × qty).  The old mapping showed e.g. "1650R" for a 50-pt gain on 33
+        // units — completely wrong.  t.realizedR is now persisted correctly by the engine.
+        realizedR:       t.realizedR,
         exitReason:      t.exitReason || '--',
       }));
 

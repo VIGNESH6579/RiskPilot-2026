@@ -65,7 +65,17 @@ public class Trade {
     
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal trailingStopLoss;
-    
+
+    /** Initial risk in index points (|entry − stopLoss| × positionSize at trade open).
+     *  Used to calculate R-multiples: realizedR = totalPnlPoints / initialRiskPoints */
+    @Column(name = "initial_risk_points", nullable = false, precision = 10, scale = 4)
+    private BigDecimal initialRiskPoints;
+
+    /** Realised R-multiple: (tp1Pnl + exitPnl) / (riskPts × positionSize).
+     *  Positive = profit, negative = loss.  Stored for accurate dashboard display. */
+    @Column(name = "realized_r", nullable = false, precision = 10, scale = 4)
+    private BigDecimal realizedR;
+
     @Column(nullable = false, length = 20)
     private String status; // ACTIVE, CLOSED, CANCELLED
     
@@ -98,6 +108,8 @@ public class Trade {
         if (maxFavorableExcursion == null) maxFavorableExcursion = BigDecimal.ZERO;
         if (maxAdverseExcursion == null) maxAdverseExcursion = BigDecimal.ZERO;
         if (trailingStopLoss == null) trailingStopLoss = (stopLoss != null ? stopLoss : BigDecimal.ZERO);
+        if (initialRiskPoints == null) initialRiskPoints = BigDecimal.ZERO;
+        if (realizedR == null) realizedR = BigDecimal.ZERO;
         if (exitReason == null) exitReason = "NONE";
     }
     
