@@ -41,6 +41,12 @@ spring:
 
 # RiskPilot Specific Configuration
 riskpilot:
+  # PAPER_MODE: set env var PAPER_MODE=true on Render to bypass live-money guards.
+  # Relaxes firstTradeFailure block, daily loss limit (→4R), consecutive-loss limit (→6),
+  # and REGIME_CONFIDENCE minimum (→35). NEVER enable on a live-money account.
+  paper-mode: ${PAPER_MODE:false}
+  mode: ${RISKPILOT_MODE:SHADOW}
+  strict-mode: ${RISKPILOT_STRICT_MODE:true}
   # Trading Configuration
   trading:
     symbol: ${TRADING_SYMBOL:BANKNIFTY}

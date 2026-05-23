@@ -83,12 +83,17 @@ public class RegimeConfidenceEngine {
                         components.getVolatilityExpansionScore() + components.getMarketEfficiencyScore() + 
                         components.getFakeBreakoutScore() + components.getEarlyMomentumScore();
 
-        // Hard decisions - no interpretation
-        if (totalScore < 55) {
+        // In paper mode: lower thresholds so the strategy can trade on more days
+        // and we can actually evaluate whether it has edge. Live: 55 hard block / 70 reduced.
+        // Paper: 35 hard block / 50 reduced.
+        int hardBlockThreshold  = riskPilotProperties.isPaperMode() ? 35 : 55;
+        int reducedModeThreshold = riskPilotProperties.isPaperMode() ? 50 : 70;
+
+        if (totalScore < hardBlockThreshold) {
             return new RegimeScore(totalScore, false, false, "LOW_QUALITY_DAY", components);
         }
 
-        if (totalScore < 70) {
+        if (totalScore < reducedModeThreshold) {
             return new RegimeScore(totalScore, true, true, "REDUCED_MODE", components);
         }
 

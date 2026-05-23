@@ -39,6 +39,15 @@ public class VixService {
     private long lastUnavailableWarningEpochMs = 0L;
     private boolean missingTokenWarned = false;
 
+    /**
+     * Fix #6 – Circuit breaker for VIX.
+     * If BOTH Angel One and Yahoo fail on the same scheduled attempt,
+     * this flips to true and TradingSafetyManager sees VIX as invalid,
+     * blocking new trades until the next successful fetch.
+     * Using the last-known stale value silently is worse than an explicit block.
+     */
+    private volatile boolean bothSourcesFailed = false;
+
     private static final String YAHOO_VIX_URL =
         "https://query1.finance.yahoo.com/v8/finance/chart/^INDIAVIX?interval=1m&range=1d";
 
@@ -63,6 +72,7 @@ public class VixService {
     public synchronized void refreshVix() {
         long now = System.currentTimeMillis();
         lastFetchAttemptEpochMs = now;
+        boolean angelSuccess = false;
 
         if (indiaVixToken.isBlank()) {
             if (!missingTokenWarned) {
@@ -74,23 +84,30 @@ public class VixService {
             if (fetched.isPresent() && fetched.get() > 0.0) {
                 lastKnownVix = fetched.get();
                 lastSuccessfulFetchEpochMs = now;
-                marketDataStateService.updateVix(lastKnownVix, Instant.now());
+                bothSourcesFailed = false;
+                marketDataStateService.updateVix(lastKnownVix, java.time.Instant.now());
                 return;
             }
+            // Angel One failed — try Yahoo
         }
 
         Optional<Double> yahooVix = fetchVixFromYahoo();
         if (yahooVix.isPresent()) {
             lastKnownVix = yahooVix.get();
             lastSuccessfulFetchEpochMs = now;
-            marketDataStateService.updateVix(lastKnownVix, Instant.now());
+            bothSourcesFailed = false;
+            marketDataStateService.updateVix(lastKnownVix, java.time.Instant.now());
             log.info("VIX fetched from Yahoo Finance: {}", lastKnownVix);
             return;
         }
 
+        // Fix #6: both sources failed — activate circuit breaker
+        bothSourcesFailed = true;
         long nowWarn = System.currentTimeMillis();
         if (nowWarn - lastUnavailableWarningEpochMs >= VIX_WARNING_INTERVAL_MS) {
-            log.warn("ANGEL_INDIA_VIX_UNAVAILABLE: returning lastKnownVix={}", lastKnownVix);
+            log.error("🚨 VIX_CIRCUIT_BREAKER: Both Angel One and Yahoo Finance failed. "
+                + "Trading will be blocked until VIX is fetched successfully. "
+                + "lastKnownVix={} (stale — NOT being used for new trades)", lastKnownVix);
             lastUnavailableWarningEpochMs = nowWarn;
         }
     }
@@ -98,14 +115,23 @@ public class VixService {
     public synchronized double getIndiaVix() {
         long now = System.currentTimeMillis();
 
-        // If cache is stale and no fetch in progress, trigger one-off fetch or wait for scheduler
         if (now - lastSuccessfulFetchEpochMs >= VIX_CACHE_MS || lastKnownVix <= 0.0) {
             if (now - lastFetchAttemptEpochMs >= VIX_RETRY_DELAY_MS) {
                 refreshVix();
             }
         }
 
+        // Circuit breaker: don't return a stale/fallback value — surface the failure
+        if (bothSourcesFailed) {
+            return -1.0; // sentinel: callers (MarketDataStateService.isVixValid) treat <=0 as invalid
+        }
+
         return lastKnownVix > 0.0 ? lastKnownVix : fallbackVix;
+    }
+
+    /** True when both Angel One and Yahoo have failed and VIX is unknown. */
+    public boolean isBothSourcesFailed() {
+        return bothSourcesFailed;
     }
 
     private Optional<Double> fetchVixFromYahoo() {

@@ -10,6 +10,17 @@ public class RiskPilotProperties {
     private String mode = "SHADOW"; // SHADOW | LIVE | REPLAY
     private boolean strictMode = true;
 
+    /**
+     * Paper-mode flag.  Set PAPER_MODE=true in Render env vars.
+     * When true:
+     *  - firstTradeFailure block is disabled (MAE threshold effectively infinite)
+     *  - daily loss limit is relaxed to 4R (vs 1.5R live)
+     *  - REGIME_CONFIDENCE minimum is lowered to 35 (vs 55 live)
+     * Purpose: let the strategy actually trade so you can evaluate it.
+     * NEVER set this on a live-money account.
+     */
+    private boolean paperMode = false;
+
     private Session session = new Session();
     private Filters filters = new Filters();
     private TimePhase timePhase = new TimePhase();

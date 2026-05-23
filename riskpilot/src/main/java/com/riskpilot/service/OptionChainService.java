@@ -1,14 +1,13 @@
 package com.riskpilot.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
-import java.io.IOException;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -24,15 +23,15 @@ public class OptionChainService {
 
     private static final Logger log = LoggerFactory.getLogger(OptionChainService.class);
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
-    private static final String CACHE_FILE = "option_chain_cache.json";
-    private static final long ANGEL_QUOTE_CACHE_MS = 3_000L; // Reduced to 3s as per user request
+    private static final String CACHE_KEY = "NIFTY";
+    private static final long ANGEL_QUOTE_CACHE_MS = 3_000L;
     private static final long ANGEL_WARNING_INTERVAL_MS = 60_000L;
     private static final DateTimeFormatter NSE_EXPIRY_FORMAT =
         DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);
 
-    private final ObjectMapper mapper = new ObjectMapper();
     private final AngelOneMarketDataService angelOneMarketDataService;
     private final MarketSessionService marketSessionService;
+    private final JdbcTemplate jdbcTemplate;
     // BUG-FIX: NIFTY weekly expiry is THURSDAY, not TUESDAY
     private final DayOfWeek defaultExpiryDay;
     private final String explicitExpiryOverride;
@@ -44,12 +43,14 @@ public class OptionChainService {
     public OptionChainService(
         AngelOneMarketDataService angelOneMarketDataService,
         MarketSessionService marketSessionService,
+        JdbcTemplate jdbcTemplate,
         // BUG-FIX: Default changed from TUESDAY to THURSDAY (NIFTY weekly expiry)
         @Value("${NIFTY_WEEKLY_EXPIRY_DAY:THURSDAY}") String expiryDayConfig,
         @Value("${NIFTY_EXPIRY_OVERRIDE:}") String explicitExpiryOverride
     ) {
         this.angelOneMarketDataService = angelOneMarketDataService;
         this.marketSessionService = marketSessionService;
+        this.jdbcTemplate = jdbcTemplate;
         this.defaultExpiryDay = parseExpiryDay(expiryDayConfig);
         this.explicitExpiryOverride = explicitExpiryOverride == null ? "" : explicitExpiryOverride.trim();
     }
@@ -209,23 +210,52 @@ public class OptionChainService {
         return fallback;
     }
 
+    /**
+     * Persist snapshot to DB (option_chain_cache table, V13 migration).
+     * UPSERT: insert or update the single NIFTY row.
+     */
     private void writeCache(OptionChainSnapshot snapshot) {
         try {
-            mapper.writeValue(new File(CACHE_FILE), snapshot);
-        } catch (IOException e) {
-            log.warn("Unable to persist option-chain cache: {}", e.getMessage());
+            jdbcTemplate.update(
+                "INSERT INTO option_chain_cache "
+                + "(cache_key, support, resistance, spot, expiry, previous_close, source, updated_epoch_ms, live, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) "
+                + "ON CONFLICT (cache_key) DO UPDATE SET "
+                + "support=EXCLUDED.support, resistance=EXCLUDED.resistance, spot=EXCLUDED.spot, "
+                + "expiry=EXCLUDED.expiry, previous_close=EXCLUDED.previous_close, source=EXCLUDED.source, "
+                + "updated_epoch_ms=EXCLUDED.updated_epoch_ms, live=EXCLUDED.live, updated_at=CURRENT_TIMESTAMP",
+                CACHE_KEY,
+                snapshot.support(), snapshot.resistance(), snapshot.spot(),
+                snapshot.expiry(), snapshot.previousClose(), snapshot.source(),
+                snapshot.updatedEpochMs(), snapshot.live()
+            );
+        } catch (DataAccessException e) {
+            log.warn("Unable to persist option-chain cache to DB: {}", e.getMessage());
         }
     }
 
+    /**
+     * Read snapshot from DB.  Returns null if no row exists or on any error.
+     */
     private OptionChainSnapshot readCache() {
-        File file = new File(CACHE_FILE);
-        if (!file.exists()) {
-            return null;
-        }
         try {
-            return mapper.readValue(file, OptionChainSnapshot.class);
-        } catch (IOException e) {
-            log.warn("Unable to read option-chain cache: {}", e.getMessage());
+            return jdbcTemplate.queryForObject(
+                "SELECT support, resistance, spot, expiry, previous_close, source, updated_epoch_ms, live "
+                + "FROM option_chain_cache WHERE cache_key = ?",
+                (rs, rowNum) -> new OptionChainSnapshot(
+                    rs.getInt("support"),
+                    rs.getInt("resistance"),
+                    rs.getDouble("spot"),
+                    rs.getString("expiry"),
+                    rs.getDouble("previous_close"),
+                    rs.getString("source"),
+                    rs.getLong("updated_epoch_ms"),
+                    rs.getBoolean("live")
+                ),
+                CACHE_KEY
+            );
+        } catch (DataAccessException e) {
+            // Expected on first run (empty table) — not an error
             return null;
         }
     }

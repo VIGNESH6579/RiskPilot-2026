@@ -40,8 +40,11 @@ public class RiskGateEngine {
                 config.getExecution().getSlippage().getEntryMax());
         }
 
-        if (!config.isStrictMode()) {
+        if (!config.isStrictMode() && !config.isPaperMode()) {
             throw new IllegalStateException("STRICT_MODE_VIOLATION: Strict mode must be enabled in production");
+        }
+        if (config.isPaperMode()) {
+            log.warn("⚠️ PAPER_MODE ACTIVE — live-money guards relaxed. Do NOT use with real funds.");
         }
 
         if (!"SHADOW".equalsIgnoreCase(config.getMode()) &&
@@ -265,12 +268,19 @@ public class RiskGateEngine {
         // -------------------------
         // 🔴 RISK LIMITS
         // -------------------------
-        if (s.getCumulativeDailyLossR() <= -config.getRisk().getMaxDailyLossR()) {
-            log.warn("🚫 DAILY LOSS LIMIT: {}R < {}R", s.getCumulativeDailyLossR(), config.getRisk().getMaxDailyLossR());
+        double effectiveMaxDailyLossR = config.isPaperMode()
+            ? Math.max(config.getRisk().getMaxDailyLossR(), 4.0)
+            : config.getRisk().getMaxDailyLossR();
+        int effectiveMaxConsecutiveLosses = config.isPaperMode()
+            ? Math.max(config.getRisk().getMaxConsecutiveLosses(), 6)
+            : config.getRisk().getMaxConsecutiveLosses();
+
+        if (s.getCumulativeDailyLossR() <= -effectiveMaxDailyLossR) {
+            log.warn("🚫 DAILY LOSS LIMIT: {}R < {}R", s.getCumulativeDailyLossR(), effectiveMaxDailyLossR);
             return reject("DAILY_LOSS_LIMIT");
         }
 
-        if (s.getConsecutiveLosses() >= config.getRisk().getMaxConsecutiveLosses()) {
+        if (s.getConsecutiveLosses() >= effectiveMaxConsecutiveLosses) {
             log.warn("🚫 LOSS STREAK LIMIT: {} consecutive losses", s.getConsecutiveLosses());
             return reject("LOSS_STREAK_LIMIT");
         }

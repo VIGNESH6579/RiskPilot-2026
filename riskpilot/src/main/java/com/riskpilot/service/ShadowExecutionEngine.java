@@ -41,6 +41,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import jakarta.annotation.PostConstruct;
 
 @Slf4j
 @Service
@@ -70,6 +72,10 @@ public class ShadowExecutionEngine {
 
     @org.springframework.beans.factory.annotation.Value("${TRADING_SYMBOL:NIFTY}")
     private String tradingSymbol;
+
+    // Injected from env var PAPER_MODE=true to override config bean for convenience
+    @org.springframework.beans.factory.annotation.Value("${PAPER_MODE:false}")
+    private boolean paperModeOverride;
 
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
@@ -580,7 +586,13 @@ public class ShadowExecutionEngine {
                 currentRegime.getRegimeScore())
             : new AdaptiveRegimeEngine.SessionFeatures(0.0, 0.0, 0.0, 0.0, 0);
 
-        boolean firstTradeFailure = state.tradesTaken() == 1 && !trade.tp1Hit() && trade.mae() < -80.0 && realizedR <= -1.0;
+        // firstTradeFailure: if the FIRST trade of the day stopped out with deep MAE (no TP1 hit,
+        // realizedR <= -1R, MAE < -150 pts), block the rest of the day — likely a bad tape.
+        // Threshold raised from 80 → 150 to avoid killing days on normal stop-outs.
+        // In PAPER_MODE this block is fully disabled so we can observe all trades.
+        double maeThreshold = config.isPaperMode() ? Double.NEGATIVE_INFINITY : -150.0;
+        boolean firstTradeFailure = !config.isPaperMode()
+            && state.tradesTaken() == 1 && !trade.tp1Hit() && trade.mae() < maeThreshold && realizedR <= -1.0;
         if (firstTradeFailure) {
             dayBlockedByFirstTradeFailure = true;
         }
@@ -709,29 +721,111 @@ public class ShadowExecutionEngine {
         return new TradeExit(true, pnl, reason, price);
     }
 
+    /** Sync PAPER_MODE env var into the shared config bean so all engines see it. */
+    @PostConstruct
+    public void syncPaperMode() {
+        if (paperModeOverride && !config.isPaperMode()) {
+            config.setPaperMode(true);
+            log.warn("⚠️ PAPER_MODE enabled via env var — live-money guards bypassed");
+        }
+    }
+
+    /**
+     * Cold-start recovery (Fix #1).
+     * On Render free tier the JVM restarts from scratch every deploy.
+     * Restore today's closed trades from DB so tradesTaken, consecutiveLosses,
+     * cumulativeDailyLossR, and paperBalance are correct before the first tick.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void restoreSessionCandles() {
+        // ── 1. Restore candle history ──────────────────────────────────────────
         try {
             LocalDate today = LocalDate.now();
-            // Try the configured trading symbol first, then fallback to the other
             String[] symbolsToTry = {"NIFTY", "BANKNIFTY"};
             java.util.List<com.riskpilot.model.CandleEntity> todayCandles = java.util.Collections.emptyList();
             for (String sym : symbolsToTry) {
                 todayCandles = candleRepository.findBySymbolAndDateOrderByTimestampAsc(sym, today);
                 if (!todayCandles.isEmpty()) break;
             }
-
-            if (todayCandles.isEmpty()) {
+            if (!todayCandles.isEmpty()) {
+                for (com.riskpilot.model.CandleEntity entity : todayCandles) {
+                    candleAggregator.addCandle(entity.toCandle());
+                }
+                log.info("✅ Restored {} candles for {} from DB — engine ready immediately", todayCandles.size(), today);
+            } else {
                 log.info("No persisted candles found for today ({}) — engine will build from live ticks", today);
+            }
+        } catch (Exception e) {
+            log.warn("⚠️ Failed to restore session candles from DB (non-fatal): {}", e.getMessage());
+        }
+
+        // ── 2. Restore session counters from today's closed trades (Fix #1) ───
+        try {
+            LocalDate today = LocalDate.now();
+            LocalDateTime dayStart = today.atStartOfDay();
+            LocalDateTime dayEnd   = today.plusDays(1).atStartOfDay();
+
+            // Fetch all trades closed today (status = CLOSED)
+            List<Trade> closedToday = tradeRepository.findAll().stream()
+                .filter(t -> "CLOSED".equals(t.getStatus()))
+                .filter(t -> t.getExitTime() != null
+                          && !t.getExitTime().isBefore(dayStart)
+                          && t.getExitTime().isBefore(dayEnd))
+                .sorted(java.util.Comparator.comparing(Trade::getExitTime))
+                .collect(java.util.stream.Collectors.toList());
+
+            if (closedToday.isEmpty()) {
+                log.info("No closed trades found for today — session counters start at zero");
                 return;
             }
 
-            for (com.riskpilot.model.CandleEntity entity : todayCandles) {
-                candleAggregator.addCandle(entity.toCandle());
+            int tradesTaken = closedToday.size();
+            double cumulativeDailyLossR = 0.0;
+            int consecutiveLosses = 0;
+            double paperBalance = stateManager.getSnapshot().paperBalance();
+
+            for (Trade t : closedToday) {
+                double r = t.getRealizedR() != null ? t.getRealizedR().doubleValue() : 0.0;
+                cumulativeDailyLossR += r;
+                // paperBalance adjustment: realizedPnL already in rupees
+                double pnl = t.getRealizedPnL() != null ? t.getRealizedPnL().doubleValue() : 0.0;
+                paperBalance += pnl;
+                if (r < 0.0) {
+                    consecutiveLosses++;
+                } else {
+                    consecutiveLosses = 0; // reset streak on a win
+                }
             }
-            log.info("✅ Restored {} candles for {} from DB — engine ready immediately", todayCandles.size(), today);
+
+            final double finalBalance    = paperBalance;
+            final double finalLossR      = cumulativeDailyLossR;
+            final int    finalConsec     = consecutiveLosses;
+            final int    finalTradesTaken = tradesTaken;
+
+            stateManager.update(current -> new TradingSessionSnapshot(
+                current.sessionActive(),
+                current.regime(),
+                current.volatilityQualified(),
+                current.timePhase(),
+                finalTradesTaken,
+                false,
+                current.feedStable(),
+                current.heartbeatAlive(),
+                current.orHigh(),
+                current.orLow(),
+                finalLossR,
+                finalConsec,
+                null,
+                "RESTORED_FROM_DB",
+                finalBalance
+            ));
+
+            log.info("✅ Session state restored from DB: tradesTaken={}, consecutiveLosses={}, "
+                + "cumulativeDailyLossR={}R, paperBalance=₹{}",
+                finalTradesTaken, finalConsec, String.format("%.2f", finalLossR),
+                String.format("%.0f", finalBalance));
         } catch (Exception e) {
-            log.warn("⚠️ Failed to restore session candles from DB (non-fatal): {}", e.getMessage());
+            log.warn("⚠️ Failed to restore session state from DB (non-fatal): {}", e.getMessage());
         }
     }
 
