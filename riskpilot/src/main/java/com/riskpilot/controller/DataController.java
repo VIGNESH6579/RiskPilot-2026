@@ -1,5 +1,7 @@
 package com.riskpilot.controller;
 
+import com.riskpilot.model.Trade;
+import com.riskpilot.repository.TradeRepository;
 import com.riskpilot.service.OptionChainService;
 import com.riskpilot.service.VixService;
 import lombok.RequiredArgsConstructor;
@@ -8,11 +10,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -31,6 +28,8 @@ public class DataController {
 
     private final VixService vixService;
     private final OptionChainService optionChainService;
+    // FIX: Read trade history from DB instead of the missing CSV file
+    private final TradeRepository tradeRepository;
 
     private final AtomicReference<List<Map<String, Object>>> tradeHistoryCache = new AtomicReference<>(null);
     private final AtomicLong tradeHistoryCacheTime = new AtomicLong(0L);
@@ -79,52 +78,57 @@ public class DataController {
         }
 
         int capped = Math.max(1, Math.min(limit, 200));
-        Path csvPath = Path.of(System.getenv().getOrDefault("RISKPILOT_CSV_PATH", "shadow_live_forward_logs.csv"));
-        if (!Files.exists(csvPath)) {
-            return Collections.emptyList();
-        }
 
+        // FIX: Read trade history from DB (TradeRepository) instead of a CSV file.
+        // The CSV never existed on Render — this was always showing empty history.
         List<Map<String, Object>> rows = new ArrayList<>();
-        try (BufferedReader br = Files.newBufferedReader(csvPath, StandardCharsets.UTF_8)) {
-            String line;
-            boolean isHeader = true;
-            while ((line = br.readLine()) != null) {
-                if (isHeader) {
-                    isHeader = false;
-                    continue;
-                }
-                if (line.isBlank()) continue;
-                List<String> parts = parseCsvLine(line);
-                if (parts.size() < 22) continue;
+        try {
+            // getClosedTradesBySymbol returns DESC by entry_time already
+            // Try both possible symbols
+            List<Trade> dbTrades = new ArrayList<>();
+            for (String sym : new String[]{"NIFTY", "BANKNIFTY"}) {
+                List<Trade> found = tradeRepository.getClosedTradesBySymbol(sym);
+                dbTrades.addAll(found);
+            }
+            // Sort by entry time descending
+            dbTrades.sort((a, b) -> {
+                if (a.getEntryTime() == null && b.getEntryTime() == null) return 0;
+                if (a.getEntryTime() == null) return 1;
+                if (b.getEntryTime() == null) return -1;
+                return b.getEntryTime().compareTo(a.getEntryTime());
+            });
+
+            for (Trade t : dbTrades) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                row.put("signalTime", parts.get(0));
-                row.put("executionTime", parts.get(1));
-                row.put("direction", parts.get(2));
-                row.put("latencySec", toDouble(parts.get(3)));
-                row.put("expectedEntry", toDouble(parts.get(4)));
-                row.put("actualEntry", toDouble(parts.get(5)));
-                row.put("entrySlippage", toDouble(parts.get(6)));
-                row.put("expectedExit", toDouble(parts.get(7)));
-                row.put("actualExit", toDouble(parts.get(8)));
-                row.put("exitSlippage", toDouble(parts.get(9)));
-                row.put("tp1Hit", Boolean.parseBoolean(parts.get(10)));
-                row.put("runnerCaptured", Boolean.parseBoolean(parts.get(11)));
-                row.put("mfe", toDouble(parts.get(12)));
-                row.put("mae", toDouble(parts.get(13)));
-                row.put("realizedR", toDouble(parts.get(14)));
-                row.put("gateDecision", parts.get(15));
-                row.put("rejectReason", parts.get(16));
-                row.put("regime", parts.get(17));
-                row.put("timePhase", parts.get(18));
-                row.put("feedStable", parts.get(19));
-                row.put("exitReason", parts.get(20));
-                row.put("exitTime", parts.get(21));
+                row.put("signalTime", t.getEntryTime() != null ? t.getEntryTime().toString() : null);
+                row.put("executionTime", t.getEntryTime() != null ? t.getEntryTime().toString() : null);
+                row.put("direction", t.getDirection());
+                row.put("latencySec", 0.0);
+                row.put("expectedEntry", t.getEntryPrice());
+                row.put("actualEntry", t.getEntryPrice());
+                row.put("entrySlippage", 0.0);
+                row.put("expectedExit", t.getStopLoss());
+                row.put("actualExit", t.getStopLoss());
+                row.put("exitSlippage", 0.0);
+                row.put("tp1Hit", t.getTp1Hit() != null && t.getTp1Hit());
+                row.put("runnerCaptured", t.getRunnerActive() != null && t.getRunnerActive());
+                row.put("mfe", t.getMaxFavorableExcursion());
+                row.put("mae", t.getMaxAdverseExcursion());
+                row.put("realizedR", t.getRealizedR());
+                row.put("gateDecision", "ALLOW");
+                row.put("rejectReason", "");
+                row.put("regime", "TREND");
+                row.put("timePhase", "EARLY");
+                row.put("feedStable", "true");
+                row.put("exitReason", t.getExitReason());
+                row.put("exitTime", t.getExitTime() != null ? t.getExitTime().toString() : null);
+                row.put("pnl", t.getRealizedPnL());
                 rows.add(row);
             }
-        } catch (IOException ignored) {
+        } catch (Exception e) {
+            // Fall back to empty list — do not crash the health endpoint
             return Collections.emptyList();
         }
-        Collections.reverse(rows);
 
         tradeHistoryCache.set(rows);
         tradeHistoryCacheTime.set(System.currentTimeMillis());

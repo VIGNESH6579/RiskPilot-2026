@@ -38,8 +38,14 @@ public class StrictValidationService {
         }
         log.info("🔒 STRICT VALIDATION STARTUP");
         
-        if (properties.getRisk().getMaxTradesPerDay() > 2) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 2");
+        // Paper trading: allow up to 999 trades per day; only block truly absurd values
+        if (properties.getRisk().getMaxTradesPerDay() > 999) {
+            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day cannot exceed 999. Current: " +
+                properties.getRisk().getMaxTradesPerDay());
+        }
+        if (properties.getRisk().getMaxTradesPerDay() > 10) {
+            log.warn("HIGH_TRADE_COUNT: maxTradesPerDay={} — confirm this is intentional for paper trading",
+                properties.getRisk().getMaxTradesPerDay());
         }
 
         if (properties.getExecution().getSlippage().getEntryMax() > 3.0) {
@@ -77,8 +83,9 @@ public class StrictValidationService {
     public void validateTradingParameters() {
         log.info("🔒 STRICT MODE: Validating trading parameters against doctrine");
         
-        if (properties.getRisk().getMaxTradesPerDay() > 2) {
-            throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 2. Current: " + 
+        // Paper trading: allow up to 999 trades per day
+        if (properties.getRisk().getMaxTradesPerDay() > 999) {
+            throw new TradingException("STRICT_MODE_VIOLATION: max-trades-per-day cannot exceed 999. Current: " +
                 properties.getRisk().getMaxTradesPerDay());
         }
         

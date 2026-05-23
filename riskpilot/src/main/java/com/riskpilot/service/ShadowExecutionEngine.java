@@ -238,7 +238,22 @@ public class ShadowExecutionEngine {
 
     @Scheduled(cron = "0 14 9 * * *", zone = "Asia/Kolkata")
     public void executeDailyHardReset() {
+        // FIX: Preserve paper balance across sessions so P&L compounds correctly.
+        // Only trading counters/state reset at 9:14 AM — balance carries over from yesterday.
+        double currentBalance = stateManager.getSnapshot().paperBalance();
         restart();
+        // Restore balance after reset (don't reset to initial 5L if already different)
+        if (currentBalance > 0 && currentBalance != 500000.0) {
+            stateManager.update(current -> new TradingSessionSnapshot(
+                current.sessionActive(), current.regime(), current.volatilityQualified(),
+                current.timePhase(), current.tradesTaken(), current.tradeActive(),
+                current.feedStable(), current.heartbeatAlive(), current.orHigh(), current.orLow(),
+                current.cumulativeDailyLossR(), current.consecutiveLosses(),
+                current.activeTradeReference(), current.lastRejectReason(),
+                currentBalance
+            ));
+        }
+        log.info("\u2705 Daily hard reset complete — paper balance preserved: \u20b9{}", currentBalance);
     }
 
     public synchronized void restart() {
@@ -572,10 +587,11 @@ public class ShadowExecutionEngine {
 
         int newConsecutiveLosses = realizedR < 0.0 ? state.consecutiveLosses() + 1 : 0;
 
-        // FIX BUG-C: balanceChange uses totalPnlPoints (TP1 + runner).
-        // Each index point = ₹50 for NIFTY futures.  totalPnlPoints already includes
-        // lot-size (positionSize/remainingSize), so: ₹change = totalPnlPoints × 50.
-        double balanceChange = totalPnlPoints * 50;
+        // FIX BUG-BALANCE: balanceChange = totalPnlPoints directly (no multiplier).
+        // qty is sized as: qty = riskCapital / slDistance, so qty * slDistance = riskCapital (in ₹).
+        // Therefore totalPnlPoints (= price_diff * qty) is already in rupees.
+        // The old * 50 multiplier was wrong — it inflated every P&L by 50x.
+        double balanceChange = totalPnlPoints;
         
         stateManager.update(current -> new TradingSessionSnapshot(
             current.sessionActive(),

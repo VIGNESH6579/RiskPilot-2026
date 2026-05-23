@@ -62,10 +62,16 @@ riskpilot:
   mode: SHADOW
   strict-mode: true
   risk:
-    max-trades-per-day: 2          # Hard cap: 2 shadow trades per session
+    max-trades-per-day: 10         # Paper trading: allow up to 10 trades per session
     one-trade-at-a-time: true
-    max-daily-loss-r: 1.5          # Stop trading after -1.5R loss on the day
-    max-consecutive-losses: 3      # Stop after 3 losses in a row
+    max-daily-loss-r: 5.0          # Stop trading after -5R loss on the day (paper mode)
+    max-consecutive-losses: 5      # Stop after 5 losses in a row (paper mode)
+  time-phase:
+    late:
+      start: "13:30"
+      end: "15:30"
+      allow-new-trades: true       # FIX: Allow new trades in late session for paper trading
+      force-exit: false            # FIX: Do NOT force-exit open trades at 13:30 in paper mode
   infra:
     feed:
       real-time-only: true
