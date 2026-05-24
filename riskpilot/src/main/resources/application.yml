@@ -42,14 +42,14 @@ spring:
 # RiskPilot Specific Configuration
 riskpilot:
   # PAPER_MODE: set env var PAPER_MODE=true on Render to bypass live-money guards.
-  # Relaxes firstTradeFailure block, daily loss limit (→4R), consecutive-loss limit (→6),
-  # and REGIME_CONFIDENCE minimum (→35). NEVER enable on a live-money account.
   paper-mode: ${PAPER_MODE:false}
   mode: ${RISKPILOT_MODE:SHADOW}
   strict-mode: ${RISKPILOT_STRICT_MODE:true}
   # Trading Configuration
   trading:
-    symbol: ${TRADING_SYMBOL:BANKNIFTY}
+    # FIX: Default changed from BANKNIFTY to NIFTY to be consistent with render.yaml
+    # TRADING_SYMBOL env var and all @Value("${TRADING_SYMBOL:NIFTY}") annotations.
+    symbol: ${TRADING_SYMBOL:NIFTY}
     timezone: ${TRADING_TIMEZONE:Asia/Kolkata}
     session-start: ${SESSION_START:09:15}
     session-end: ${SESSION_END:15:30}
