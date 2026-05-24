@@ -10,6 +10,10 @@ services:
     healthCheckPath: /actuator/health
     healthCheckTimeout: 300
     healthCheckInterval: 60
+    # Render free tier requires port to be detected or specified.
+    # The start.sh script uses the $PORT env var provided by Render.
+    # NOTE: startCommand is intentionally omitted — Dockerfile ENTRYPOINT ["./start.sh"] is used.
+    # Setting startCommand here would pass it as an argument to the ENTRYPOINT, not override it.
 
     envVars:
       - key: PORT
@@ -22,16 +26,13 @@ services:
       - key: SPRING_PROFILES_ACTIVE
         value: prod
 
-      # FIX: Explicitly set trading symbol so all @Value("${TRADING_SYMBOL:NIFTY}") annotations
-      # are consistent with application.yml symbol config.
-      - key: TRADING_SYMBOL
-        value: "NIFTY"
-
       # CORS — must match your actual Render service URL exactly
       - key: CORS_ALLOWED_ORIGINS
         value: "https://riskpilot-2026.onrender.com"
 
-      # Trading config
+      # Trading config — CRITICAL: Set this explicitly to avoid symbol switching on redeploys
+      - key: TRADING_SYMBOL
+        value: "NIFTY"
       - key: NIFTY_WEEKLY_EXPIRY_DAY
         value: "THURSDAY"
       - key: ANGEL_INDIA_VIX_TOKEN
@@ -51,6 +52,11 @@ services:
       - key: TRAP_RISK_PCT
         value: "0.01"
 
+      # Feed instability threshold (1500ms = 1.5 seconds)
+      # Render free tier G1GC can pause 2-5 seconds, so ticks > 1.5s are marked unstable
+      - key: FEED_INSTABILITY_GAP_MS
+        value: "1500"
+
       # ---- SECRETS: set these in Render Dashboard → Environment tab ----
       # Never commit values here.
 
@@ -61,6 +67,7 @@ services:
         sync: false
 
       # PostgreSQL — linked from the database below via fromDatabase.
+      # Render injects DATABASE_URL automatically when fromDatabase is used.
       - key: DATABASE_URL
         fromDatabase:
           name: riskpilot-db
@@ -97,10 +104,10 @@ services:
 databases:
   - name: riskpilot-db
     plan: free
-    # ⚠️  If your existing PostgreSQL (created manually in the Render Dashboard)
-    # was NOT created via this render.yaml, do NOT add it here — that would create
-    # a second DB. Instead, go to Dashboard → riskpilot-2026 web service →
-    # Environment → Link Database and select your existing database.
+    # ⚠️  If your existing PostgreSQL (dpg-d7s4463t6lks73c50eog-a) was created manually
+    # in the Render Dashboard, do NOT add it here — that would create a second DB.
+    # Instead, go to Dashboard → riskpilot-2026 web service → Environment → Link Database
+    # and select your existing database. The fromDatabase references above will then work.
     # Uncomment the lines below ONLY if deploying fresh with no existing DB.
     # databaseName: riskpilot
     # user: riskpilot
