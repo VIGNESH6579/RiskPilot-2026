@@ -12,7 +12,11 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * CentralizedMarketDataService unifies market data fetching to "use the token wisely".
  * Instead of multiple services polling Angel One separately, this service fetches
- * the configured trading symbol at a synchronized 1-second interval.
+ * the configured trading symbol at a synchronized 3-second interval.
+ *
+ * FIX: Poll interval changed from 1s → 3s to stay within Angel One REST rate limits
+ * (~3 req/sec). At 1s, combined with VixService calls, the app was frequently hitting
+ * 429 rate-limit responses and getting empty LTP data, causing false stale-data blocks.
  *
  * BUG-FIX: getBankNiftyLtp() was hardcoded to return 0.0, meaning every tick fell
  * through to a direct Angel One API call when TRADING_SYMBOL=BANKNIFTY — bypassing
@@ -45,10 +49,19 @@ public class CentralizedMarketDataService {
     }
 
     /**
-     * Polls the configured trading symbol every 1 second.
-     * Always polls NIFTY; additionally polls BANKNIFTY when that is the trading symbol.
+     * Polls the configured trading symbol every 3 seconds.
+     *
+     * FIX: Was polling every 1 second. Angel One's REST quote API has a rate limit
+     * (~3 req/sec per token). Polling at 1s with multiple services (VixService also
+     * calls getLtp) was hitting the limit, causing intermittent 429s and empty LTP
+     * responses — which then triggered "stale data" errors and blocked trades.
+     *
+     * 3s poll interval keeps us safely within rate limits while staying well under
+     * the 10s MAX_SPOT_STALE_MS threshold in MarketDataStateService.
+     * AngelTickStreamClient still evaluates a tick every second (from cached value),
+     * so candle aggregation cadence is unchanged.
      */
-    @Scheduled(fixedRate = 1000)
+    @Scheduled(fixedRate = 3000)
     public void refreshMarketData() {
         if (!marketSessionService.isMarketOpen()) {
             return;
@@ -119,7 +132,10 @@ public class CentralizedMarketDataService {
     }
 
     public boolean isDataFresh() {
-        // Data must be < 5s old to be considered fresh
-        return (System.currentTimeMillis() - lastUpdateEpochMs.get()) < 5000;
+        // FIX: Threshold was 5000ms but poll interval is now 3s, so fresh data is
+        // at most 3s old. Using 5s threshold against a 3s poll gave only 2s of slack.
+        // Raised to 10s to match MAX_SPOT_STALE_MS in MarketDataStateService — both
+        // staleness checks now share the same boundary so no false "stale" blocks.
+        return (System.currentTimeMillis() - lastUpdateEpochMs.get()) < 10_000;
     }
 }

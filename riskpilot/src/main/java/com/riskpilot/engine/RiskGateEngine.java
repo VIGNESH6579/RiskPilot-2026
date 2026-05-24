@@ -26,11 +26,18 @@ public class RiskGateEngine {
     public void validate() {
         log.info("🔴 RISKGATE STARTUP VALIDATION");
 
-        if (config.getRisk().getMaxTradesPerDay() > 10) {
-            throw new IllegalStateException("MAX_TRADES_VIOLATION: Max trades per day exceeds safety limit of 10. Current: " +
-                config.getRisk().getMaxTradesPerDay());
+        // FIX: old hard cap of 10 blocked paper-mode sessions that want more than 10 trades.
+        // The real safety limit is: LIVE mode → hard cap 5; PAPER/SHADOW mode → cap 20.
+        boolean isPaper = config.isPaperMode() || "SHADOW".equalsIgnoreCase(config.getMode());
+        int absoluteMax = isPaper ? 20 : 5;
+        if (config.getRisk().getMaxTradesPerDay() > absoluteMax) {
+            throw new IllegalStateException(
+                "MAX_TRADES_VIOLATION: maxTradesPerDay=" + config.getRisk().getMaxTradesPerDay()
+                + " exceeds safety limit of " + absoluteMax
+                + " for mode=" + config.getMode()
+                + ". Set riskpilot.risk.max-trades-per-day <= " + absoluteMax + ".");
         }
-        if (config.getRisk().getMaxTradesPerDay() > 2) {
+        if (config.getRisk().getMaxTradesPerDay() > 3) {
             log.warn("HIGH_TRADE_COUNT: maxTradesPerDay={} - ensure this is intentional",
                 config.getRisk().getMaxTradesPerDay());
         }

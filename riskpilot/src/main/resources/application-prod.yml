@@ -68,7 +68,9 @@ riskpilot:
     # Set to 120 again if you want conservative filtering; set to 0 to disable entirely.
     min-or-range: 60
   risk:
-    max-trades-per-day: 10         # Paper trading: allow up to 10 trades per session
+    max-trades-per-day: 10         # Paper/shadow mode cap: up to 20 via RiskGateEngine
+                                   # Override at runtime: set MAX_TRADES_PER_DAY env var in Render
+                                   # Hard cap enforced by RiskGateEngine: 20 (shadow), 5 (live)
     one-trade-at-a-time: true
     max-daily-loss-r: 5.0          # Stop trading after -5R loss on the day (paper mode)
     max-consecutive-losses: 5      # Stop after 5 losses in a row (paper mode)

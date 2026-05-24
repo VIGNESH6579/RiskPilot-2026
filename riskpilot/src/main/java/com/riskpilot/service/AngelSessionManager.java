@@ -71,20 +71,25 @@ public class AngelSessionManager {
             boolean loginSuccess = attemptLogin();
 
             if (loginSuccess) {
-                String jwtToken = "simulated-jwt-token";
-                String feedToken = "simulated-feed-token";
-                String clientCode = "client-code";
-                
-                if (angelAuthService != null && angelAuthService.isAuthenticated()) {
-                    jwtToken = angelAuthService.getJwtToken();
-                    feedToken = angelAuthService.getFeedToken();
-                    clientCode = angelAuthService.getClientCode();
+                if (angelAuthService == null || !angelAuthService.isAuthenticated()) {
+                    handleAuthFailure("AngelAuthService returned success but has no valid tokens");
+                    return;
                 }
-                
-                // Angel One tokens are valid for ~24h. Use 23h expiry so the
-                // proactive refresh (checkAndRefreshIfNeeded) kicks in before they expire.
-                // Using only 1h here caused unnecessary re-auth every hour and made the
-                // session state stale if the reauth briefly failed.
+
+                String jwtToken  = angelAuthService.getJwtToken();
+                String feedToken = angelAuthService.getFeedToken();
+                String clientCode = angelAuthService.getClientCode();
+
+                if (jwtToken == null || jwtToken.isBlank()) {
+                    handleAuthFailure("JWT token is blank after successful auth response");
+                    return;
+                }
+                // feedToken may be null on some Angel One accounts — log but don't fail
+                if (feedToken == null || feedToken.isBlank()) {
+                    log.warn("⚠️ Angel One returned empty feedToken — WebSocket subscriptions may fail");
+                }
+
+                // Angel One tokens valid for ~24h. Use 23h expiry for proactive refresh.
                 SessionState newState = new SessionState(
                     jwtToken,
                     feedToken,
@@ -94,7 +99,10 @@ public class AngelSessionManager {
                 );
                 sessionState.set(newState);
                 consecutiveFailures = 0;
-                log.info("✅ SESSION_ESTABLISHED | Next refresh before expiry");
+                log.info("✅ SESSION_ESTABLISHED | jwt={}...{} | feedToken={} | next refresh ~23h",
+                    jwtToken.substring(0, Math.min(8, jwtToken.length())),
+                    jwtToken.substring(Math.max(0, jwtToken.length() - 4)),
+                    feedToken != null ? "present" : "absent");
             } else {
                 handleAuthFailure("Login returned unsuccessful response");
             }

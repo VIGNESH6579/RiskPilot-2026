@@ -19,6 +19,12 @@ public class RiskPilotLifecycle {
     private final AdaptiveRegimeEngine adaptiveRegimeEngine;
     private final ConfigurableApplicationContext applicationContext;
     private final WebSocketService webSocketService;
+    // FIX: AngelSessionManager.initialize() was never called on startup.
+    // This meant the first LTP fetch triggered lazy auth inside the 1-second poller tick,
+    // causing the first ~30 seconds of market data to fail (auth latency) and producing
+    // "Angel credentials missing" logs until the lazy auth finally succeeded.
+    // Initializing here guarantees a valid JWT/feedToken before AngelTickStreamClient polls.
+    private final AngelSessionManager angelSessionManager;
 
     @org.springframework.beans.factory.annotation.Value("${RISKPILOT_EXIT_ON_KILL_SWITCH:true}")
     private boolean exitOnKillSwitch;
@@ -29,6 +35,16 @@ public class RiskPilotLifecycle {
     public void run() {
         log.info("Enabling strict validation");
         strictValidationService.validateSystem();
+
+        log.info("🔐 Initializing Angel One broker session (BEFORE first tick poll)");
+        try {
+            angelSessionManager.initialize();
+        } catch (Exception e) {
+            // Non-fatal: AngelOneMarketDataService will retry auth on each LTP call.
+            // But log loudly — if this fails, the first N seconds of data will be missing.
+            log.error("⚠️ Angel One session initialization failed at startup: {}. "
+                + "LTP fetches will retry auth automatically but first ticks may be missed.", e.getMessage());
+        }
 
         log.info("Initializing adaptive regime engine");
         adaptiveRegimeEngine.initialize();
@@ -45,7 +61,8 @@ public class RiskPilotLifecycle {
             
             webSocketService.broadcastKillSwitchExit(reason, 10);
             
-            new Thread(() -> {
+            // FIX: kill switch shutdown thread must also be a daemon thread
+            Thread shutdown = new Thread(() -> {
                 try {
                     Thread.sleep(10000);
                     log.info("Shutdown countdown complete - exiting");
@@ -54,7 +71,9 @@ public class RiskPilotLifecycle {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-            }).start();
+            }, "KillSwitchShutdown");
+            shutdown.setDaemon(true);
+            shutdown.start();
         }
     }
 }

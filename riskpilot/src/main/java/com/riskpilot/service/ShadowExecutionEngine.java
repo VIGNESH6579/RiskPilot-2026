@@ -77,6 +77,12 @@ public class ShadowExecutionEngine {
     @org.springframework.beans.factory.annotation.Value("${PAPER_MODE:false}")
     private boolean paperModeOverride;
 
+    // FIX: Allow MAX_TRADES_PER_DAY env var to override application.yml at runtime.
+    // Set this in Render Dashboard → Environment without needing a redeployment.
+    // 0 means "not set" — in that case, the yml-configured value is used as-is.
+    @org.springframework.beans.factory.annotation.Value("${MAX_TRADES_PER_DAY:0}")
+    private int maxTradesPerDayEnvOverride;
+
     private final List<RegimeConfidenceEngine.CandleData> candleHistory = new ArrayList<>();
     private final ConcurrentHashMap<String, AtomicLong> rejectReasonCounts = new ConcurrentHashMap<>();
 
@@ -721,12 +727,16 @@ public class ShadowExecutionEngine {
         return new TradeExit(true, pnl, reason, price);
     }
 
-    /** Sync PAPER_MODE env var into the shared config bean so all engines see it. */
+    /** Sync PAPER_MODE and MAX_TRADES_PER_DAY env vars into the shared config bean so all engines see them. */
     @PostConstruct
     public void syncPaperMode() {
         if (paperModeOverride && !config.isPaperMode()) {
             config.setPaperMode(true);
             log.warn("⚠️ PAPER_MODE enabled via env var — live-money guards bypassed");
+        }
+        if (maxTradesPerDayEnvOverride > 0) {
+            config.getRisk().setMaxTradesPerDay(maxTradesPerDayEnvOverride);
+            log.info("✅ MAX_TRADES_PER_DAY overridden via env var: {}", maxTradesPerDayEnvOverride);
         }
     }
 

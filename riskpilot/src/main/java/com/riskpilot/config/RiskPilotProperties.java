@@ -78,7 +78,11 @@ public class RiskPilotProperties {
 
     @Data
     public static class Risk {
-        private int maxTradesPerDay = 2;
+        // Default: 3 conservative trades for dev/non-prod environments.
+        // Production sets this via application-prod.yml (max-trades-per-day: 10).
+        // Hard cap: 5 in LIVE mode, 20 in SHADOW/PAPER mode — enforced by RiskGateEngine.
+        // Set MAX_TRADES_PER_DAY env var to override at runtime without redeploying.
+        private int maxTradesPerDay = 3;
         private boolean oneTradeAtATime = true;
         private double maxDailyLossR = 1.5;
         private int maxConsecutiveLosses = 3;
