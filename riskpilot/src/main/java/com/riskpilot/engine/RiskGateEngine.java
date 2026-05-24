@@ -133,8 +133,21 @@ public class RiskGateEngine {
             log.info("⚠️ REGIME_NOT_INITIALIZED but EARLY_SESSION_BYPASS active — skipping regime metric checks");
         } else {
             // Check adaptive thresholds (only when regime is initialized)
-            if (regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
-                log.error("🚫 ADAPTIVE_REGIME_BLOCKED: Score={} < {}, Reasons={}",
+            // BUG-FIX: Previously checked regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()
+            // which fires ADAPTIVE_REGIME_WEAK even when RegimeFilter.isTradingAllowed()==true
+            // (e.g. when neutral "insufficient data" checks deflate the score on restart).
+            // Primary gate: if RegimeFilter itself says trading is not allowed, block.
+            // Secondary gate: only apply adaptive score check if it is STRICTER than RegimeFilter's
+            // own MIN_REGIME_SCORE (i.e. adaptive has raised the bar based on recent performance).
+            if (!regime.isTradingAllowed()) {
+                log.error("🚫 ADAPTIVE_REGIME_BLOCKED: RegimeFilter.tradingAllowed=false, Score={}, Reasons={}",
+                        regime.getRegimeScore(), String.join(", ", regime.getBlockingReasons()));
+                return reject("ADAPTIVE_REGIME_WEAK");
+            }
+            // Additional adaptive score check only when adaptive engine has tightened requirements
+            // beyond the static RegimeFilter minimum (4). Skip if adaptiveMinScore <= 4 (default).
+            if (adaptiveConfig.getMinRegimeScore() > 4 && regime.getRegimeScore() < adaptiveConfig.getMinRegimeScore()) {
+                log.error("🚫 ADAPTIVE_REGIME_TIGHTENED: Score={} < adaptive min={}, Reasons={}",
                         regime.getRegimeScore(), adaptiveConfig.getMinRegimeScore(),
                         String.join(", ", regime.getBlockingReasons()));
                 return reject("ADAPTIVE_REGIME_WEAK");

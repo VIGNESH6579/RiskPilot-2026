@@ -19,8 +19,11 @@ public class StartupRunner implements CommandLineRunner {
     /**
      * RENDER DB EXPIRY REMINDER
      * Free-tier Render PostgreSQL databases expire after 90 days.
-     * Current DB (dpg-d7s4463t6lks73c50eog) was provisioned ~April 18 2025.
-     * Expiry: ~July 18 2025.
+     * IMPORTANT: The original DB (dpg-d7s4463t6lks73c50eog) expired July 18 2025.
+     * If you are still using that DB, ALL historical data is gone — provision a new one NOW.
+     *
+     * Current tracked expiry: update DB_EXPIRY_DATE below whenever you provision a new DB.
+     * Formula: provisioning date + 90 days.
      *
      * When it expires, ALL trades, candles, and session state are permanently lost.
      * Action before expiry:
@@ -28,10 +31,12 @@ public class StartupRunner implements CommandLineRunner {
      *   2. Create a new Render PostgreSQL (free tier resets the 90-day clock)
      *   3. pg_restore into the new DB
      *   4. Update DATABASE_URL env var on the Render web service
+     *   5. Update DB_EXPIRY_DATE below and redeploy
      *
      * This warning fires every startup AND daily so you can't miss it.
      */
-    private static final LocalDate DB_EXPIRY_DATE = LocalDate.of(2025, 7, 18);
+    // ⚠️ UPDATE THIS DATE whenever you provision a new Render DB (provisioning_date + 90 days)
+    private static final LocalDate DB_EXPIRY_DATE = LocalDate.of(2025, 8, 17); // dpg-d7s4463t6lks73c50eog EXPIRED — update when new DB is provisioned
     private static final int DB_WARN_DAYS_BEFORE = 14;
 
     @Override

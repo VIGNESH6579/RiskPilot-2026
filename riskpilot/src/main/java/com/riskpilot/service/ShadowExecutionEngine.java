@@ -758,10 +758,27 @@ public class ShadowExecutionEngine {
                 if (!todayCandles.isEmpty()) break;
             }
             if (!todayCandles.isEmpty()) {
+                // BUG-CRITICAL-FIX: Previously called candleAggregator.addCandle() which only
+                // fills historicalBuffer but never calls ingestClosedCandleForIndicators().
+                // RegimeFilter.processCandle() was therefore never called for restored candles,
+                // leaving openingRange=0.0, causing ADAPTIVE_OR_TOO_SMALL to block ALL trades
+                // all day after every restart.
+                //
+                // Fix: reset lastStoredCandleTime so ingestClosedCandleForIndicators() processes
+                // every restored candle, then call both addCandle AND ingestClosedCandleForIndicators
+                // in order. This fully populates RegimeFilter, VolatilityNormalizer, and
+                // candleHistory (for RegimeConfidenceEngine) before the first live tick arrives.
+                lastStoredCandleTime = ""; // ensure dedup doesn't skip any restored candle
+                int restoredCount = 0;
                 for (com.riskpilot.model.CandleEntity entity : todayCandles) {
-                    candleAggregator.addCandle(entity.toCandle());
+                    Candle restoredCandle = entity.toCandle();
+                    candleAggregator.addCandle(restoredCandle);
+                    ingestClosedCandleForIndicators(restoredCandle);
+                    restoredCount++;
                 }
-                log.info("✅ Restored {} candles for {} from DB — engine ready immediately", todayCandles.size(), today);
+                // Sync session OR high/low from restored candle history
+                updateSessionStateFromTime(java.time.LocalTime.now(java.time.ZoneId.of("Asia/Kolkata")));
+                log.info("✅ Restored {} candles for {} from DB — RegimeFilter, VolatilityNormalizer, and candleHistory fully populated", restoredCount, today);
             } else {
                 log.info("No persisted candles found for today ({}) — engine will build from live ticks", today);
             }

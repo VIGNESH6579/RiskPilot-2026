@@ -195,30 +195,58 @@ public class RegimeFilter {
         }
 
         // 2. Volatility Continuity (ATR Ratio)
+        // BUG-FIX: computeATRRatio() returns 0.0 when either openingATR==0 (OR not built yet)
+        // or no post-OR candles exist yet. Both are "insufficient data" states, not
+        // "volatility dying". Treat 0.0 as neutral to avoid blocking early-session trades.
         double atrRatio = computeATRRatio();
         if (atrRatio > ATR_EXPANSION_RATIO) {
             score += 1;
-        } else if (atrRatio < 1.0) {
+        } else if (atrRatio > 0.0 && atrRatio < 1.0) {
+            // Only penalize when we actually have data showing contraction
             blockingReasons.add("VOLATILITY_DYING");
         }
+        // atrRatio == 0.0 → no post-OR candles yet → skip (neutral)
 
         // 3. Directional Efficiency
+        // BUG-FIX: computeTrendEfficiency() returns 0.0 when fewer than TREND_WINDOW (5)
+        // candles are available. This is an "insufficient data" state, not choppy market.
+        // Treat as neutral (no score, no penalty) until we have enough data.
         double trendEfficiency = computeTrendEfficiency();
-        if (trendEfficiency > TREND_EFFICIENCY_MIN) {
+        List<CandleData> allCandleSnapshot = new ArrayList<>(candleHistory);
+        if (allCandleSnapshot.size() < TREND_WINDOW) {
+            // Not enough candles yet — skip this check entirely (neutral)
+            log.debug("Candle history ({}) < TREND_WINDOW ({}) — skipping trend efficiency check",
+                allCandleSnapshot.size(), TREND_WINDOW);
+        } else if (trendEfficiency > TREND_EFFICIENCY_MIN) {
             score += 2;
         } else if (trendEfficiency < 0.4) {
             blockingReasons.add("CHOPPY_MARKET");
         }
 
         // 4. Breakout Hold Rate
+        // BUG-FIX: When breakoutHistory is empty (e.g. after restart before any breakout is
+        // detected), computeBreakoutHoldRate() returns 0.0, which adds FAKE_BREAKOUTS and
+        // blocks all trading even on a fully valid day. Empty history means "no data yet",
+        // not "all breakouts failed". Skip the penalty; award no point (neutral).
         double breakoutHoldRate = computeBreakoutHoldRate();
-        if (breakoutHoldRate > BREAKOUT_HOLD_RATE_MIN) {
+        List<BreakoutData> currentBreakouts = new ArrayList<>(breakoutHistory);
+        if (currentBreakouts.isEmpty()) {
+            // No breakouts observed yet — insufficient data to penalize
+            log.debug("Breakout history empty — skipping breakout hold rate check");
+        } else if (breakoutHoldRate > BREAKOUT_HOLD_RATE_MIN) {
             score += 1;
         } else {
             blockingReasons.add("FAKE_BREAKOUTS");
         }
 
         boolean tradingAllowed = score >= MIN_REGIME_SCORE;
+
+        // BUG-FIX: If we have restored candles but insufficient post-OR history to compute
+        // ATR ratio and trend efficiency (data gaps from restore), the score will be
+        // artificially low even on a valid trading day. Log the computed score for diagnostics.
+        if (!tradingAllowed) {
+            log.debug("Regime score {} < {} (MIN) — blocking: {}", score, MIN_REGIME_SCORE, blockingReasons);
+        }
 
         return new RegimeMetrics(score, orRange, atrRatio, trendEfficiency, 
                                breakoutHoldRate, tradingAllowed, blockingReasons);
