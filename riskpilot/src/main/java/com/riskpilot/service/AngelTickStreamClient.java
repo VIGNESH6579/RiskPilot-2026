@@ -228,7 +228,13 @@ public class AngelTickStreamClient {
             LocalDateTime currentSlot = now.withMinute(candleMinute).withSecond(0).withNano(0);
 
             long seq = sequenceCounter.incrementAndGet();
-            candleAggregator.processTick(now, spot, 1L, seq, now);
+            // FIX: receivedAt must be the wall-clock moment the tick was received by this process,
+            // NOT the same `now` value used for tickTime (which is IST market time).
+            // When both args are the same object, CandleAggregator always sees delay=0ms and
+            // can never detect feed instability (tickDelayMs never exceeds threshold).
+            // Use LocalDateTime.now() here as the actual receipt timestamp.
+            LocalDateTime receivedAt = LocalDateTime.now();
+            candleAggregator.processTick(now, spot, 1L, seq, receivedAt);
 
             shadowExecutionEngine.evaluateTick(spot);
             if (lastCandleSlot != null && currentSlot.isAfter(lastCandleSlot)) {

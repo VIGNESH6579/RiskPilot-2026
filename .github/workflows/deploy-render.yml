@@ -52,9 +52,9 @@ jobs:
         if [ -n "$missing" ]; then
           echo "ERROR: Missing required GitHub secrets:$missing"
           echo "Go to: Settings → Secrets and variables → Actions → New repository secret"
-          echo "  RENDER_SERVICE_ID = srv-d7ika967r5hc73bjihgg"
-          echo "  RENDER_API_KEY    = (your Render API key)"
-          echo "  RENDER_SERVICE_URL = https://riskpilot-2026.onrender.com  (optional, used for health check)"
+          echo "  RENDER_SERVICE_ID = (your Render service ID from the dashboard URL)"
+          echo "  RENDER_API_KEY    = (your Render API key from Account → API Keys)"
+          echo "  RENDER_SERVICE_URL = https://riskpilot-2026.onrender.com  (optional, for health check)"
           exit 1
         fi
     

@@ -63,6 +63,13 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
         return countRunnersBetween(symbol, today.atStartOfDay(), today.plusDays(1).atStartOfDay());
     }
     
+    @Query("SELECT t FROM Trade t WHERE t.status = :status AND t.exitTime >= :start AND t.exitTime < :end ORDER BY t.exitTime ASC")
+    List<Trade> findByStatusAndExitTimeBetween(
+        @Param("status") String status,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end
+    );
+
     @Query("SELECT t FROM Trade t WHERE t.status = 'CLOSED' AND t.symbol = :symbol ORDER BY t.entryTime DESC")
     List<Trade> getClosedTradesBySymbol(@Param("symbol") String symbol);
 }

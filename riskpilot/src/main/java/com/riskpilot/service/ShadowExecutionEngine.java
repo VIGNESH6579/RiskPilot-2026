@@ -765,14 +765,10 @@ public class ShadowExecutionEngine {
             LocalDateTime dayStart = today.atStartOfDay();
             LocalDateTime dayEnd   = today.plusDays(1).atStartOfDay();
 
-            // Fetch all trades closed today (status = CLOSED)
-            List<Trade> closedToday = tradeRepository.findAll().stream()
-                .filter(t -> "CLOSED".equals(t.getStatus()))
-                .filter(t -> t.getExitTime() != null
-                          && !t.getExitTime().isBefore(dayStart)
-                          && t.getExitTime().isBefore(dayEnd))
-                .sorted(java.util.Comparator.comparing(Trade::getExitTime))
-                .collect(java.util.stream.Collectors.toList());
+            // FIX: NEVER use tradeRepository.findAll() — it loads the entire trades table
+            // into memory on every startup, which is an O(N) full-table scan that becomes
+            // catastrophically slow as trade history grows. Use a date-bounded query instead.
+            List<Trade> closedToday = tradeRepository.findByStatusAndExitTimeBetween("CLOSED", dayStart, dayEnd);
 
             if (closedToday.isEmpty()) {
                 log.info("No closed trades found for today — session counters start at zero");

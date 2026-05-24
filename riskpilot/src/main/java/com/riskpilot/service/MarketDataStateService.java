@@ -23,7 +23,10 @@ public class MarketDataStateService {
     private final AtomicLong lastTickTime = new AtomicLong(System.currentTimeMillis());
 
     // Staleness thresholds
-    private static final long MAX_SPOT_STALE_MS = 5000;   // 5 seconds
+    // FIX: 5000ms was too tight — REST fallback + network jitter easily exceeds 5s
+    // causing false "SPOT STALE" degradations and trade blocks during normal operation.
+    // Angel One REST poll interval is ~3s; raised to 10s to give one full cycle of headroom.
+    private static final long MAX_SPOT_STALE_MS = 10_000;  // 10 seconds
     private static final long MAX_VIX_STALE_MS = 30000;    // 30 seconds
 
     @PostConstruct  // ← FIXED: Now uses jakarta.annotation.PostConstruct

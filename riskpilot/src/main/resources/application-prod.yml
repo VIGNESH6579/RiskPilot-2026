@@ -61,6 +61,12 @@ logging:
 riskpilot:
   mode: SHADOW
   strict-mode: true
+  filters:
+    # FIX: minOrRange=120 (Java default) silently blocks ALL trades on low-volatility days
+    # (e.g. pre-expiry, holiday-shortened sessions) where NIFTY OR is < 120 pts.
+    # Lowered to 60 for prod/paper so days with 60-120pt OR still trade.
+    # Set to 120 again if you want conservative filtering; set to 0 to disable entirely.
+    min-or-range: 60
   risk:
     max-trades-per-day: 10         # Paper trading: allow up to 10 trades per session
     one-trade-at-a-time: true

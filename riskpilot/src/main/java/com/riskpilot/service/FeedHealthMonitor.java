@@ -31,7 +31,10 @@ public class FeedHealthMonitor {
     @PostConstruct
     public void init() {
         log.info("📡 FeedHealthMonitor initialized (state machine)");
-        new Thread(() -> {
+        // FIX: Raw thread must be a daemon thread so it doesn't block JVM shutdown.
+        // Without setDaemon(true) the JVM cannot exit cleanly (e.g. Render deploy swap),
+        // hanging the process until the OS kills it with SIGKILL.
+        Thread monitor = new Thread(() -> {
             while (true) {
                 try {
                     checkHealth();
@@ -41,7 +44,9 @@ public class FeedHealthMonitor {
                     break;
                 }
             }
-        }, "FeedMonitor").start();
+        }, "FeedMonitor");
+        monitor.setDaemon(true);
+        monitor.start();
     }
 
     public void recordTick() {

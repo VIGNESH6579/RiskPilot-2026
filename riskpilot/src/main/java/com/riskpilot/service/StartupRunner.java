@@ -8,20 +8,59 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.net.InetAddress;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 
 @Slf4j
 @Component
 public class StartupRunner implements CommandLineRunner {
     private static final long MAX_CLOCK_DRIFT_MS = 2_000L;
 
+    /**
+     * RENDER DB EXPIRY REMINDER
+     * Free-tier Render PostgreSQL databases expire after 90 days.
+     * Current DB (dpg-d7s4463t6lks73c50eog) was provisioned ~April 18 2025.
+     * Expiry: ~July 18 2025.
+     *
+     * When it expires, ALL trades, candles, and session state are permanently lost.
+     * Action before expiry:
+     *   1. pg_dump the current DB
+     *   2. Create a new Render PostgreSQL (free tier resets the 90-day clock)
+     *   3. pg_restore into the new DB
+     *   4. Update DATABASE_URL env var on the Render web service
+     *
+     * This warning fires every startup AND daily so you can't miss it.
+     */
+    private static final LocalDate DB_EXPIRY_DATE = LocalDate.of(2025, 7, 18);
+    private static final int DB_WARN_DAYS_BEFORE = 14;
+
     @Override
     public void run(String... args) {
         validateClockSync();
+        warnDbExpiry();
     }
 
-    @Scheduled(fixedDelay = 21_600_000L)
+    @Scheduled(fixedDelay = 21_600_000L) // every 6 hours
     public void validateClockSyncPeriodically() {
         validateClockSync();
+    }
+
+    @Scheduled(cron = "0 0 8 * * *", zone = "Asia/Kolkata") // daily at 8 AM IST
+    public void warnDbExpiryDaily() {
+        warnDbExpiry();
+    }
+
+    private void warnDbExpiry() {
+        long daysUntilExpiry = ChronoUnit.DAYS.between(LocalDate.now(), DB_EXPIRY_DATE);
+        if (daysUntilExpiry <= 0) {
+            log.error("🚨🚨🚨 RENDER DB EXPIRED ({}) 🚨🚨🚨 — All data is permanently lost. "
+                + "Provision a new DB and update DATABASE_URL immediately!", DB_EXPIRY_DATE);
+        } else if (daysUntilExpiry <= DB_WARN_DAYS_BEFORE) {
+            log.warn("⚠️ RENDER DB EXPIRES IN {} DAYS ({}) — Backup data NOW and create a new DB before expiry!",
+                daysUntilExpiry, DB_EXPIRY_DATE);
+        } else {
+            log.info("✅ Render DB expiry check: {} days remaining (expires {})", daysUntilExpiry, DB_EXPIRY_DATE);
+        }
     }
 
     private boolean validateClockSync() {
