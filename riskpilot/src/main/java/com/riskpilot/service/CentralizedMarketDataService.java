@@ -1,141 +1,69 @@
 package com.riskpilot.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
-
 /**
- * CentralizedMarketDataService unifies market data fetching to "use the token wisely".
- * Instead of multiple services polling Angel One separately, this service fetches
- * the configured trading symbol at a synchronized 3-second interval.
+ * CentralizedMarketDataService — thin read-only cache.
  *
- * FIX: Poll interval changed from 1s → 3s to stay within Angel One REST rate limits
- * (~3 req/sec). At 1s, combined with VixService calls, the app was frequently hitting
- * 429 rate-limit responses and getting empty LTP data, causing false stale-data blocks.
+ * Previously owned a 3-second REST polling scheduler. That scheduler has been
+ * removed now that AngelSmartStreamClient provides a live WebSocket feed.
  *
- * BUG-FIX: getBankNiftyLtp() was hardcoded to return 0.0, meaning every tick fell
- * through to a direct Angel One API call when TRADING_SYMBOL=BANKNIFTY — bypassing
- * the cache and risking rate limits. This service now polls whichever symbol is
- * configured and caches it properly.
+ * The LTP values here are populated by MarketDataStateService (updated by the
+ * WebSocket listener on every tick) and read by any service that needs the
+ * latest price without wiring to MarketDataStateService directly.
+ *
+ * isDataFresh() now delegates to MarketDataStateService so both staleness checks
+ * share the same clock.
  */
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class CentralizedMarketDataService {
-    private static final Logger log = LoggerFactory.getLogger(CentralizedMarketDataService.class);
 
-    // NIFTY index token = 99926000, BANKNIFTY index token = 99926009
-    private static final String NIFTY_TOKEN      = "99926000";
-    private static final String BANKNIFTY_TOKEN  = "99926009";
-
-    private final AngelOneMarketDataService angelOneMarketDataService;
-    private final MarketSessionService marketSessionService;
+    private final MarketDataStateService marketDataStateService;
 
     @Value("${TRADING_SYMBOL:NIFTY}")
     private String tradingSymbol;
 
-    private final AtomicReference<Double> niftyLtp      = new AtomicReference<>(0.0);
-    private final AtomicReference<Double> bankNiftyLtp  = new AtomicReference<>(0.0);
-    private final AtomicReference<Long>   lastUpdateEpochMs = new AtomicReference<>(0L);
-
-    public CentralizedMarketDataService(
-            AngelOneMarketDataService angelOneMarketDataService,
-            MarketSessionService marketSessionService) {
-        this.angelOneMarketDataService = angelOneMarketDataService;
-        this.marketSessionService = marketSessionService;
-    }
-
     /**
-     * Polls the configured trading symbol every 3 seconds.
-     *
-     * FIX: Was polling every 1 second. Angel One's REST quote API has a rate limit
-     * (~3 req/sec per token). Polling at 1s with multiple services (VixService also
-     * calls getLtp) was hitting the limit, causing intermittent 429s and empty LTP
-     * responses — which then triggered "stale data" errors and blocked trades.
-     *
-     * 3s poll interval keeps us safely within rate limits while staying well under
-     * the 10s MAX_SPOT_STALE_MS threshold in MarketDataStateService.
-     * AngelTickStreamClient still evaluates a tick every second (from cached value),
-     * so candle aggregation cadence is unchanged.
+     * Current NIFTY LTP — sourced from WebSocket ticks via MarketDataStateService.
+     * Returns 0.0 if no tick has been received yet (pre-market or feed not connected).
      */
-    @Scheduled(fixedRate = 3000)
-    public void refreshMarketData() {
-        if (!marketSessionService.isMarketOpen()) {
-            return;
-        }
-
-        try {
-            boolean updated = false;
-
-            // Always fetch NIFTY (used for VIX context and fallback)
-            Optional<Double> nifty = angelOneMarketDataService.getNiftyLtp();
-            if (nifty.isPresent() && nifty.get() > 0.0) {
-                niftyLtp.set(nifty.get());
-                updated = true;
-                log.debug("Centralized data refreshed: NIFTY={}", niftyLtp.get());
-            }
-
-            // Fetch BANKNIFTY when it is the configured trading symbol
-            boolean isBankNifty = "BANKNIFTY".equalsIgnoreCase(
-                tradingSymbol != null ? tradingSymbol.trim() : "");
-            if (isBankNifty) {
-                Optional<Double> bankNifty = angelOneMarketDataService.getLtp("NSE", BANKNIFTY_TOKEN);
-                if (bankNifty.isPresent() && bankNifty.get() > 0.0) {
-                    bankNiftyLtp.set(bankNifty.get());
-                    updated = true;
-                    log.debug("Centralized data refreshed: BANKNIFTY={}", bankNiftyLtp.get());
-                } else {
-                    log.warn("BANKNIFTY LTP not available from Angel One");
-                }
-            }
-
-            if (updated) {
-                lastUpdateEpochMs.set(System.currentTimeMillis());
-            } else {
-                log.warn("No LTP available from Angel One, skipping lastUpdateEpochMs update");
-            }
-
-        } catch (Exception e) {
-            log.warn("Centralized market data refresh failed: {}", e.getMessage());
-        }
-    }
-
     public double getNiftyLtp() {
-        return niftyLtp.get();
+        return marketDataStateService.getLtp();
     }
 
     /**
-     * BUG-FIX: Was hardcoded to return 0.0. Now returns the cached BANKNIFTY LTP
-     * that is polled every second when TRADING_SYMBOL=BANKNIFTY.
+     * For callers that used getBankNiftyLtp() — returns the same underlying spot
+     * because MarketDataStateService stores whichever symbol AngelSmartStreamClient
+     * is subscribed to. When TRADING_SYMBOL=BANKNIFTY the WebSocket is subscribed
+     * to the BANKNIFTY token and all updates go through the same NiftySpot slot.
      */
     public double getBankNiftyLtp() {
-        return bankNiftyLtp.get();
+        return getNiftyLtp();
     }
 
     /**
-     * Returns the LTP for the currently configured trading symbol.
-     * Use this in AngelTickStreamClient instead of calling getNiftyLtp() unconditionally.
+     * LTP for whatever symbol is configured — always the same slot now that
+     * the WebSocket only subscribes to one symbol at a time.
      */
     public double getTradingSymbolLtp() {
-        boolean isBankNifty = "BANKNIFTY".equalsIgnoreCase(
-            tradingSymbol != null ? tradingSymbol.trim() : "");
-        double ltp = isBankNifty ? bankNiftyLtp.get() : niftyLtp.get();
-        // If the symbol-specific cache is still 0, fall back to NIFTY as a safety net
-        return ltp > 0.0 ? ltp : niftyLtp.get();
+        return getNiftyLtp();
     }
 
-    public long getLastUpdateEpochMs() {
-        return lastUpdateEpochMs.get();
-    }
-
+    /**
+     * Freshness check — delegates to MarketDataStateService which tracks the
+     * timestamp of the last WebSocket tick. Threshold: 10 seconds.
+     */
     public boolean isDataFresh() {
-        // FIX: Threshold was 5000ms but poll interval is now 3s, so fresh data is
-        // at most 3s old. Using 5s threshold against a 3s poll gave only 2s of slack.
-        // Raised to 10s to match MAX_SPOT_STALE_MS in MarketDataStateService — both
-        // staleness checks now share the same boundary so no false "stale" blocks.
-        return (System.currentTimeMillis() - lastUpdateEpochMs.get()) < 10_000;
+        return marketDataStateService.isNiftyAvailable();
+    }
+
+    /** Epoch-ms of the last received tick. */
+    public long getLastUpdateEpochMs() {
+        return System.currentTimeMillis() - marketDataStateService.getLastTickAgeMs();
     }
 }

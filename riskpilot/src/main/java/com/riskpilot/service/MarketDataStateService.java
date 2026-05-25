@@ -122,6 +122,12 @@ public class MarketDataStateService {
     public boolean isFeedHealthy() { return getLastTickAgeMs() < 10000; }
     public void recordTick() { lastTickTime.set(System.currentTimeMillis()); }
 
+    /** Returns the latest NIFTY LTP, or 0.0 if no tick received yet. */
+    public double getLtp() {
+        NiftySpot s = niftySpot.get();
+        return s != null ? s.ltp : 0.0;
+    }
+
     // Immutable DTOs
     static class NiftySpot {
         final double ltp, change, changePct;
