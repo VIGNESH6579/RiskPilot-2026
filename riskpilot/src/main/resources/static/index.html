@@ -1,168 +1,906 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RiskPilot Live Monitor</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RiskPilot · Shadow Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
   <style>
-    :root { --bg:#09111f; --panel:#111a2d; --line:#263653; --text:#e6edf6; --muted:#93a4b8; --good:#26d07c; --bad:#ff6b6b; --warn:#f4b740; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,Segoe UI,Arial,sans-serif; }
-    main { max-width:1320px; margin:0 auto; padding:20px; }
-    header { display:flex; justify-content:space-between; gap:16px; margin-bottom:16px; }
-    h1 { margin:0; font-size:24px; letter-spacing:0; }
-    .sub,.label { color:var(--muted); font-size:13px; }
-    .clock { text-align:right; font-size:18px; font-weight:700; }
-    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-height:76px; }
-    .value { margin-top:6px; font-size:20px; font-weight:700; overflow-wrap:anywhere; }
-    .small { font-size:13px; line-height:1.35; }
-    .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
-    table { width:100%; border-collapse:collapse; min-width:900px; font-size:13px; }
-    th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
-    th { color:var(--muted); background:#17223a; }
-    .table-wrap { overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-    .empty { text-align:center; color:var(--muted); padding:24px; }
-    @media (max-width:900px) { header { flex-direction:column; } .clock { text-align:left; } .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    :root {
+      --bg:      #070d1a;
+      --surface: #0d1625;
+      --card:    #111e33;
+      --border:  #1d2f4a;
+      --border2: #243a5c;
+      --text:    #dde8f5;
+      --muted:   #6b87a8;
+      --dim:     #3d5270;
+      --green:   #0fd97e;
+      --green2:  #07c46e;
+      --red:     #f0525a;
+      --amber:   #f5a623;
+      --blue:    #3b9eff;
+      --mono:    'Space Mono', monospace;
+      --sans:    'DM Sans', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      /* subtle grid texture */
+      background-image:
+        linear-gradient(rgba(59,158,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59,158,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+
+    /* ── Layout ─────────────────────────── */
+    .wrap { max-width: 1480px; margin: 0 auto; padding: 20px 24px 40px; }
+
+    /* ── Top bar ────────────────────────── */
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%,100% { opacity:1; box-shadow: 0 0 8px var(--green); }
+      50%      { opacity:.4; box-shadow: 0 0 3px var(--green); }
+    }
+    .brand-dot.off { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+    .brand-dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+    h1 {
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+    .tagline { font-size: 12px; color: var(--muted); margin-top: 2px; letter-spacing: 0.04em; }
+    .top-right { text-align: right; }
+    .clock {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+    .feed-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border2);
+      background: var(--card);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      transition: all .3s;
+    }
+    .feed-badge .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--dim);
+      transition: all .3s;
+    }
+    .feed-badge.live { color: var(--green); border-color: rgba(15,217,126,.25); }
+    .feed-badge.live .dot { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .feed-badge.closed { color: var(--amber); border-color: rgba(245,166,35,.25); }
+    .feed-badge.closed .dot { background: var(--amber); }
+    .feed-badge.error { color: var(--red); border-color: rgba(240,82,90,.25); }
+    .feed-badge.error .dot { background: var(--red); }
+
+    /* ── Stat grid ──────────────────────── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0,1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color .2s;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--border2);
+      transition: background .3s;
+    }
+    .card.accent-green::before  { background: var(--green); }
+    .card.accent-red::before    { background: var(--red); }
+    .card.accent-amber::before  { background: var(--amber); }
+    .card.accent-blue::before   { background: var(--blue); }
+    .card-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1;
+    }
+    .card-value.small { font-size: 14px; line-height: 1.5; font-family: var(--sans); font-weight: 500; }
+    .card-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .green  { color: var(--green)  !important; }
+    .red    { color: var(--red)    !important; }
+    .amber  { color: var(--amber)  !important; }
+    .blue   { color: var(--blue)   !important; }
+    .muted  { color: var(--muted)  !important; }
+
+    /* span cards */
+    .span2 { grid-column: span 2; }
+    .span3 { grid-column: span 3; }
+
+    /* ── WS indicator strip ─────────────── */
+    .ws-strip {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .ws-strip-item {
+      display: flex; align-items: center; gap: 6px;
+      color: var(--muted);
+    }
+    .ws-strip-item .pip {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--dim);
+      flex-shrink: 0;
+    }
+    .ws-strip-item.ok .pip   { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .ws-strip-item.ok        { color: var(--text); }
+    .ws-strip-item.bad .pip  { background: var(--red); }
+    .ws-strip-item.bad       { color: var(--red); }
+    .ws-strip-item.warn .pip { background: var(--amber); }
+    .ws-strip-item.warn      { color: var(--amber); }
+    .ws-sep { width: 1px; height: 20px; background: var(--border2); }
+    .ws-strip-label { font-weight: 600; }
+    .ws-strip-val   { font-family: var(--mono); }
+    .spacer { flex: 1; }
+
+    /* ── Active trade banner ────────────── */
+    .trade-banner {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      background: rgba(15,217,126,.06);
+      border: 1px solid rgba(15,217,126,.25);
+      border-radius: 10px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .trade-banner.show { display: flex; }
+    .trade-banner .pulse-icon {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 1.5s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    .trade-banner strong { font-family: var(--mono); }
+
+    /* ── Chart ──────────────────────────── */
+    .chart-wrap {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      height: 340px;
+      position: relative;
+      margin-bottom: 12px;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .chart-title {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+    }
+    .chart-meta { font-size: 11px; color: var(--dim); }
+    .chart-canvas-wrap { position: relative; height: 270px; }
+    .chart-overlay {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(11,20,37,.85);
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    /* ── Trade log ──────────────────────── */
+    .table-section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .table-title {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+    }
+    .trade-count {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--dim);
+      background: var(--surface);
+      padding: 3px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 1000px; }
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      font-size: 13px;
+      transition: background .15s;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(59,158,255,.04); }
+    .td-mono { font-family: var(--mono); font-size: 12px; }
+    .empty-row td {
+      text-align: center;
+      color: var(--dim);
+      padding: 40px;
+      font-size: 13px;
+    }
+    .dir-long  { color: var(--green); font-weight: 600; }
+    .dir-short { color: var(--red);   font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--mono);
+      letter-spacing: 0.04em;
+    }
+    .badge-green { background: rgba(15,217,126,.12); color: var(--green); }
+    .badge-red   { background: rgba(240,82,90,.12);  color: var(--red);   }
+    .badge-amber { background: rgba(245,166,35,.12); color: var(--amber); }
+    .badge-dim   { background: rgba(107,135,168,.1); color: var(--muted); }
+
+    /* ── Reject reason ticker ───────────── */
+    .reject-bar {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: rgba(240,82,90,.06);
+      border: 1px solid rgba(240,82,90,.2);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+    .reject-bar.show { display: flex; }
+    .reject-label { color: var(--red); font-weight: 700; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; flex-shrink: 0; }
+    .reject-val   { color: var(--text); font-family: var(--mono); }
+
+    /* ── Responsive ─────────────────────── */
+    @media (max-width: 1200px) { .grid { grid-template-columns: repeat(4, minmax(0,1fr)); } }
+    @media (max-width: 900px)  {
+      .grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .span2, .span3 { grid-column: span 2; }
+    }
+    @media (max-width: 600px)  {
+      .topbar { flex-direction: column; }
+      .top-right { text-align: left; }
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
   </style>
 </head>
 <body>
-<main>
-  <header>
-    <div>
-      <h1>RiskPilot Live Monitor</h1>
-      <div class="sub">Angel One live NIFTY feed, expiry, risk gates, and shadow trades</div>
-    </div>
-    <div>
-      <div id="clock" class="clock">--:--:--</div>
-      <div id="socket" class="small warn">Socket connecting</div>
-    </div>
-  </header>
+<div class="wrap">
 
-  <section class="grid">
-    <div class="card"><div class="label">NIFTY Spot</div><div id="spot" class="value">--</div></div>
-    <div class="card"><div class="label">India VIX</div><div id="vix" class="value">--</div></div>
-    <div class="card"><div class="label">Paper Balance</div><div id="paperBalance" class="value">--</div></div>
-    <div class="card"><div class="label">Source / Freshness</div><div id="freshness" class="value small">--</div></div>
-    <div class="card"><div class="label">Support / Resistance</div><div id="range" class="value small">--</div></div>
-    <div class="card"><div class="label">OR High / Low</div><div id="orRange" class="value small">--</div></div>
-    <div class="card"><div class="label">Regime</div><div id="regime" class="value small">--</div></div>
-    <div class="card"><div class="label">Trades Today</div><div id="tradesToday" class="value small">--</div></div>
-  </section>
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-dot" id="brandDot"></div>
+      <div>
+        <h1>RISKPILOT</h1>
+        <div class="tagline">NIFTY · SHADOW MODE · ANGEL ONE SMARTSTREAM</div>
+      </div>
+    </div>
+    <div class="top-right">
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="feed-badge" id="feedBadge">
+        <span class="dot"></span>
+        <span id="feedBadgeText">connecting</span>
+      </div>
+    </div>
+  </div>
 
-  <section class="table-wrap">
-    <table>
-      <thead><tr><th>Signal Time</th><th>Direction</th><th>Expected</th><th>Actual</th><th>Latency</th><th>Slippage</th><th>MFE</th><th>MAE</th><th>R</th><th>Exit Reason</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="10" class="empty">Awaiting trades...</td></tr></tbody>
-    </table>
-  </section>
-</main>
+  <!-- Reject reason bar (only shows when last trade was rejected) -->
+  <div class="reject-bar" id="rejectBar">
+    <span class="reject-label">LAST REJECT</span>
+    <span class="reject-val" id="rejectReason">--</span>
+  </div>
+
+  <!-- Active trade banner -->
+  <div class="trade-banner" id="tradeBanner">
+    <div class="pulse-icon"></div>
+    <span>TRADE ACTIVE —</span>
+    <strong id="bannerDir">--</strong>
+    <span>entry</span>
+    <strong id="bannerEntry">--</strong>
+    <span style="flex:1"></span>
+    <span id="bannerSL" style="color:var(--muted);font-size:12px">SL --</span>
+  </div>
+
+  <!-- Stat grid -->
+  <div class="grid">
+    <div class="card" id="cardSpot">
+      <div class="card-label">NIFTY Spot</div>
+      <div class="card-value" id="spot">--</div>
+      <div class="card-sub" id="spotSub">&nbsp;</div>
+    </div>
+    <div class="card" id="cardVix">
+      <div class="card-label">India VIX</div>
+      <div class="card-value" id="vix">--</div>
+    </div>
+    <div class="card" id="cardBalance">
+      <div class="card-label">Paper Balance</div>
+      <div class="card-value" id="balance">--</div>
+      <div class="card-sub" id="balanceSub">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Regime</div>
+      <div class="card-value small" id="regime">--</div>
+      <div class="card-sub" id="regimeSub">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="card-label">OR High / Low</div>
+      <div class="card-value small" id="orRange">-- / --</div>
+      <div class="card-sub" id="orSub">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Support / Resistance</div>
+      <div class="card-value small" id="sr">-- / --</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Trades Today</div>
+      <div class="card-value" id="tradeCount">0</div>
+      <div class="card-sub" id="timePhase">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- WS / session status strip -->
+  <div class="ws-strip">
+    <div class="ws-strip-item" id="wsItem">
+      <span class="pip"></span>
+      <span class="ws-strip-label">ANGEL WS</span>
+      <span class="ws-strip-val" id="wsVal">--</span>
+    </div>
+    <div class="ws-sep"></div>
+    <div class="ws-strip-item" id="sessionItem">
+      <span class="pip"></span>
+      <span class="ws-strip-label">SESSION</span>
+      <span class="ws-strip-val" id="sessionVal">--</span>
+    </div>
+    <div class="ws-sep"></div>
+    <div class="ws-strip-item" id="heartbeatItem">
+      <span class="pip"></span>
+      <span class="ws-strip-label">HEARTBEAT</span>
+      <span class="ws-strip-val" id="heartbeatVal">--</span>
+    </div>
+    <div class="ws-sep"></div>
+    <div class="ws-strip-item" id="feedItem">
+      <span class="pip"></span>
+      <span class="ws-strip-label">FEED</span>
+      <span class="ws-strip-val" id="feedVal">--</span>
+    </div>
+    <div class="ws-sep"></div>
+    <div class="ws-strip-item" id="mktItem">
+      <span class="pip"></span>
+      <span class="ws-strip-label">MARKET</span>
+      <span class="ws-strip-val" id="mktVal">--</span>
+    </div>
+    <div class="spacer"></div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono)" id="candleCount">-- candles</div>
+    <div class="ws-sep"></div>
+    <div style="font-size:11px;color:var(--dim)" id="expiry">expiry --</div>
+  </div>
+
+  <!-- Candle chart -->
+  <div class="chart-wrap">
+    <div class="chart-header">
+      <div class="chart-title">NIFTY 5-MIN · SMARTSTREAM</div>
+      <div class="chart-meta" id="chartMeta">--</div>
+    </div>
+    <div class="chart-canvas-wrap">
+      <div class="chart-overlay" id="chartOverlay">Awaiting candle data…</div>
+      <canvas id="candleChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Trade log -->
+  <div class="table-section">
+    <div class="table-header">
+      <span class="table-title">SHADOW TRADE LOG</span>
+      <span class="trade-count" id="tradeCountBadge">0 trades</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Signal Time</th>
+            <th>Dir</th>
+            <th>Exp Entry</th>
+            <th>Act Entry</th>
+            <th>Lat (s)</th>
+            <th>Slip</th>
+            <th>MFE</th>
+            <th>MAE</th>
+            <th>TP1</th>
+            <th>Runner</th>
+            <th>Realized R</th>
+            <th>Exit Reason</th>
+          </tr>
+        </thead>
+        <tbody id="tradeRows">
+          <tr class="empty-row"><td colspan="12">Awaiting shadow trades…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
 <script>
-  const rows = [];
-  let ws = null;
-  let reconnectTimer = null;
-  const $ = id => document.getElementById(id);
+"use strict";
 
-  function istTime() {
-    return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-  }
-  function fmt(v, d = 2) {
-    return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '--';
-  }
-  function cls(el, name) {
-    el.classList.remove('good', 'bad', 'warn', 'muted');
-    if (name) el.classList.add(name);
-  }
-  function tickClock() {
-    $('clock').textContent = `IST ${istTime()}`;
-  }
-  async function refreshLiveData() {
-    try {
-      const [health, state, candles] = await Promise.all([
-        fetch(`/api/v1/data/health?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json()),
-        fetch(`/api/v1/engine/state?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json()),
-        fetch(`/api/v1/engine/candle-history?ts=${Date.now()}`, { cache:'no-store' }).then(r => r.json())
-      ]);
-      const ageSeconds = typeof health.ageMs === 'number' ? Math.max(0, Math.round(health.ageMs / 1000)) : null;
-      const live = health.marketDataStatus === 'LIVE'
-        && health.optionChainSource === 'ANGELONE_LTP'
-        && health.spot > 0;
-      const marketClosed = health.marketDataStatus === 'MARKET_CLOSED' || health.marketOpen === false;
-      const freshness = live
-        ? `${health.optionChainSource} | age ${ageSeconds}s`
-        : (marketClosed
-          ? `${health.optionChainSource || 'MARKET_CLOSED'} | market closed`
-          : `${health.optionChainSource || 'UNKNOWN'} | no live tick`);
-      $('spot').textContent = health.spot > 0 ? fmt(health.spot) : '--';
-      $('vix').textContent = fmt(health.vix);
-      $('expiry').textContent = health.expiry || '--';
-      $('freshness').textContent = freshness;
-      $('paperBalance').textContent = state.paperBalance ? `₹${fmt(state.paperBalance, 0)}` : '--';
-      $('range').textContent = health.spot > 0 ? `${health.support ?? '--'} / ${health.resistance ?? '--'}` : '-- / --';
-      $('orRange').textContent = `${fmt(state.orHigh, 0)} / ${fmt(state.orLow, 0)}`;
-      $('tradesToday').textContent = state.tradesTaken ?? 0;
-      const regimeLbl = (!state.regime || state.regime === 'UNKNOWN')
-        ? (marketClosed ? 'Market Closed' : 'Assessing…')
-        : state.regime;
-      $('regime').textContent = regimeLbl;
-      cls($('regime'), state.regime === 'TREND' ? 'good' : (state.regime === 'BLOCKED' ? 'bad' : 'warn'));
-      const sessionLbl = state.sessionActive
-        ? 'Active'
-        : (marketClosed ? 'Market Closed' : 'Inactive – Feed Down');
-      $('session').textContent = `${sessionLbl} | ${candles.candleHistorySize ?? 0}`;
-      cls($('freshness'), live ? 'good' : (marketClosed ? 'warn' : 'bad'));
-    } catch (e) {
-      $('freshness').textContent = 'Market API down';
-      cls($('freshness'), 'bad');
-    }
-  }
-  function connectSocket() {
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${protocol}://${location.host}/ws`);
-    ws.onopen = () => { $('socket').textContent = 'Socket connected'; cls($('socket'), 'good'); };
-    ws.onerror = () => { $('socket').textContent = 'Socket error'; cls($('socket'), 'bad'); };
-    ws.onclose = () => {
-      $('socket').textContent = 'Socket reconnecting';
-      cls($('socket'), 'bad');
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(connectSocket, 1500);
-    };
-    ws.onmessage = event => {
-      try {
-        const message = JSON.parse(event.data);
-        const type = message.eventType;
-        const payload = message.payload || message;
-        if (type === 'session_state') {
-          if (payload.spot > 0) $('spot').textContent = fmt(payload.spot);
-          if (payload.vix > 0) $('vix').textContent = fmt(payload.vix);
-          if (payload.paperBalance) $('paperBalance').textContent = `₹${fmt(payload.paperBalance, 0)}`;
-          $('orRange').textContent = `${fmt(payload.orHigh, 0)} / ${fmt(payload.orLow, 0)}`;
-          $('tradesToday').textContent = payload.tradesTaken ?? 0;
-          const wsRegime = (!payload.regime || payload.regime === 'UNKNOWN')
-            ? (payload.marketOpen === false ? 'Market Closed' : 'Assessing…')
-            : payload.regime;
-          $('regime').textContent = wsRegime;
-          cls($('regime'), payload.regime === 'TREND' ? 'good' : (payload.regime === 'BLOCKED' ? 'bad' : 'warn'));
-          const wsSession = payload.sessionActive
-            ? 'Active'
-            : (payload.marketOpen === false ? 'Market Closed' : 'Inactive – Feed Down');
-          $('session').textContent = `${wsSession} | ${payload.tradesTaken ?? 0}`;
-        } else if (type === 'trade' || (!type && payload.id)) {
-          rows.unshift(payload);
-          if (rows.length > 50) rows.pop();
-          renderRows();
+// ── State ─────────────────────────────────────────────────────────────────────
+const trades = [];
+const MAX_TRADES = 50;
+let candleChart = null;
+let serverWs = null;       // WebSocket to our Spring /ws endpoint
+let reconnectTimer = null;
+let pingTimer = null;
+
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const el = (id) => document.getElementById(id);
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function fmt(v, d = 2) {
+  if (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) return '--';
+  return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtCurrency(v) {
+  if (!v && v !== 0) return '--';
+  const n = Number(v);
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e7) return sign + '₹' + fmt(abs / 1e7, 2) + 'Cr';
+  if (abs >= 1e5) return sign + '₹' + fmt(abs / 1e5, 2) + 'L';
+  return sign + '₹' + fmt(abs, 0);
+}
+function setItem(id, cls) {
+  const el_ = el(id);
+  if (!el_) return;
+  el_.className = 'ws-strip-item' + (cls ? ' ' + cls : '');
+}
+function accClass(card, cls) {
+  card.className = 'card' + (cls ? ' ' + cls : '');
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function tickClock() {
+  el('clock').textContent = new Date().toLocaleTimeString('en-IN',
+    { timeZone: 'Asia/Kolkata', hour12: false });
+}
+
+// ── Feed badge ────────────────────────────────────────────────────────────────
+function setFeedBadge(state, text) {
+  // state: 'live' | 'closed' | 'error'
+  const badge = el('feedBadge');
+  badge.className = 'feed-badge ' + state;
+  el('feedBadgeText').textContent = text;
+  const dot = el('brandDot');
+  if (state === 'live') { dot.className = 'brand-dot'; }
+  else if (state === 'closed') { dot.className = 'brand-dot warn'; }
+  else { dot.className = 'brand-dot off'; }
+}
+
+// ── Chart init ────────────────────────────────────────────────────────────────
+function initChart() {
+  if (!window.Chart || !window.luxon) return;
+  const ctx = el('candleChart').getContext('2d');
+  candleChart = new Chart(ctx, {
+    type: 'candlestick',
+    data: {
+      datasets: [{
+        label: 'NIFTY 5m',
+        data: [],
+        color: { up: '#0fd97e', down: '#f0525a', unchanged: '#6b87a8' },
+        borderColor: { up: '#0fd97e', down: '#f0525a', unchanged: '#6b87a8' }
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+          grid: { color: '#1d2f4a' },
+          ticks: { color: '#6b87a8', font: { family: "'Space Mono'" , size: 10 } }
+        },
+        y: {
+          position: 'right',
+          grid: { color: '#1d2f4a' },
+          ticks: { color: '#6b87a8', font: { family: "'Space Mono'", size: 10 } }
         }
-      } catch (ignored) {}
-    };
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d1625',
+          borderColor: '#1d2f4a',
+          borderWidth: 1,
+          titleColor: '#6b87a8',
+          bodyColor: '#dde8f5',
+          titleFont: { family: "'Space Mono'", size: 10 },
+          bodyFont:  { family: "'Space Mono'", size: 11 },
+          callbacks: {
+            title: (items) => {
+              const d = new Date(items[0].parsed.x);
+              return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+            },
+            label: (ctx) => {
+              const p = ctx.raw;
+              return [`O: ${p.o}  H: ${p.h}`, `L: ${p.l}  C: ${p.c}`];
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+// ── Chart update ─────────────────────────────────────────────────────────────
+async function updateChart() {
+  if (!candleChart) return;
+  try {
+    const res = await fetch('/api/v1/engine/candle-history?ts=' + Date.now(), { cache: 'no-store' });
+    const data = await res.json();
+    const candles = data.candles || [];
+    if (candles.length > 0) {
+      el('chartOverlay').style.display = 'none';
+      candleChart.data.datasets[0].data = candles.map(c => ({
+        x: new Date(c.timestamp).getTime(),
+        o: c.open, h: c.high, l: c.low, c: c.close
+      }));
+      candleChart.update('none');
+      const last = candles[candles.length - 1];
+      el('chartMeta').textContent =
+        `${candles.length} candles · last close ${fmt(last.close)} · vol ${Number(last.volume||0).toLocaleString('en-IN')}`;
+      el('candleCount').textContent = candles.length + ' candles';
+    } else {
+      el('chartOverlay').style.display = 'flex';
+    }
+  } catch (e) {
+    // silently retry next cycle
   }
-  function renderRows() {
-    $('rows').innerHTML = rows.length ? rows.map(r => `<tr><td>${r.signalTime || '--'}</td><td>${r.direction || '--'}</td><td>${fmt(r.expectedEntry)}</td><td>${fmt(r.actualEntry)}</td><td>${fmt(r.latencySec)}</td><td>${fmt(r.slippage)}</td><td>${fmt(r.mfe)}</td><td>${fmt(r.mae)}</td><td>${fmt(r.realizedR)}R</td><td>${r.exitReason || '--'}</td></tr>`).join('') : '<tr><td colspan="10" class="empty">Awaiting trades...</td></tr>';
+}
+
+// ── Main API poll ─────────────────────────────────────────────────────────────
+async function refresh() {
+  try {
+    const [health, state] = await Promise.all([
+      fetch('/api/v1/data/health?ts=' + Date.now(), { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/v1/engine/state?ts=' + Date.now(), { cache: 'no-store' }).then(r => r.json())
+    ]);
+
+    // ── Feed badge: now driven by wsConnected + marketOpen ──────────────────
+    const wsConn      = health.wsConnected === true;
+    const marketOpen  = health.marketOpen  === true;
+    const live        = health.marketDataStatus === 'LIVE' && health.spot > 0;
+
+    if (!marketOpen) {
+      setFeedBadge('closed', 'Market Closed');
+    } else if (wsConn && live) {
+      setFeedBadge('live', 'WS · Live Feed');
+    } else if (wsConn) {
+      setFeedBadge('live', 'WS · Connecting');
+    } else {
+      setFeedBadge('error', 'WS Disconnected');
+    }
+
+    // ── Spot ───────────────────────────────────────────────────────────────
+    if (health.spot > 0) {
+      el('spot').textContent = fmt(health.spot);
+      const prev = Number(health.previousClose || 0);
+      if (prev > 0) {
+        const chg = health.spot - prev;
+        const pct = (chg / prev) * 100;
+        const sign = chg >= 0 ? '+' : '';
+        el('spotSub').textContent = sign + fmt(chg) + ' (' + sign + fmt(pct) + '%)';
+        el('spotSub').className = 'card-sub ' + (chg >= 0 ? 'green' : 'red');
+      }
+      accClass(el('cardSpot'), live ? 'accent-green' : '');
+    }
+
+    // ── VIX ────────────────────────────────────────────────────────────────
+    if (health.vix > 0) {
+      el('vix').textContent = fmt(health.vix);
+      const vixEl = el('vix');
+      vixEl.className = 'card-value ' + (health.vix > 20 ? 'red' : health.vix > 15 ? 'amber' : 'green');
+    }
+
+    // ── Balance ────────────────────────────────────────────────────────────
+    if (state.paperBalance != null) {
+      el('balance').textContent = fmtCurrency(state.paperBalance);
+      const base = 100000;
+      const diff = state.paperBalance - base;
+      if (diff !== 0) {
+        const sign = diff > 0 ? '+' : '';
+        el('balanceSub').textContent = sign + fmtCurrency(diff) + ' vs start';
+        el('balanceSub').className = 'card-sub ' + (diff > 0 ? 'green' : 'red');
+        accClass(el('cardBalance'), diff > 0 ? 'accent-green' : 'accent-red');
+      }
+    }
+
+    // ── Regime ─────────────────────────────────────────────────────────────
+    const regime = state.regime || 'UNKNOWN';
+    const isMarketClosed = !marketOpen;
+    const regimeLbl = (regime === 'UNKNOWN' || !regime)
+      ? (isMarketClosed ? 'Market Closed' : 'Assessing…')
+      : regime;
+    el('regime').textContent = regimeLbl;
+    el('regime').className = 'card-value small ' +
+      (regime === 'TREND' ? 'green' : regime === 'BLOCKED' ? 'red' : 'amber');
+    el('regimeSub').textContent = state.lastRejectReason
+      ? '🚫 ' + state.lastRejectReason
+      : (regime === 'TREND' ? '✓ Trading allowed' : '');
+    el('regimeSub').className = 'card-sub ' +
+      (state.lastRejectReason ? 'red' : 'muted');
+
+    // ── OR Range ───────────────────────────────────────────────────────────
+    const orH = state.orHigh, orL = state.orLow;
+    el('orRange').textContent = (orH > 0 && orL > 0)
+      ? fmt(orH, 0) + ' / ' + fmt(orL, 0)
+      : '-- / --';
+    if (orH > 0 && orL > 0) {
+      el('orSub').textContent = 'range ' + fmt(orH - orL, 0) + ' pts';
+      el('orSub').className = 'card-sub ' + ((orH - orL) >= 120 ? 'green' : 'amber');
+    }
+
+    // ── S/R ────────────────────────────────────────────────────────────────
+    el('sr').textContent = (health.support && health.resistance)
+      ? fmt(health.support, 0) + ' / ' + fmt(health.resistance, 0)
+      : '-- / --';
+
+    // ── Trades ─────────────────────────────────────────────────────────────
+    el('tradeCount').textContent = state.tradesTaken ?? 0;
+    el('timePhase').textContent  = state.timePhase ? state.timePhase.replace('_', ' ') : '';
+
+    // ── WS strip ───────────────────────────────────────────────────────────
+    setItem('wsItem', wsConn ? 'ok' : 'bad');
+    el('wsVal').textContent = wsConn ? 'Connected' : 'Disconnected';
+
+    setItem('sessionItem', state.sessionActive ? 'ok' : (isMarketClosed ? 'warn' : 'bad'));
+    el('sessionVal').textContent = state.sessionActive ? 'Active' : (isMarketClosed ? 'Closed' : 'Inactive');
+
+    setItem('heartbeatItem', state.heartbeatAlive ? 'ok' : 'bad');
+    el('heartbeatVal').textContent = state.heartbeatAlive ? 'Alive' : 'Dead';
+
+    setItem('feedItem', state.feedHealthy ? 'ok' : (isMarketClosed ? 'warn' : 'bad'));
+    el('feedVal').textContent = state.feedHealthy ? 'Healthy' : (isMarketClosed ? 'Market Closed' : 'Unhealthy');
+
+    setItem('mktItem', marketOpen ? 'ok' : 'warn');
+    el('mktVal').textContent = marketOpen ? 'Open' : 'Closed';
+
+    // ── Expiry ─────────────────────────────────────────────────────────────
+    el('expiry').textContent = 'expiry ' + (health.expiry || '--');
+
+    // ── Reject bar ─────────────────────────────────────────────────────────
+    if (state.lastRejectReason) {
+      el('rejectBar').className = 'reject-bar show';
+      el('rejectReason').textContent = state.lastRejectReason;
+    } else {
+      el('rejectBar').className = 'reject-bar';
+    }
+
+    // ── Trade banner ────────────────────────────────────────────────────────
+    el('tradeBanner').className = 'trade-banner' + (state.tradeActive ? ' show' : '');
+
+  } catch (e) {
+    setFeedBadge('error', 'API error');
   }
-  tickClock();
-  refreshLiveData();
-  connectSocket();
-  setInterval(tickClock, 1000);
-  setInterval(refreshLiveData, 1000);
+}
+
+// ── Server WS (for real-time push from Spring /ws endpoint) ──────────────────
+function connectServerWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  serverWs = new WebSocket(proto + '://' + location.host + '/ws');
+
+  serverWs.onopen = () => {
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = setInterval(() => {
+      if (serverWs && serverWs.readyState === WebSocket.OPEN) serverWs.send('ping');
+    }, 25000);
+  };
+
+  serverWs.onmessage = (event) => {
+    try {
+      const msg     = JSON.parse(event.data);
+      const type    = msg.eventType;
+      const payload = msg.payload || msg;
+
+      if (type === 'session_state') {
+        // Spot / VIX live update
+        if (payload.spot > 0) el('spot').textContent = fmt(payload.spot);
+        if (payload.vix  > 0) el('vix').textContent  = fmt(payload.vix);
+        if (payload.paperBalance != null) el('balance').textContent = fmtCurrency(payload.paperBalance);
+        el('orRange').textContent = (payload.orHigh > 0 && payload.orLow > 0)
+          ? fmt(payload.orHigh, 0) + ' / ' + fmt(payload.orLow, 0) : '-- / --';
+        el('tradeCount').textContent = payload.tradesTaken ?? 0;
+
+        const r = payload.regime || 'UNKNOWN';
+        const rLbl = (r === 'UNKNOWN') ? (payload.marketOpen === false ? 'Market Closed' : 'Assessing…') : r;
+        el('regime').textContent = rLbl;
+        el('regime').className = 'card-value small ' +
+          (r === 'TREND' ? 'green' : r === 'BLOCKED' ? 'red' : 'amber');
+
+        // Active trade banner
+        el('tradeBanner').className = 'trade-banner' + (payload.tradeActive ? ' show' : '');
+        if (payload.tradeActive) {
+          el('bannerDir').textContent   = payload.tradeDirection || '--';
+          el('bannerEntry').textContent = fmt(payload.tradeEntry);
+        }
+      }
+
+      else if (type === 'trade' || (!type && payload.id)) {
+        trades.unshift(payload);
+        if (trades.length > MAX_TRADES) trades.pop();
+        renderTrades();
+        el('tradeCountBadge').textContent = trades.length + ' trade' + (trades.length !== 1 ? 's' : '');
+      }
+    } catch (ignored) {}
+  };
+
+  serverWs.onerror = () => {};
+  serverWs.onclose = () => {
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectServerWs, 3000);
+  };
+}
+
+// ── Trade table render ────────────────────────────────────────────────────────
+function renderTrades() {
+  if (trades.length === 0) {
+    el('tradeRows').innerHTML = '<tr class="empty-row"><td colspan="12">Awaiting shadow trades…</td></tr>';
+    return;
+  }
+  el('tradeRows').innerHTML = trades.map(r => {
+    const rVal  = Number(r.realizedR || 0);
+    const slip  = Number(r.slippage  || 0);
+    const lat   = Number(r.latencySec || 0);
+    const dirCls = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
+    const rBadge  = rVal >= 1 ? 'badge-green' : rVal < 0 ? 'badge-red' : 'badge-dim';
+    const latBadge= lat > 2   ? 'badge-red'   : 'badge-dim';
+    const slipBadge=Math.abs(slip) > 1 ? 'badge-red' : 'badge-green';
+    return `<tr>
+      <td class="td-mono">${r.signalTime ? r.signalTime.slice(11,19) : '--'}</td>
+      <td class="${dirCls}">${r.direction || '--'}</td>
+      <td class="td-mono">${fmt(r.expectedEntry)}</td>
+      <td class="td-mono">${fmt(r.actualEntry)}</td>
+      <td><span class="badge ${latBadge}">${fmt(r.latencySec)}</span></td>
+      <td><span class="badge ${slipBadge}">${fmt(r.slippage)}</span></td>
+      <td class="td-mono ${rVal > 0 ? 'green' : ''}">${fmt(r.mfe)}</td>
+      <td class="td-mono ${rVal < 0 ? 'red' : ''}">${fmt(r.mae)}</td>
+      <td><span class="badge ${r.tp1Hit ? 'badge-green' : 'badge-dim'}">${r.tp1Hit ? 'HIT' : 'MISS'}</span></td>
+      <td><span class="badge ${r.runnerCaptured ? 'badge-green' : 'badge-dim'}">${r.runnerCaptured ? 'YES' : 'NO'}</span></td>
+      <td><span class="badge ${rBadge}">${fmt(r.realizedR)}R</span></td>
+      <td style="color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis">${r.exitReason || '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Load historical trades on startup ────────────────────────────────────────
+async function loadTradeHistory() {
+  try {
+    const data = await fetch('/api/v1/data/trade-history?limit=50', { cache: 'no-store' }).then(r => r.json());
+    if (Array.isArray(data) && data.length > 0) {
+      data.forEach(t => { if (trades.length < MAX_TRADES) trades.push(t); });
+      renderTrades();
+      el('tradeCountBadge').textContent = trades.length + ' trade' + (trades.length !== 1 ? 's' : '');
+    }
+  } catch (e) {}
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+tickClock();
+setInterval(tickClock, 1000);
+
+try { initChart(); } catch(e) {
+  el('chartOverlay').textContent = '⚠ Chart unavailable — ' + e.message;
+}
+
+refresh();
+setInterval(refresh, 2000);
+
+updateChart();
+setInterval(updateChart, 5000);
+
+connectServerWs();
+loadTradeHistory();
 </script>
 </body>
 </html>

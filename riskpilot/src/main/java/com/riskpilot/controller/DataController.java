@@ -28,6 +28,7 @@ public class DataController {
 
     private final VixService vixService;
     private final OptionChainService optionChainService;
+    private final com.riskpilot.service.AngelSmartStreamClient angelSmartStreamClient;
     // FIX: Read trade history from DB instead of the missing CSV file
     private final TradeRepository tradeRepository;
 
@@ -64,6 +65,8 @@ public class DataController {
         payload.put("updatedEpochMs", chain.updatedEpochMs());
         payload.put("ageMs", chain.updatedEpochMs() > 0L ? System.currentTimeMillis() - chain.updatedEpochMs() : null);
         payload.put("vix", vixService.getIndiaVix());
+        payload.put("wsConnected", angelSmartStreamClient.isConnected());
+        payload.put("feedSource", "WEBSOCKET");
         payload.put("healthy", live || !marketOpen);
         return payload;
     }
