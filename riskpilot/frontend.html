@@ -283,7 +283,19 @@
           },
           y: {
             grid:  { color: '#263653' },
-            ticks: { color: '#93a4b8', font: { size: 11 } }
+            ticks: {
+              color: '#93a4b8',
+              font: { size: 11 },
+              callback: function(value) {
+                // Guard: if a garbage LTP ever sneaks through, show abbreviated
+                // form so the Y-axis doesn't render as "103,428,083,085,203.5".
+                // For normal NIFTY/BANKNIFTY prices (~10k-100k) show 2 dp.
+                if (Math.abs(value) >= 1_000_000) {
+                  return (value / 1_000_000).toFixed(2) + 'M';
+                }
+                return value.toFixed(2);
+              }
+            }
           }
         },
         plugins: {

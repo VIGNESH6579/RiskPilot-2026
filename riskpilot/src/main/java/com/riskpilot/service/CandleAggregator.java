@@ -63,6 +63,15 @@ public class CandleAggregator {
             return;
         }
         lastAcceptedSequenceId = sequenceId;
+
+        // Sanity bounds: reject any price outside the plausible range for Indian indices.
+        // This is a defence-in-depth check; the primary guard is in AngelSmartStreamClient.
+        // Without this, a single garbage tick permanently raises a candle's HIGH to an
+        // astronomical value (applyTick only goes up), corrupting the chart indefinitely.
+        if (price < 1_000.0 || price > 500_000.0) {
+            log.warn("CANDLE_TICK_IGNORED: price={} outside plausible range [1000, 500000]", price);
+            return;
+        }
         
         // BUG-001: Use provided receivedAt instead of calculating now
         // BUG-04: Use Math.abs to handle clock skew (negative values from NTP drift)
@@ -174,6 +183,14 @@ public class CandleAggregator {
     public synchronized List<Candle> getValidHistory() {
         List<Candle> snapshot = new ArrayList<>(historicalBuffer.size());
         for (Candle c : historicalBuffer) {
+            // Sanity guard: skip any candle whose OHLC values are outside the
+            // plausible range for any Indian index (1,000 – 500,000 pts).
+            // This catches corrupt candles that may have been written before the
+            // LTP bounds check was added to AngelSmartStreamClient.
+            if (c.open  < 1_000.0 || c.open  > 500_000.0) continue;
+            if (c.high  < 1_000.0 || c.high  > 500_000.0) continue;
+            if (c.low   < 1_000.0 || c.low   > 500_000.0) continue;
+            if (c.close < 1_000.0 || c.close > 500_000.0) continue;
             snapshot.add(c.copy());
         }
         return snapshot;

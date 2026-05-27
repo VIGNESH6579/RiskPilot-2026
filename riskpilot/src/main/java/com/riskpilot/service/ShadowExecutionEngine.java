@@ -433,11 +433,24 @@ public class ShadowExecutionEngine {
 
         // FIX: Use TrapEngine to detect signals with calculated support/resistance
         List<Candle> history = candleAggregator.getValidHistory();
-        double currentVix = 15.0; // Fallback
+
+        // FIX: VixService.getIndiaVix() returns -1.0 when its circuit breaker fires
+        // (both Angel One and Yahoo sources failed).  A value of -1.0 passed into
+        // TrapEngine.detectTrap() causes the VIX range check:
+        //   if (vix < minVix || vix > maxVix)   →   -1.0 < 12.0  →  TRUE
+        // which returns null on every single tick → zero signals → zero trades.
+        // Treat any non-positive VIX as "unknown; use conservative fallback".
+        double currentVix = 15.0; // conservative fallback
         try {
-            currentVix = vixService.getIndiaVix();
+            double fetched = vixService.getIndiaVix();
+            if (fetched > 0.0) {
+                currentVix = fetched;
+            } else {
+                log.warn("⚠️ VIX circuit breaker active (returned {}) — using fallback VIX={} for signal evaluation",
+                    fetched, currentVix);
+            }
         } catch (Exception e) {
-            log.warn("VixService.getIndiaVix() failed, using fallback: {}", e.getMessage());
+            log.warn("VixService.getIndiaVix() failed, using fallback VIX={}: {}", currentVix, e.getMessage());
         }
 
         // Calculate support and resistance from recent price structure
@@ -954,8 +967,11 @@ public class ShadowExecutionEngine {
         payload.put("paperBalance", state.paperBalance());
 
         // Add real-time market data to broadcast
+        // FIX: VixService returns -1.0 when circuit breaker fires; clamp to 0
+        // so the frontend never shows a negative VIX on the dashboard.
         payload.put("spot", currentPrice > 0 ? currentPrice : 0.0);
-        payload.put("vix", vixService.getIndiaVix());
+        double broadcastVix = vixService.getIndiaVix();
+        payload.put("vix", broadcastVix > 0.0 ? broadcastVix : 0.0);
         payload.put("marketOpen", marketSessionService.isMarketOpen());
 
         // Dynamic Support/Resistance based on current price

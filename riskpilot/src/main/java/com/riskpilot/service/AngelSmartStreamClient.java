@@ -425,6 +425,22 @@ public class AngelSmartStreamClient {
             return;
         }
 
+        // ── Sanity bounds check ───────────────────────────────────────────────
+        // Angel One occasionally sends non-QUOTE binary frames (protocol acks,
+        // heartbeat variants, subscription confirmations) whose raw bytes happen
+        // to be >= 119 bytes. Reading those bytes as a QUOTE frame produces
+        // astronomically wrong LTP values (e.g. 103,428,083,085,203.5).
+        // These values pass the <=0 guard, corrupt CandleAggregator's HIGH
+        // permanently (applyTick only goes up), and cause the chart Y-axis to
+        // show 100-trillion-scale numbers until the next valid tick.
+        //
+        // Guard: NIFTY trades ~10,000–75,000; BANKNIFTY ~30,000–100,000.
+        // Anything outside 1,000–500,000 is definitively garbage. Skip it.
+        if (ltp < 1_000.0 || ltp > 500_000.0) {
+            log.warn("⚠️ Implausible LTP {} — likely non-QUOTE frame; skipping to protect candle data", ltp);
+            return;
+        }
+
         // Resolve tick timestamp: use exchange timestamp when valid
         LocalDateTime tickTime;
         long nowMs = System.currentTimeMillis();
@@ -446,9 +462,18 @@ public class AngelSmartStreamClient {
         marketDataStateService.updateNiftyFromWebSocket(ltp, 0, 0);
 
         // ── VIX: still REST-based, VixService throttles internally to 5-min cache ─
+        // FIX: VixService.getIndiaVix() returns -1.0 when its circuit breaker fires
+        // (both Angel One and Yahoo have failed).  Storing -1.0 into
+        // MarketDataStateService then makes isVixValid() unreliable, which cascades
+        // into TradingSafetyManager.isSafeToTrade() blocking all trades.
+        // Only update the state service when we have a real, positive VIX value.
         try {
             double vix = vixService.getIndiaVix();
-            marketDataStateService.updateVix(vix, Instant.now());
+            if (vix > 0.0) {
+                marketDataStateService.updateVix(vix, Instant.now());
+            } else {
+                log.debug("VIX circuit breaker active (-1.0 returned) — skipping MarketDataStateService update");
+            }
         } catch (Exception e) {
             // VIX unavailable — TradingSafetyManager handles the block
             log.debug("VIX fetch skipped this tick: {}", e.getMessage());
