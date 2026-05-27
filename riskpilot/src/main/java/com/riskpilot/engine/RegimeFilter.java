@@ -181,6 +181,34 @@ public class RegimeFilter {
      * Compute regime metrics
      */
     private RegimeMetrics computeRegimeMetrics() {
+        // BUG-A FIX: Early-session insufficient-data bypass.
+        //
+        // BEFORE: with fewer than 10 candles in history, only the OR range
+        // contributes to the score (max +2). ATR ratio, trend efficiency, and
+        // breakout hold rate all return 0.0 / empty → "neutral" (no score, no block).
+        // Score = 2 < MIN_REGIME_SCORE (4) → tradingAllowed = false → regime = CHOP
+        // → RiskGateEngine rejects with ADAPTIVE_REGIME_BLOCKED.
+        // This blocks ALL trades for the first ~50 minutes of the session
+        // (6 pre-OR candles + first few post-OR candles).
+        //
+        // AFTER: if we have fewer than 10 candles, we don't have enough data to
+        // make a reliable regime judgement either way. Default to "allowed" and let
+        // the other gate checks (OR range, VIX, slippage, etc.) do their job.
+        // RegimeFilter will assert itself properly once data is available.
+        List<CandleData> candleSnapshot = new ArrayList<>(candleHistory);
+        if (candleSnapshot.size() < 10) {
+            log.info("RegimeFilter: insufficient candles ({}) for regime evaluation — " +
+                     "defaulting to tradingAllowed=true (early-session bypass)",
+                     candleSnapshot.size());
+            return new RegimeMetrics(
+                MIN_REGIME_SCORE,          // score: at threshold (allowed)
+                openingRange.get(),        // real OR range so adaptive OR check uses actual value
+                0.0, 0.0, 0.0,            // ATR ratio, efficiency, hold rate: 0 = not yet computable
+                true,                      // tradingAllowed
+                List.of()                  // no blocking reasons
+            );
+        }
+
         List<String> blockingReasons = new ArrayList<>();
         int score = 0;
 
@@ -212,8 +240,7 @@ public class RegimeFilter {
         // candles are available. This is an "insufficient data" state, not choppy market.
         // Treat as neutral (no score, no penalty) until we have enough data.
         double trendEfficiency = computeTrendEfficiency();
-        List<CandleData> allCandleSnapshot = new ArrayList<>(candleHistory);
-        if (allCandleSnapshot.size() < TREND_WINDOW) {
+        if (candleSnapshot.size() < TREND_WINDOW) {
             // Not enough candles yet — skip this check entirely (neutral)
             log.debug("Candle history ({}) < TREND_WINDOW ({}) — skipping trend efficiency check",
                 allCandleSnapshot.size(), TREND_WINDOW);

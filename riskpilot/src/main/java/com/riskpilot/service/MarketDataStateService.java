@@ -27,7 +27,16 @@ public class MarketDataStateService {
     // causing false "SPOT STALE" degradations and trade blocks during normal operation.
     // Angel One REST poll interval is ~3s; raised to 10s to give one full cycle of headroom.
     private static final long MAX_SPOT_STALE_MS = 10_000;  // 10 seconds
-    private static final long MAX_VIX_STALE_MS = 30000;    // 30 seconds
+
+    // BUG-D FIX: MAX_VIX_STALE_MS was 30,000ms (30s).
+    // VixService refreshes every ~60s and caches for 5 minutes (300,000ms).
+    // AngelSmartStreamClient updates marketDataStateService.updateVix() on every tick
+    // ONLY when getIndiaVix() > 0.  When the VIX circuit breaker fires (bothSourcesFailed=true),
+    // getIndiaVix() returns -1.0 and our guard skips updateVix().  After just 30s of no
+    // updateVix() calls, isVixValid() returned false → isSafeToTrade() blocked ALL trades.
+    // Fix: raise MAX_VIX_STALE_MS to 360,000ms (6 min = 5-min VIX cache + 60s retry buffer).
+    // This gives VixService a full retry cycle before a stale-VIX block kicks in.
+    private static final long MAX_VIX_STALE_MS = 360_000;  // 6 minutes
 
     @PostConstruct  // ← FIXED: Now uses jakarta.annotation.PostConstruct
     public void init() {
@@ -110,8 +119,17 @@ public class MarketDataStateService {
 
     public boolean isVixValid() {
         VixData v = vixData.get();
-        return v != null && v.valid && 
-               (Instant.now().toEpochMilli() - v.timestamp.toEpochMilli()) <= MAX_VIX_STALE_MS;
+        // BUG-D FIX: Return true when vixData is null.
+        // null means "not yet fetched" (startup state), NOT "fetch failed".
+        // Blocking trades because VIX hasn't been fetched in the first few seconds
+        // is wrong — it prevents any trades until the first VIX poll completes.
+        // VixService calls refreshVix() on the first getIndiaVix() call, so VIX
+        // will be populated within seconds of the first tick.
+        // The explicit block case (bothSourcesFailed = true) is handled by the
+        // circuit breaker letting the timestamp go stale beyond MAX_VIX_STALE_MS.
+        if (v == null) return true;
+        if (!v.valid) return false;
+        return (Instant.now().toEpochMilli() - v.timestamp.toEpochMilli()) <= MAX_VIX_STALE_MS;
     }
 
     public long getLastTickAgeMs() { 

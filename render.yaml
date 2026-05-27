@@ -40,6 +40,13 @@ services:
       - key: ANGEL_INDIA_VIX_EXCHANGE
         value: "NSE"
 
+      # BUG-E FIX: PAPER_MODE was missing — the system was using strict live-mode
+      # thresholds (RegimeConfidenceEngine hard-block = 55, reduced = 70) instead of
+      # relaxed paper-mode thresholds (35 / 50).  This caused excessive blocking on
+      # normal-volatility days in shadow/paper mode.  Set true for all shadow testing.
+      - key: PAPER_MODE
+        value: "true"
+
       # Notifications
       - key: RISKPILOT_NTFY_TOPIC
         value: "riskpilot-live-signals"

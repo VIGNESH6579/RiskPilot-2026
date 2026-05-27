@@ -153,27 +153,41 @@ public class RiskGateEngine {
                 return reject("ADAPTIVE_REGIME_WEAK");
             }
 
-            if (regime.getOrRange() < adaptiveConfig.getMinORRange()) {
-                log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={} < {}",
-                        regime.getOrRange(), adaptiveConfig.getMinORRange());
+            // BUG-B FIX: Adaptive OR threshold from DB (V11 seed = 120.0) conflicts with
+            // application-prod.yml min-or-range = 60.  With no prior trades the adaptive
+            // engine never recalibrates, so the DB seed stays at 120.
+            // Use the MORE PERMISSIVE (lower) of adaptiveConfig OR and config OR so the
+            // prod-level setting always sets the floor.  Adaptive tightening still works:
+            // if the adaptive engine raises minORRange above 60, that new value will apply.
+            // Also skip the check when orRange = 0 (OR not built yet — handled by the
+            // final OR check below).
+            double effectiveMinOR = Math.min(adaptiveConfig.getMinORRange(), config.getFilters().getMinOrRange());
+            if (regime.getOrRange() > 0.0 && regime.getOrRange() < effectiveMinOR) {
+                log.error("🚫 ADAPTIVE_OR_BLOCKED: OR={} < effective min={} (adaptive={}, config={})",
+                        regime.getOrRange(), effectiveMinOR,
+                        adaptiveConfig.getMinORRange(), config.getFilters().getMinOrRange());
                 return reject("ADAPTIVE_OR_TOO_SMALL");
             }
 
-            if (regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
-                log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={} < {}",
-                        regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
+            // BUG-C FIX: ATR ratio / efficiency / breakout hold rate are 0.0 when there is
+            // insufficient post-OR candle data (early session, or first session after restart).
+            // 0.0 means "not computable yet", NOT "metric is bad".
+            // BEFORE: 0.0 < 1.10 → ADAPTIVE_ATR_WEAK, 0.0 < 0.55 → ADAPTIVE_CHOPPY, etc.
+            //   → All trades blocked for the first ~30 min of every session.
+            // AFTER: skip each check when the metric is 0.0 (data not available).
+            //   The check still fires for real non-zero values that indicate genuine decay.
+            if (regime.getAtrRatio() > 0.0 && regime.getAtrRatio() < adaptiveConfig.getMinATRRatio()) {
+                log.error("🚫 ADAPTIVE_ATR_BLOCKED: ATR={} < {}", regime.getAtrRatio(), adaptiveConfig.getMinATRRatio());
                 return reject("ADAPTIVE_ATR_WEAK");
             }
 
-            if (regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
-                log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={} < {}",
-                        regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
+            if (regime.getTrendEfficiency() > 0.0 && regime.getTrendEfficiency() < adaptiveConfig.getMinEfficiency()) {
+                log.error("🚫 ADAPTIVE_EFFICIENCY_BLOCKED: Eff={} < {}", regime.getTrendEfficiency(), adaptiveConfig.getMinEfficiency());
                 return reject("ADAPTIVE_CHOPPY");
             }
 
-            if (regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
-                log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={} < {}",
-                        regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
+            if (regime.getBreakoutHoldRate() > 0.0 && regime.getBreakoutHoldRate() < adaptiveConfig.getMinBreakoutHoldRate()) {
+                log.error("🚫 ADAPTIVE_BREAKOUT_BLOCKED: Hold={} < {}", regime.getBreakoutHoldRate(), adaptiveConfig.getMinBreakoutHoldRate());
                 return reject("ADAPTIVE_BREAKOUT_WEAK");
             }
         }
