@@ -243,7 +243,7 @@ public class RegimeFilter {
         if (candleSnapshot.size() < TREND_WINDOW) {
             // Not enough candles yet — skip this check entirely (neutral)
             log.debug("Candle history ({}) < TREND_WINDOW ({}) — skipping trend efficiency check",
-                allCandleSnapshot.size(), TREND_WINDOW);
+                candleSnapshot.size(), TREND_WINDOW);
         } else if (trendEfficiency > TREND_EFFICIENCY_MIN) {
             score += 2;
         } else if (trendEfficiency < 0.4) {
