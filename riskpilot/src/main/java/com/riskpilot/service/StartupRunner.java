@@ -36,7 +36,8 @@ public class StartupRunner implements CommandLineRunner {
      * This warning fires every startup AND daily so you can't miss it.
      */
     // ⚠️ UPDATE THIS DATE whenever you provision a new Render DB (provisioning_date + 90 days)
-    private static final LocalDate DB_EXPIRY_DATE = LocalDate.of(2025, 8, 17); // dpg-d7s4463t6lks73c50eog EXPIRED — update when new DB is provisioned
+    // Current DB: dpg-d7s4463t6lks73c50eog-a  (provisioned ~May 2026 → expires ~Aug 2026)
+    private static final LocalDate DB_EXPIRY_DATE = LocalDate.of(2026, 8, 17);
     private static final int DB_WARN_DAYS_BEFORE = 14;
 
     @Override

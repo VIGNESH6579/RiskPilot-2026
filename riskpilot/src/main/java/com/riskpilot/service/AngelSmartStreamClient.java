@@ -1,6 +1,7 @@
 package com.riskpilot.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.riskpilot.model.Candle;
 import com.riskpilot.model.CandleEntity;
 import com.riskpilot.repository.CandleRepository;
 import jakarta.annotation.PostConstruct;
@@ -118,7 +119,11 @@ public class AngelSmartStreamClient {
     private final AtomicLong                tickSeq        = new AtomicLong(0);
 
     // Candle slot tracking for close detection
-    private volatile LocalDateTime lastCandleSlot = null;
+    private volatile LocalDateTime lastCandleSlot   = null;
+    // BUG-3 FIX: Track cumulative volume at the START of each 5-min slot so we can
+    // compute per-candle volume as (current_cumulative - slot_start_cumulative).
+    // wsVolume from the binary frame is the day's TOTAL volume since 9:15 — not per-period.
+    private volatile long slotStartVolume = 0L;
 
     // Scheduler: ping + watchdog + reconnect delays
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -495,9 +500,29 @@ public class AngelSmartStreamClient {
         LocalDateTime prevSlot    = lastCandleSlot;
 
         if (prevSlot != null && currentSlot.isAfter(prevSlot)) {
-            // A new 5-minute slot just started — persist and evaluate the candle that just closed
-            persistClosedCandle(prevSlot, ltp, open, high, low, close, volume);
+            // A new 5-minute slot just started — persist and evaluate the candle that just closed.
+            //
+            // BUG-1/2 FIX: open/high/low/close from the binary frame at offsets 87-111 are
+            // the DAY's cumulative OHLC (since 9:15 AM market open), NOT this 5-min candle's
+            // OHLC.  Offset 111 ("close_price") is specifically the PREVIOUS DAY's closing
+            // price per the Angel One SmartStream protocol spec.  Passing those values to
+            // persistClosedCandle stores completely wrong OHLC in the DB; after a service
+            // restart, restored candles have day-level open and yesterday's close.
+            //
+            // Fix: CandleAggregator.processTick() ran above this block and has already called
+            // finalizeCandle() for prevSlot — the correct 5-min aggregated candle (built from
+            // every individual LTP tick) is now in candleAggregator.getValidHistory().
+            // Retrieve it and use its OHLC for persistence.
+            //
+            // BUG-3 FIX: wsVolume is cumulative day volume; compute per-candle volume as
+            // (current_cumulative - volume_at_slot_start).
+            long perCandleVolume = Math.max(0L, volume - slotStartVolume);
+            persistClosedCandle(prevSlot, perCandleVolume);
+            slotStartVolume = volume; // reset baseline for the new slot
             shadowExecutionEngine.evaluateCandleClose();
+        } else if (prevSlot == null) {
+            // First tick ever — initialise volume baseline
+            slotStartVolume = volume;
         }
         lastCandleSlot = currentSlot;
 
@@ -506,16 +531,55 @@ public class AngelSmartStreamClient {
 
     // ── Candle persistence ─────────────────────────────────────────────────────
 
-    private void persistClosedCandle(LocalDateTime slot,
-                                     double lastLtp,
-                                     double wsOpen, double wsHigh, double wsLow, double wsClose,
-                                     long wsVolume) {
+    private void persistClosedCandle(LocalDateTime slot, long perCandleVolume) {
         try {
             String symbol = tradingSymbol != null && !tradingSymbol.isBlank()
                 ? tradingSymbol.trim().toUpperCase() : "NIFTY";
             LocalDate date = slot.toLocalDate();
 
-            // Deduplicate
+            // BUG-1/2 FIX: Retrieve the correct 5-minute aggregated candle from
+            // CandleAggregator instead of using binary-frame values.
+            //
+            // Why the frame values are wrong:
+            //   open_price  (offset 87) = day's open since 9:15 AM (not this candle's open)
+            //   high_price  (offset 95) = day's high accumulator (not this candle's high)
+            //   low_price   (offset 103) = day's low accumulator (not this candle's low)
+            //   close_price (offset 111) = PREVIOUS DAY's closing price (reference only)
+            //
+            // CandleAggregator.processTick() just ran before this method and called
+            // finalizeCandle() for this slot — the correctly aggregated Candle (open=first LTP,
+            // high=max LTP, low=min LTP, close=last LTP over the 5-min window) is now the
+            // last entry in getValidHistory().
+            List<Candle> history = candleAggregator.getValidHistory();
+            Candle aggregated = null;
+            // Walk backwards to find the most recent candle matching the closed slot.
+            for (int i = history.size() - 1; i >= 0; i--) {
+                Candle c = history.get(i);
+                try {
+                    if (c.timestamp().equals(slot)) {
+                        aggregated = c;
+                        break;
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (aggregated == null && !history.isEmpty()) {
+                // Fallback: newest candle (should be the one that just closed)
+                aggregated = history.get(history.size() - 1);
+                log.debug("persistClosedCandle: exact slot match not found for {} — using newest candle", slot);
+            }
+            if (aggregated == null) {
+                log.warn("persistClosedCandle: no aggregated candle available for slot {} — skipping", slot);
+                return;
+            }
+
+            // Sanity check: aggregated candle must be for the right date
+            if (!aggregated.date.equals(date.toString())) {
+                log.warn("persistClosedCandle: aggregated candle date {} ≠ slot date {} — skipping",
+                    aggregated.date, date);
+                return;
+            }
+
+            // BUG-4 dedup: check by slot timestamp (still needed until V15 UNIQUE constraint lands)
             List<CandleEntity> existing =
                 candleRepository.findBySymbolAndTimeframeAndDateOrderByTimestampAsc(symbol, 5, date);
             if (existing.stream().anyMatch(e -> e.getTimestamp().equals(slot))) {
@@ -523,16 +587,10 @@ public class AngelSmartStreamClient {
                 return;
             }
 
-            // Some feeds send 0 for OHLC fields on first few ticks — fall back to LTP
-            double effectiveClose = wsClose > 0 ? wsClose : lastLtp;
-            double effectiveOpen  = wsOpen  > 0 ? wsOpen  : effectiveClose;
-            double effectiveHigh  = wsHigh  > 0 ? wsHigh  : effectiveClose;
-            double effectiveLow   = wsLow   > 0 ? wsLow   : effectiveClose;
-
-            BigDecimal bdOpen  = round(effectiveOpen);
-            BigDecimal bdHigh  = round(effectiveHigh);
-            BigDecimal bdLow   = round(effectiveLow);
-            BigDecimal bdClose = round(effectiveClose);
+            BigDecimal bdOpen  = round(aggregated.open);
+            BigDecimal bdHigh  = round(aggregated.high);
+            BigDecimal bdLow   = round(aggregated.low);
+            BigDecimal bdClose = round(aggregated.close);
 
             CandleEntity entity = CandleEntity.builder()
                 .symbol(symbol)
@@ -542,7 +600,7 @@ public class AngelSmartStreamClient {
                 .highPrice(bdHigh)
                 .lowPrice(bdLow)
                 .closePrice(bdClose)
-                .volume(wsVolume)
+                .volume(perCandleVolume)
                 .range(bdHigh.subtract(bdLow))
                 .timeframe(5)
                 .isBullish(bdClose.compareTo(bdOpen) > 0)
@@ -550,11 +608,11 @@ public class AngelSmartStreamClient {
                 .build();
 
             candleRepository.save(entity);
-            log.info("📦 WS candle persisted: {} O={} H={} L={} C={} vol={}",
-                slot, bdOpen, bdHigh, bdLow, bdClose, wsVolume);
+            log.info("📦 Candle persisted: {} O={} H={} L={} C={} vol={}",
+                slot, bdOpen, bdHigh, bdLow, bdClose, perCandleVolume);
 
         } catch (Exception e) {
-            log.warn("⚠️ WS candle persist failed (non-fatal): {}", e.getMessage());
+            log.warn("⚠️ Candle persist failed (non-fatal): {}", e.getMessage());
         }
     }
 
